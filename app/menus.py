@@ -11,17 +11,21 @@ def add_action(menu, name, slot):
 def build_menubar(main_window):
 
     menubar = main_window.menuBar()
-
+    menubar.clear()   
     # -------- File --------
     file_menu = menubar.addMenu("File")
     add_action(file_menu, "New", lambda: print("TODO: New"))
     add_action(file_menu, "Open", main_window.on_open)
     file_menu.addSeparator()
-    add_action(file_menu, "Save as",lambda: print("TODO: Save as"))
+
+    act_saveas = add_action(file_menu, "Save as",lambda: print("TODO: Save as"))
     file_menu.addSeparator()
-    add_action(file_menu, "Close", lambda: print ("TODO: Close"))
+    act_close = add_action(file_menu, "Close", lambda: print ("TODO: Close"))
     add_action(file_menu, "Settings", lambda: print ("TODO: Settings"))
     add_action(file_menu, "Exit", main_window.close)
+
+    main_window._act_saveas = act_saveas
+    main_window._act_close = act_close
 
     # -------- Edit --------
     edit_menu = menubar.addMenu("Edit")
@@ -89,3 +93,12 @@ def build_menubar(main_window):
     add_action(lic_menu, "Import Activation Key", lambda: print("TODO"))
     
     add_action(help_menu, "Shortcuts", lambda: print("TODO"))
+
+
+    # Store what should be disabled until a file is loaded
+    main_window._menus_disabled_until_loaded = [
+        edit_menu, pre_menu, detect_menu, review_menu, results_menu
+    ]
+    main_window._menus_always_enabled = [file_menu, help_menu]# ✅ store what should be disabled until a file is loaded
+    
+    return act_saveas, act_close

@@ -1,97 +1,139 @@
+from __future__ import annotations
+
+from typing import Optional, List, cast
+
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Signal, Qt
-from typing import cast, Optional, List
+from PySide6.QtCore import Signal, Qt, QEvent
 from pyqtgraph.GraphicsScene.GraphicsScene import GraphicsScene
 
 from mne.io import BaseRaw
 
-print("✅ LOADING app.plot from:", __file__)
 
 class MultiChannelViewer(pg.GraphicsLayoutWidget):
+    """
+    Widget that displays multiple EEG channels stacked vertically.
 
-    channelClicked = Signal(int)          # absolute channel index in "shown channels"
-    channelWindowChanged = Signal(int)    # emits ch_start when visible window changes
-    timeWindowChanged = Signal(float)  
+    Layout:
+      - Left: label_plot (channel names)
+      - Right: signal_plot (signals over time)
+
+    Responsibilities:
+      - Keep current "view state" (time start, time range, channel range, gain)
+      - Pull visible data window from MNE Raw on demand
+      - Render curves + labels + cursor + time grid + min/max tags
+      - Emit signals for UI coordination (MainWindow)
+    """
+
+    # ---------------- Signals ----------------
+    channelClicked = Signal(int)          # absolute channel index in displayed channel list
+    channelWindowChanged = Signal(int)    # emits ch_start when visible channel window changes
+    timeWindowChanged = Signal(float)     # emits t_start when visible time window changes
+
+    # Wheel zoom requests (handled by MainWindow via spinboxes)
     requestTimeRangeDelta = Signal(int)   # +1 zoom out, -1 zoom in
     requestChanRangeDelta = Signal(int)   # +1 show more channels, -1 show fewer
 
+    # ---------------- Init ----------------
     def __init__(self, parent=None):
         super().__init__(parent=parent)
-        print("✅ MultiChannelViewer __init__ called")
 
-        # ----- Raw/state -----
+        # ---- Raw/state ----
         self._raw: Optional[BaseRaw] = None
         self._fs: float = 1.0
-        self._channel_names: List[str] = []
         self._picks: np.ndarray = np.array([], dtype=int)
+        self._channel_names: List[str] = []
 
-        # ----- View params -----
+        # ---- View params ----
         self._t_start: float = 0.0
         self._time_range: float = 3.0
         self._chan_range: int = 32
-        self._gain_uv: float = 100.0        # display scale in µV (±)
+        self._gain_uv: float = 100.0
         self._ch_start: int = 0
-        self._spacing: float = 200.0        # vertical spacing in µV units
 
-        self._visible_abs: np.ndarray = np.array([], dtype=int)  # absolute in displayed channel list
+        # Vertical stacking
+        self._spacing: float = 200.0  # y spacing in "display units"
+
+        # ---- Render caches ----
+        self._visible_abs: np.ndarray = np.array([], dtype=int)  # abs indices in displayed channel list
         self._curves: list[pg.PlotDataItem] = []
         self._labels: list[pg.TextItem] = []
         self._minmax_items: list[pg.TextItem] = []
-        self._selected_abs: int | None = None
 
-        # ----- Layout: label plot (left) + signal plot (right) -----
+        self._selected_abs: Optional[int] = None
+
+        # ---- Cursor + grid ----
+        self._cursor_line: Optional[pg.InfiniteLine] = None
+        self._cursor_x: Optional[float] = None
+        self._time_lines: list[pg.InfiniteLine] = []
+
+        # ---- Layout: label plot (left) + signal plot (right) ----
         self.label_plot = pg.PlotItem()
         self.signal_plot = pg.PlotItem()
         self.addItem(self.label_plot, 0, 0)
         self.addItem(self.signal_plot, 0, 1)
 
-        self.label_plot.setMaximumWidth(260)
+        self.label_plot.setMaximumWidth(200)   # try 140–200
+        self.label_plot.setMinimumWidth(140)
 
+        # Hide label plot axes
         for ax in ("bottom", "left", "right", "top"):
             self.label_plot.hideAxis(ax)
-        self.signal_plot.hideAxis("left")
-        self.signal_plot.showAxis("bottom")                
-        self.signal_plot.setLabel("bottom", "Time (s)")    
 
+        # Signal plot axes (HIDE EVERYTHING until a file is loaded)
+        for ax in ("bottom", "left", "right", "top"):
+            self.signal_plot.hideAxis(ax)
+
+        # Disable default right-click menus (keep it simple)
         self.label_plot.setMenuEnabled(False)
         self.signal_plot.setMenuEnabled(False)
 
+        # ViewBoxes (for coordinate transforms + hit testing)
         self._label_vb = cast(pg.ViewBox, self.label_plot.getViewBox())
         self._sig_vb = cast(pg.ViewBox, self.signal_plot.getViewBox())
 
+        # Match "EEG viewer convention": channel 0 at top, increasing downward
         self._label_vb.invertY(True)
         self._sig_vb.invertY(True)
 
+        # We'll control scrolling/zoom ourselves
         self._label_vb.setMouseEnabled(x=False, y=False)
         self._sig_vb.setMouseEnabled(x=False, y=False)
 
+        # Keep label plot vertically aligned with signal plot
         self._label_vb.setYLink(self._sig_vb)
 
-        # Label coordinate system wide enough for text
+        # Label plot x-range just needs enough space for text
         self._label_vb.setXRange(0.0, 100.0, padding=0)
         self._label_vb.enableAutoRange(axis=pg.ViewBox.XAxis, enable=False)
 
         self.signal_plot.showGrid(x=True, y=True, alpha=0.15)
 
+        # Scene mouse click -> channel selection
         scene = cast(GraphicsScene, self.scene())
         scene.sigMouseClicked.connect(self._on_mouse_clicked)
 
-         # ---- Cursor (vertical line) ----
-        self._cursor_line: pg.InfiniteLine | None = None
-        self._cursor_x: float | None = None
+        # eventFilter on th eviewport for wheel events
+        self.viewport().installEventFilter(self)
 
-        self._time_lines: list[pg.InfiniteLine] = []
-        self._time_grid_step_s: float = 1.0   # choose 0.5, 1, 2, 5...
+        # Track RMB state for "RMB + wheel" zoom (more reliable than ev.buttons())
+        self._rmb_down: bool = False
+
+        # eventFilter on the viewport for wheel + mouse buttons
+        self.viewport().installEventFilter(self)
+
 
     # ---------------- Public API ----------------
     def channel_start(self) -> int:
-        return self._ch_start
+        return int(self._ch_start)
+
+    def time_start(self) -> float:
+        return float(self._t_start)
 
     def set_raw(self, raw: BaseRaw, picks: Optional[np.ndarray] = None):
         """
-        Provide an MNE Raw (preload=False allowed).
-        picks: indices into raw (e.g., EEG-only). If None, show all channels.
+        Attach an MNE Raw object (preload=False allowed).
+        'picks' are indices into raw channels (e.g. EEG-only).
         """
         self._raw = raw
         self._fs = float(raw.info["sfreq"])
@@ -103,34 +145,53 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._channel_names = [raw.ch_names[i] for i in self._picks.tolist()]
 
+        # Reset view
         self._t_start = 0.0
         self._ch_start = 0
         self._selected_abs = None
+
+        # Now that we have data, show the time axis + light grid
+        self.signal_plot.showAxis("bottom")
+        self.signal_plot.setLabel("bottom", "Time (s)")
+        self.signal_plot.showGrid(x=True, y=True, alpha=0.15)
 
         self.render()
         self.channelWindowChanged.emit(self._ch_start)
 
     def set_view_params(self, *, time_range=None, chan_range=None, gain=None):
+        """
+        Update view parameters. Any parameter can be None (unchanged).
+        """
         if time_range is not None:
             self._time_range = float(time_range)
-            # clamp t_start if window size changed
-            if self._raw is not None and self._raw.n_times > 1:
-                total_s = float(self._raw.times[-1])
-                max_t0 = max(0.0, total_s - self._time_range)
-                self._t_start = float(np.clip(self._t_start, 0.0, max_t0))
-                self.timeWindowChanged.emit(self._t_start)
+            self._clamp_time_start()
+            self.timeWindowChanged.emit(self._t_start)
 
         if chan_range is not None:
             self._chan_range = int(chan_range)
+
         if gain is not None:
             self._gain_uv = float(gain)
+
         self.render()
 
+    def set_time_start(self, t_start: float):
+        """Move the visible time window start (seconds)."""
+        if self._raw is None:
+            return
+
+        self._t_start = float(t_start)
+        self._clamp_time_start()
+        self.render()
+        self.timeWindowChanged.emit(self._t_start)
+
     def set_channel_start(self, ch_start: int):
+        """Move the visible channel window start (index in displayed channel list)."""
         if self._raw is None or self._picks.size == 0:
             return
-        n_channels = len(self._picks)
-        n_vis = min(self._chan_range, n_channels)
+
+        n_channels = int(len(self._picks))
+        n_vis = int(min(self._chan_range, n_channels))
         max_start = max(0, n_channels - n_vis)
 
         new_start = max(0, min(int(ch_start), max_start))
@@ -142,10 +203,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.channelWindowChanged.emit(self._ch_start)
 
     def ensure_channel_visible(self, index: int):
-        if self._raw is None or self._picks is None:
+        """Scroll channel window so 'index' (absolute) becomes visible."""
+        if self._raw is None or self._picks.size == 0:
             return
-        n_channels = len(self._picks)
-        n_vis = min(self._chan_range, n_channels)
+
+        n_channels = int(len(self._picks))
+        n_vis = int(min(self._chan_range, n_channels))
 
         if index < self._ch_start:
             self.set_channel_start(index)
@@ -153,151 +216,215 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.set_channel_start(index - n_vis + 1)
 
     def highlight_channel(self, index: int):
+        """Highlight a channel (thicker trace + yellow label)."""
         self._selected_abs = int(index)
         self.ensure_channel_visible(index)
-        idx_vis = index - self._ch_start
 
+        idx_vis = index - self._ch_start
         for i, c in enumerate(self._curves):
             c.setPen(pg.mkPen(width=3 if i == idx_vis else 1))
 
         for i, txt in enumerate(self._labels):
             txt.setColor((255, 255, 0) if i == idx_vis else (180, 180, 180))
 
-
-
     # ---------------- Interaction ----------------
     def wheelEvent(self, ev):
-            delta = ev.angleDelta().y()
-            if delta == 0:
-                return
-            
-            pos = ev.position()  # QPointF in widget coords (Qt6)
-            scene_pos = self.mapToScene(pos.toPoint())
+        # Trackpad smooth scrolling
+        pd = ev.pixelDelta()
+        ad = ev.angleDelta()
 
-            in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
-            in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
-
-            direction = -1 if delta > 0 else +1
-
-            if in_signal:
-                self.requestTimeRangeDelta.emit(direction)
-                ev.accept()
-                return
-
-            if in_label:
-                self.requestChanRangeDelta.emit(direction)
-                ev.accept()
-                return
-
+        # Prefer pixelDelta when present (trackpad), else use angleDelta (mouse wheel)
+        dy = pd.y() if not pd.isNull() else ad.y()
+        if dy == 0:
             ev.ignore()
-            
+            return
+
+        step_dir = -1 if dy > 0 else +1  # wheel up => -1, wheel down => +1
+
+        pos = ev.position()
+        scene_pos = self.mapToScene(pos.toPoint())
+
+        in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
+        in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
+
+        # Option A: RMB + wheel on signal area => time zoom (no Ctrl)
+        if self._rmb_down and in_signal:
+            self.requestTimeRangeDelta.emit(step_dir)
+            ev.accept()
+            return
+
+        # Normal wheel: scroll channels when over label OR signal
+        if in_label or in_signal:
+            self.set_channel_start(self._ch_start + step_dir)
+            ev.accept()
+            return
+
+        ev.ignore()
+        
     def _on_mouse_clicked(self, event):
-            if self._raw is None or self._visible_abs.size == 0:
-                return
-            if event.button() != Qt.MouseButton.LeftButton:
-                return
+        """Select channel by clicking near its trace/label."""
+        if self._raw is None or self._visible_abs.size == 0:
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
 
-            pos = event.scenePos()
+        pos = event.scenePos()
+        in_label = self._label_vb.sceneBoundingRect().contains(pos)
+        vb = self._label_vb if in_label else self._sig_vb
 
-            in_label = self._label_vb.sceneBoundingRect().contains(pos)
-            vb = self._label_vb if in_label else self._sig_vb
+        data_point = vb.mapSceneToView(pos)
+        y = float(data_point.y())
 
-            data_point = vb.mapSceneToView(pos)
-            y = float(data_point.y())
+        centers = np.arange(len(self._visible_abs)) * self._spacing
+        idx_vis = int(np.argmin(np.abs(centers - y)))
+        idx_vis = max(0, min(idx_vis, len(self._visible_abs) - 1))
 
-            centers = np.arange(len(self._visible_abs)) * self._spacing
-            idx_vis = int(np.argmin(np.abs(centers - y)))
-            idx_vis = max(0, min(idx_vis, len(self._visible_abs) - 1))
+        idx_abs = int(self._visible_abs[idx_vis])
+        self.channelClicked.emit(idx_abs)
+        self.highlight_channel(idx_abs)
 
-            idx_abs = int(self._visible_abs[idx_vis])
-            self.channelClicked.emit(idx_abs)
-            self.highlight_channel(idx_abs)
+    def eventFilter(self, obj, event):
+        if obj is self.viewport():
+            et = event.type()
 
-    def set_time_start(self, t_start: float):
-            if self._raw is None:
-                return
-            # Clamp to valid range
-            total_s = float(self._raw.times[-1]) if self._raw.n_times > 1 else 0.0
-            max_t0 = max(0.0, total_s - self._time_range)
-            self._t_start = float(np.clip(t_start, 0.0, max_t0))
-            self.render()
-            self.timeWindowChanged.emit(self._t_start)
+            # Track RMB press/release reliably
+            if et == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.RightButton:
+                    self._rmb_down = True
+                return False  # don't swallow the event
 
-    def time_start(self) -> float:
-        return float(self._t_start)
+            if et == QEvent.Type.MouseButtonRelease:
+                if event.button() == Qt.MouseButton.RightButton:
+                    self._rmb_down = False
+                return False
 
+            # Route wheel events into our wheelEvent
+            if et == QEvent.Type.Wheel:
+                self.wheelEvent(event)
+                return event.isAccepted()
 
+        return super().eventFilter(obj, event)
     # ---------------- Rendering ----------------
     def render(self):
-        if self._raw is None or self._picks is None:
+        """Redraw the viewer for the current raw + view parameters."""
+        if self._raw is None or self._picks.size == 0:
             return
 
         raw = self._raw
-        assert raw is not None
-
-
         picks = self._picks
-        n_channels = len(picks)
+        n_channels = int(len(picks))
 
-        # Visible channel window
-        n_vis = min(self._chan_range, n_channels)
+        # 1) Determine visible channel window
+        n_vis, ch0, ch1 = self._compute_visible_channels(n_channels)
+        if n_vis <= 0:
+            return
+
+        # 2) Pull visible time window data from raw (V -> µV), decimate for speed
+        seg_ds_uv, t_ds = self._get_visible_data(raw, picks, ch0, ch1)
+        if seg_ds_uv is None or t_ds is None:
+            return
+
+        # 3) Clear previous items
+        self._clear_plots()
+
+        # 4) Draw traces + labels
+        self._draw_traces(seg_ds_uv, t_ds, n_vis)
+        self._draw_labels(n_vis)
+
+        # 5) Set view ranges
+        self._set_ranges(t_ds, n_vis)
+
+        # 6) Overlays (grid lines, cursor, min/max tags)
+        self._draw_time_lines(t_ds)
+        self._draw_cursor(t_ds)
+        self._draw_minmax(seg_ds_uv, t_ds, n_vis)
+
+        # 7) Restore highlight if any
+        if self._selected_abs is not None:
+            self.highlight_channel(self._selected_abs)
+
+    # ---------------- Render helpers ----------------
+    def _compute_visible_channels(self, n_channels: int) -> tuple[int, int, int]:
+        n_vis = int(min(self._chan_range, n_channels))
         max_start = max(0, n_channels - n_vis)
         self._ch_start = max(0, min(self._ch_start, max_start))
 
-        ch0 = self._ch_start
-        ch1 = ch0 + n_vis
-        self._visible_abs = np.arange(ch0, ch1, dtype=int)
+        ch0 = int(self._ch_start)
+        ch1 = int(ch0 + n_vis)
 
-        # Time window in samples
+        self._visible_abs = np.arange(ch0, ch1, dtype=int)
+        return n_vis, ch0, ch1
+
+    def _get_visible_data(
+        self,
+        raw: BaseRaw,
+        picks: np.ndarray,
+        ch0: int,
+        ch1: int,
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        # Convert view window -> sample indices
         start_samp = int(self._t_start * self._fs)
         end_samp = int((self._t_start + self._time_range) * self._fs)
 
-        # Clamp to raw length
-        n_samples = raw.n_times
+        # Clamp to raw bounds
+        n_samples = int(raw.n_times)
         start_samp = max(0, min(start_samp, n_samples - 1))
         end_samp = max(start_samp + 1, min(end_samp, n_samples))
 
-        # Slice only visible channels + window
         raw_ch_picks = picks[ch0:ch1]  # indices in raw
-        data_v, times = raw[raw_ch_picks, start_samp:end_samp]  # data in VOLTS
-        
+        data_v, times = raw[raw_ch_picks, start_samp:end_samp]  # volts + seconds
+
         data_v = np.asarray(data_v)
         times = np.asarray(times)
+
         if times.ndim != 1 or times.size < 2:
-            return
+            return None, None
 
-        # convert to µV
+        # V -> µV
         data_uv = data_v * 1e6
+        if data_uv.shape[1] < 2:
+            return None, None
 
-        win_len = data_uv.shape[1]
-        if win_len < 2:
-            return
-
-        # Decimate for speed
+        # Decimate for responsiveness
         max_points = 3000
+        win_len = int(data_uv.shape[1])
         step = max(1, win_len // max_points)
+
         t_ds = times[::step]
-        seg_ds = data_uv[:, ::step]
+        seg_ds_uv = data_uv[:, ::step]
+        return seg_ds_uv, t_ds
 
-
-        # Clear plots
+    def _clear_plots(self):
+        # Clearing plot items resets everything
         self.signal_plot.clear()
         self.label_plot.clear()
+
         self._curves = []
         self._labels = []
 
-        # Map "scale (µV): ±X" into a multiplicative factor:
-        # if user sets ±100 µV, then a 100 µV wave should take "1 unit" visually.
-        # We'll normalize by gain_uv:
-        gain_factor = 1.0 / max(1e-9, self._gain_uv)
+        # Remove previous overlay items we track
+        for ln in self._time_lines:
+            self.signal_plot.removeItem(ln)
+        self._time_lines = []
 
-        # Plot traces
+        if self._cursor_line is not None:
+            self.signal_plot.removeItem(self._cursor_line)
+        self._cursor_line = None
+
+        for it in self._minmax_items:
+            self.signal_plot.removeItem(it)
+        self._minmax_items = []
+
+    def _draw_traces(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, n_vis: int):
+        # Normalize amplitude by gain (±gain maps to ±1 display unit)
+        gain_factor = 1.0 / max(1e-9, float(self._gain_uv))
+
         for i in range(n_vis):
-            y = (seg_ds[i] * gain_factor) + i * self._spacing
+            y = (seg_ds_uv[i] * gain_factor) + i * self._spacing
             curve = self.signal_plot.plot(t_ds, y)
             self._curves.append(curve)
 
-        # Labels
+    def _draw_labels(self, n_vis: int):
         for i, abs_idx in enumerate(self._visible_abs):
             name = self._channel_names[int(abs_idx)]
             txt = pg.TextItem(text=name, anchor=(0, 0.5), color=(180, 180, 180))
@@ -305,43 +432,37 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.label_plot.addItem(txt)
             self._labels.append(txt)
 
-        # Ranges
+    def _set_ranges(self, t_ds: np.ndarray, n_vis: int):
         y0 = -0.5 * self._spacing
         y1 = (n_vis - 1) * self._spacing + 0.5 * self._spacing
 
-        self._sig_vb.setXRange(float(t_ds[0]), float(t_ds[-1]), padding=0)
+        t0 = float(t_ds[0])
+        t1 = float(t_ds[-1])
+        xpad = 0.06 * max(1e-9, (t1 - t0))  # ~6% left margin for amplitude text
+        self._sig_vb.setXRange(t0 - xpad, t1, padding=0)
         self._sig_vb.setYRange(y0, y1, padding=0)
+
         self._label_vb.setYRange(y0, y1, padding=0)
         self._label_vb.setXRange(0.0, 100.0, padding=0)
 
-
-        # ---- Vertical time section lines ----
-        for ln in getattr(self, "_time_lines", []):
-            self.signal_plot.removeItem(ln)
-        self._time_lines = []
-
-
+    def _draw_time_lines(self, t_ds: np.ndarray):
         step = self._nice_time_step(self._time_range, target_lines=10)
 
-        # lines spanning the visible window
         t0 = float(t_ds[0])
         t1 = float(t_ds[-1])
 
-        # align to step boundaries
         start = np.floor(t0 / step) * step
         xs = np.arange(start, t1 + step, step)
 
         for x in xs:
             ln = pg.InfiniteLine(pos=float(x), angle=90, movable=False)
-            # make them subtle (no color spec if you prefer default; but you can set a light pen)
             ln.setZValue(-10)  # behind traces
             self.signal_plot.addItem(ln)
             self._time_lines.append(ln)
 
-        # ---- Cursor (vertical movable line) ----
-        # Keep previous cursor position if possible, otherwise set to middle
-        t0 = np.asarray(t_ds).reshape(-1)[0].item()
-        t1 = np.asarray(t_ds).reshape(-1)[-1].item()
+    def _draw_cursor(self, t_ds: np.ndarray):
+        t0 = float(np.asarray(t_ds).reshape(-1)[0].item())
+        t1 = float(np.asarray(t_ds).reshape(-1)[-1].item())
 
         if self._cursor_x is None or not (t0 <= self._cursor_x <= t1):
             self._cursor_x = float(t0)
@@ -350,57 +471,64 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cursor_line.setPos(self._cursor_x)
         self.signal_plot.addItem(self._cursor_line)
 
-        def _on_cursor_move():
-            if self._cursor_line is None:
-                return
-            self._cursor_x = float(np.asarray(self._cursor_line.value()).item())
+        self._cursor_line.sigPositionChanged.connect(self._on_cursor_moved)
 
-        self._cursor_line.sigPositionChanged.connect(_on_cursor_move)
+    def _on_cursor_moved(self):
+        if self._cursor_line is None:
+            return
+        self._cursor_x = float(np.asarray(self._cursor_line.value()).item())
 
-        # clear previous min/max labels
-        for it in self._minmax_items:
-            self.signal_plot.removeItem(it)
-        self._minmax_items = []
+    def _draw_minmax(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, n_vis: int):
+        t0 = float(t_ds[0])
+        t1 = float(t_ds[-1])
+        width = max(1e-9, (t1 - t0))
 
-        t_left = float(t_ds[0])
-        t_right = float(t_ds[-1])
+        x_left = t0 - 0.02 * width
 
         for i in range(n_vis):
-            # real µV on this visible segment (downsampled)
-            ch_uv = seg_ds[i]
-            mn = float(np.min(ch_uv))
-            mx = float(np.max(ch_uv))
-
-            # display y position: use the trace center line (i * spacing)
             y_center = i * self._spacing
 
-            left_txt = pg.TextItem(text=f"{mn:.0f} µV", anchor=(0, 0.5))
-            right_txt = pg.TextItem(text=f"{mx:.0f} µV", anchor=(1, 0.5))
+            txt = pg.TextItem(
+            text=f"±{self._gain_uv:.0f} µV",
+            anchor=(1, 0.5),
+            color=(160, 160, 160),
+        )
 
-            left_txt.setPos(t_left, y_center)
-            right_txt.setPos(t_right, y_center)
+        txt.setPos(x_left, y_center)
 
-            self.signal_plot.addItem(left_txt)
-            self.signal_plot.addItem(right_txt)
-            self._minmax_items += [left_txt, right_txt]
+        self.signal_plot.addItem(txt)
+        self._minmax_items.append(txt)
 
-        # Re-highlight
-        if self._selected_abs is not None:
-            self.highlight_channel(self._selected_abs)
         
 
+    # ---------------- Utility ----------------
+    def _clamp_time_start(self):
+        """Clamp t_start so the visible window remains within raw duration."""
+        if self._raw is None or self._raw.n_times <= 1:
+            self._t_start = 0.0
+            return
 
+        total_s = float(self._raw.times[-1])
+        max_t0 = max(0.0, total_s - float(self._time_range))
+        self._t_start = float(np.clip(self._t_start, 0.0, max_t0))
 
-    def _nice_time_step(self, window_s: float, target_lines: int = 10) -> float:
-        raw = max(window_s / max(1, target_lines), 1e-6)
-        exp = np.floor(np.log10(raw))
+    @staticmethod
+    def _nice_time_step(window_s: float, target_lines: int = 10) -> float:
+        """
+        Pick a "nice" spacing for vertical time lines, based on time window.
+        Returns one of {1, 2, 5} * 10^k.
+        """
+        raw = max(float(window_s) / max(1, int(target_lines)), 1e-6)
+        exp = float(np.floor(np.log10(raw)))
         base = raw / (10 ** exp)
+
         if base <= 1:
-            nice = 1
+            nice = 1.0
         elif base <= 2:
-            nice = 2
+            nice = 2.0
         elif base <= 5:
-            nice = 5
+            nice = 5.0
         else:
-            nice = 10
-        return nice * (10 ** exp)
+            nice = 10.0
+
+        return float(nice * (10 ** exp))
