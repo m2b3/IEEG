@@ -1,6 +1,6 @@
-# Halyzia Shell
+# I_EEG
 
-Halyzia Shell is an EEG / iEEG viewer built with PySide6, PyQtGraph and MNE.
+This is an EEG / iEEG viewer built with PySide6, PyQtGraph and MNE.
 
 It allows visualisation and interaction with multi-channel electrophysiological recordings (EDF, FIF, BDF, etc.).
 
@@ -8,7 +8,7 @@ It allows visualisation and interaction with multi-channel electrophysiological 
 
 # 1. How the Program Works
 
-Halyzia Shell is structured around a main viewer that:
+I_EEG is structured around a main viewer that:
 
 - Loads EEG data using MNE
 - Displays channels stacked vertically
