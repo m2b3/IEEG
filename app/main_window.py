@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QStatusBar, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QCursor
 
 from app.menus import build_menubar
 from app.plot import MultiChannelViewer
@@ -28,37 +28,28 @@ class MainWindow(QMainWindow):
         self._base_title = "Halyzia Shell"
         self.setWindowTitle(self._base_title)
         self.resize(1400, 800)
-        \
 
         # ---- Menu bar ----
         self._act_saveas, self._act_close = build_menubar(self)
         self._act_saveas.setEnabled(False)
         self._act_close.setEnabled(False)
 
-        # Only File + Help clickable until a file is loaded
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(False)
-        self._act_saveas.setEnabled(False)
-        self._act_close.setEnabled(False)
-
+        
         # ---- Toolbar (controls) ----
         self._build_toolbar()
-        # Toolbar visible but not clickable
-        self.tb.setEnabled(False)   # (make sure you stored it as self.tb in _build_toolbar)
+        self.tb.setEnabled(False) 
 
         # ---- Central widget (viewer + timeline) ----
         central = QWidget()
         self.setCentralWidget(central)
-
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self.viewer = MultiChannelViewer()
         layout.addWidget(self.viewer, 1)
-
-        self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
-        self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
 
         # ---- Timeline (time slider) ----
         self.timeline = QFrame()
@@ -88,22 +79,17 @@ class MainWindow(QMainWindow):
         # ---- State ----
         self.current_raw: BaseRaw | None = None
         self.current_picks: np.ndarray | None = None
+        self.loaded_file: Path | None = None
+
+        self._update_window_title()
 
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.timeWindowChanged.connect(self._sync_time_slider_from_viewer)
         self.time_slider.valueChanged.connect(self._on_time_slider)
 
-        # Zoom requests from the viewer (wheel over signal vs labels)
-        if hasattr(self.viewer, "requestTimeRangeDelta"):
-            self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
-        if hasattr(self.viewer, "requestChanRangeDelta"):
-            self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
-
-        # Top text of the open file path
-        self.loaded_file: Path | None = None
-        self.halyzia_folder: Path | None = None
-        self._update_window_title()
+        self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
+        self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
 
 
     def closeEvent(self, event):
@@ -156,6 +142,14 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.gain)
         self._add_presets_button(tb, self.gain, [10, 50, 100, 200, 400, 800])
 
+        tb.addSeparator()
+
+        # Hidden channels menu button
+        self.btn_hidden = QToolButton()
+        self.btn_hidden.setText("Hidden…")
+        self.btn_hidden.clicked.connect(self._show_hidden_channels_menu)
+        tb.addWidget(self.btn_hidden)
+
         # ---- Connect toolbar -> viewer ----
         self.time_range.valueChanged.connect(self._on_time_range_changed)
         self.gain.valueChanged.connect(lambda v: self.viewer.set_view_params(gain=v))
@@ -177,7 +171,6 @@ class MainWindow(QMainWindow):
         btn.setMenu(menu)
         # Hide the extra tiny menu-indicator arrow so only one arrow is shown
         btn.setStyleSheet("QToolButton::menu-indicator { image: none; }")
-
         tb.addWidget(btn)
 
     # ---------------- File/data loading ----------------
@@ -345,3 +338,21 @@ class MainWindow(QMainWindow):
         new_v = self.chan_range.value() + direction * step
         new_v = max(self.chan_range.minimum(), min(self.chan_range.maximum(), new_v))
         self.chan_range.setValue(new_v)
+
+    def _show_hidden_channels_menu(self):
+        hidden = sorted(self.viewer._hidden_channels)
+        menu = QMenu()
+
+        if not hidden:
+            act = menu.addAction("(No hidden channels)")
+            act.setEnabled(False)
+        else:
+            act_unhide_all = menu.addAction("Unhide all")
+            menu.addSeparator()
+            act_unhide_all.triggered.connect(self.viewer.unhide_all_channels)
+
+            for ch in hidden:
+                act = menu.addAction(f"Show {ch}")
+                act.triggered.connect(lambda checked=False, name=ch: self.viewer.unhide_channel(name))
+
+        menu.exec_(QCursor.pos())
