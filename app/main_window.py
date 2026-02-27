@@ -57,7 +57,8 @@ class MainWindow(QMainWindow):
         self.viewer = MultiChannelViewer()
         layout.addWidget(self.viewer, 1)
 
-    
+        self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
+        self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
 
         # ---- Timeline (time slider) ----
         self.timeline = QFrame()

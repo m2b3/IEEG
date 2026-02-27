@@ -73,8 +73,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.addItem(self.label_plot, 0, 0)
         self.addItem(self.signal_plot, 0, 1)
 
-        self.label_plot.setMaximumWidth(200)   # try 140–200
-        self.label_plot.setMinimumWidth(140)
+        self.label_plot.setMaximumWidth(100)   # try 140–200
+        self.label_plot.setMinimumWidth(60)
 
         # Hide label plot axes
         for ax in ("bottom", "left", "right", "top"):
@@ -121,7 +121,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         # eventFilter on the viewport for wheel + mouse buttons
         self.viewport().installEventFilter(self)
-
+        self.installEventFilter(self)
 
     # ---------------- Public API ----------------
     def channel_start(self) -> int:
@@ -283,27 +283,68 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.channelClicked.emit(idx_abs)
         self.highlight_channel(idx_abs)
 
-    def eventFilter(self, obj, event):
-        if obj is self.viewport():
-            et = event.type()
+    def _wheel_dy(self, ev) -> int:
+        # Qt6: prefer angleDelta then pixelDelta
+        ad = ev.angleDelta()
+        if ad is not None and ad.y() != 0:
+            return int(ad.y())
 
-            # Track RMB press/release reliably
-            if et == QEvent.Type.MouseButtonPress:
-                if event.button() == Qt.MouseButton.RightButton:
-                    self._rmb_down = True
-                return False  # don't swallow the event
+        pd = ev.pixelDelta()
+        if pd is not None and not pd.isNull() and pd.y() != 0:
+            return int(pd.y())
 
-            if et == QEvent.Type.MouseButtonRelease:
-                if event.button() == Qt.MouseButton.RightButton:
-                    self._rmb_down = False
-                return False
+        return 0
 
-            # Route wheel events into our wheelEvent
-            if et == QEvent.Type.Wheel:
-                self.wheelEvent(event)
-                return event.isAccepted()
+    def _handle_wheel(self, ev, region: str):
+        dy = self._wheel_dy(ev)
+        if dy == 0:
+            ev.ignore()
+            return
 
-        return super().eventFilter(obj, event)
+        # convention: wheel up = zoom in / fewer channels
+        step_dir = -1 if dy > 0 else +1
+        shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+
+        # SHIFT = zoom
+        if shift:
+            if region == "signal":
+                self.requestTimeRangeDelta.emit(step_dir)
+                ev.accept()
+                return
+            if region == "label":
+                self.requestChanRangeDelta.emit(step_dir)
+                ev.accept()
+                return
+
+        # No shift = scroll channels
+        if region in ("label", "signal"):
+            self.set_channel_start(self._ch_start + step_dir)
+            ev.accept()
+            return
+
+        ev.ignore()
+
+    def eventFilter(self, obj, ev):
+        if obj in (self.viewport(), self):
+            if ev.type() == QEvent.Type.Wheel:
+                scene_pos = self.mapToScene(ev.position().toPoint())
+
+                in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
+                in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
+
+                if in_signal:
+                    self._handle_wheel(ev, "signal")
+                    return True
+                if in_label:
+                    self._handle_wheel(ev, "label")
+                    return True
+
+                # swallow wheel anyway to prevent pyqtgraph default zoom/pan
+                ev.ignore()
+                return True
+
+        return super().eventFilter(obj, ev)
+
     # ---------------- Rendering ----------------
     def render(self):
         """Redraw the viewer for the current raw + view parameters."""
@@ -395,29 +436,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         return seg_ds_uv, t_ds
 
     def _clear_plots(self):
-        # Clearing plot items resets everything
         self.signal_plot.clear()
         self.label_plot.clear()
 
         self._curves = []
         self._labels = []
-
-        # Remove previous overlay items we track
-        for ln in self._time_lines:
-            self.signal_plot.removeItem(ln)
         self._time_lines = []
-
-        if self._cursor_line is not None:
-            self.signal_plot.removeItem(self._cursor_line)
         self._cursor_line = None
-
-        for it in self._minmax_items:
-            self.signal_plot.removeItem(it)
         self._minmax_items = []
 
     def _draw_traces(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, n_vis: int):
         # Normalize amplitude by gain (±gain maps to ±1 display unit)
-        gain_factor = 1.0 / max(1e-9, float(self._gain_uv))
+
+        correction_factor = 0.01  # Adjust this factor based on your observation
+        gain_factor = 1.0 / (self._gain_uv * correction_factor)
+    
 
         for i in range(n_vis):
             y = (seg_ds_uv[i] * gain_factor) + i * self._spacing
@@ -483,23 +516,22 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         t1 = float(t_ds[-1])
         width = max(1e-9, (t1 - t0))
 
-        x_left = t0 - 0.02 * width
+        # marge qu'on a effectivement réservée dans _set_ranges
+        margin = getattr(self, "_amp_left_margin", 0.08 * width)
+
+        # x placé AU MILIEU de la marge, donc toujours visible
+        x_left = t0 - 0.5 * margin
 
         for i in range(n_vis):
             y_center = i * self._spacing
-
             txt = pg.TextItem(
-            text=f"±{self._gain_uv:.0f} µV",
-            anchor=(1, 0.5),
-            color=(160, 160, 160),
-        )
-
-        txt.setPos(x_left, y_center)
-
-        self.signal_plot.addItem(txt)
-        self._minmax_items.append(txt)
-
-        
+                text=f"±{self._gain_uv:.0f} µV",
+                anchor=(0.5, 0.5),        # centré
+                color=(160, 160, 160),
+            )
+            txt.setPos(x_left, y_center)
+            self.signal_plot.addItem(txt)
+            self._minmax_items.append(txt)
 
     # ---------------- Utility ----------------
     def _clamp_time_start(self):
