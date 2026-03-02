@@ -9,7 +9,7 @@ from mne.io import BaseRaw
 from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QDoubleSpinBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QSlider,
-    QSpinBox, QStatusBar, QToolBar, QToolButton, QVBoxLayout, QWidget,
+    QSpinBox, QToolBar, QToolButton, QVBoxLayout, QWidget,QDockWidget
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCursor
@@ -17,7 +17,7 @@ from PySide6.QtGui import QAction, QCursor
 from app.menus import build_menubar
 from app.plot import MultiChannelViewer
 from app.console_viewer import ConsoleWindow
-
+from app.computation_panel import ComputationPanel
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -83,6 +83,20 @@ class MainWindow(QMainWindow):
 
         self._update_window_title()
 
+
+        # ---- Computation dock (WIP) ----
+        self.comp_dock = QDockWidget("Computation Panel", self)
+        self.comp_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+            | Qt.DockWidgetArea.BottomDockWidgetArea
+        )
+
+        self.comp_panel = ComputationPanel()
+        self.comp_dock.setWidget(self.comp_panel)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.comp_dock)
+        self.comp_dock.hide()
+
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.timeWindowChanged.connect(self._sync_time_slider_from_viewer)
@@ -90,7 +104,14 @@ class MainWindow(QMainWindow):
 
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
         self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
+        self.viewer.requestOpenComputationPanel.connect(self._open_computation_panel)
 
+        # keep panel time updated when main time moves
+        self.viewer.timeWindowChanged.connect(self._push_time_to_comp_panel)
+        # keep panel time updated when main window length changes
+        self.time_range.valueChanged.connect(lambda v: self._push_time_to_comp_panel(self.viewer.time_start()))
+        #Channel selection updated 
+        self.comp_panel.panelSelectionChanged.connect(self._on_comp_panel_selection_changed)
 
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
@@ -340,6 +361,7 @@ class MainWindow(QMainWindow):
         self.chan_range.setValue(new_v)
 
     def _show_hidden_channels_menu(self):
+    
         hidden = sorted(self.viewer._hidden_channels)
         menu = QMenu()
 
@@ -356,3 +378,27 @@ class MainWindow(QMainWindow):
                 act.triggered.connect(lambda checked=False, name=ch: self.viewer.unhide_channel(name))
 
         menu.exec_(QCursor.pos())
+
+    def _push_time_to_comp_panel(self, t0: float):
+        main_win = float(self.time_range.value())  # toolbar value
+        self.comp_panel.set_main_time(float(t0), main_win_s=main_win)
+
+    def _open_computation_panel(self, selected_abs: list[int]):
+        # give the panel access to the current dataset mapping
+        displayed_names = getattr(self.viewer, "_channel_names", [])
+        self.comp_panel.set_data_context(self.current_raw, self.current_picks, displayed_names)
+
+        # default channels = selection at creation/open
+        self.comp_panel.set_selected_channels_abs(selected_abs, replace=True)
+
+        # default time = linked to main view (panel will clamp win to 1..10)
+        self._push_time_to_comp_panel(self.viewer.time_start())
+
+        self.comp_dock.show()
+        self.comp_dock.raise_()
+
+    def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
+        # Highlight the same channels in main viewer (and treat it as selection)
+        self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
+
+        

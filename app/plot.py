@@ -29,6 +29,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     channelClicked = Signal(int)          # absolute channel index in displayed channel list
     channelWindowChanged = Signal(int)    # emits ch_start when visible channel window changes
     timeWindowChanged = Signal(float)     # emits t_start when visible time window changes
+    selectionChanged = Signal(list)
+    requestOpenComputationPanel = Signal(list)  # emits selected abs indices
 
     # Wheel zoom requests (handled by MainWindow via spinboxes)
     requestTimeRangeDelta = Signal(int)   # +1 zoom out, -1 zoom in
@@ -60,7 +62,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._labels: list[pg.TextItem] = []
         self._minmax_items: list[pg.TextItem] = []
 
-        self._selected_abs: Optional[int] = None
+        self._selected_abs_set: set[int] = set()
+        self._selection_anchor_abs: Optional[int] = None
 
         # ---- Cursor + grid ----
         self._cursor_line: Optional[pg.InfiniteLine] = None
@@ -229,30 +232,34 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         elif pos >= self._ch_start + n_vis:
             self.set_channel_start(pos - n_vis + 1)
 
-    def highlight_channel(self, index: int):
-        """Highlight a channel (thicker trace + yellow label)."""
-        self._selected_abs = int(index)
-        
-        # Only try to highlight if currently visible
-        if index not in self._visible_abs.tolist():
+    def highlight_selected_channels(self):
+        """Highlight selected channels (thicker trace + yellow label)."""
+        if self._visible_abs.size == 0:
             return
 
-        idx_vis = int(np.where(self._visible_abs == index)[0][0])
-        # Update curve pens WITHOUT destroying "bad" color
         for row, c in enumerate(self._curves):
             abs_idx = int(self._visible_abs[row])
             ch_name = self._channel_names[abs_idx]
 
             is_bad = ch_name in self._bad_channels
-            width = 3 if row == idx_vis else 1
+            is_selected = abs_idx in self._selected_abs_set
 
-            # Force normal channels to white, bad channels to red
+            width = 3 if is_selected else 1
             color = "r" if is_bad else "w"
             c.setPen(pg.mkPen(color, width=width))
 
-        # Labels: keep your current behavior
         for row, txt in enumerate(self._labels):
-            txt.setColor((255, 255, 0) if row == idx_vis else (180, 180, 180))
+            abs_idx = int(self._visible_abs[row])
+            txt.setColor((255, 255, 0) if abs_idx in self._selected_abs_set else (180, 180, 180))
+
+    def set_selected_abs(self, selected_abs: list[int], *, anchor: int | None = None, emit: bool = True):
+        self._selected_abs_set = set(int(i) for i in selected_abs)
+        if anchor is not None:
+            self._selection_anchor_abs = int(anchor)
+
+        self.highlight_selected_channels()
+        if emit and hasattr(self, "selectionChanged"):
+            self.selectionChanged.emit(sorted(self._selected_abs_set))
 
     # ---------------- Interaction ----------------
 
@@ -314,61 +321,111 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             return super().eventFilter(obj, ev)
 
     def _on_mouse_clicked(self, event):
-            """Left click selects channel. Right click on signal opens hide/bad menu."""
-            if self._raw is None or self._visible_abs.size == 0:
-                return
+        """Left click selects channel. Right click on signal opens menu."""
+        if self._raw is None or self._visible_abs.size == 0:
+            return
 
-            pos = event.scenePos()
-            in_label = self._label_vb.sceneBoundingRect().contains(pos)
-            in_signal = self._sig_vb.sceneBoundingRect().contains(pos)
+        pos = event.scenePos()
+        in_label = self._label_vb.sceneBoundingRect().contains(pos)
+        in_signal = self._sig_vb.sceneBoundingRect().contains(pos)
 
-            # ---- Right click: context menu acts on selected channel ----
-            if event.button() == Qt.MouseButton.RightButton and (in_signal or in_label):
-                # If a channel is selected AND it is currently visible, use it
-                if self._selected_abs is not None and self._selected_abs in self._visible_abs.tolist():
-                    abs_idx = int(self._selected_abs)
-                else:
-                    # Optional fallback: pick nearest row under cursor if nothing selected
-                    data_point = self._sig_vb.mapSceneToView(pos)
-                    y = float(data_point.y())
-                    row = int(y // float(self._spacing))
-                    if row < 0 or row >= len(self._last_visible_abs):
-                        return
-                    abs_idx = int(self._last_visible_abs[row])
-
-                    # Set it as selected so user sees what they act on
-                    self.channelClicked.emit(abs_idx)
-                    self.highlight_channel(abs_idx)
-
-                ch_name = self._channel_names[abs_idx]
-
-                menu = QtWidgets.QMenu()
-                act_hide = menu.addAction("Hide")
-                is_bad = ch_name in self._bad_channels
-                act_bad = menu.addAction("Unmark as bad" if is_bad else "Mark as bad")
-
-                chosen = menu.exec_(QtGui.QCursor.pos())
-                if chosen == act_hide:
-                    self._hide_channel(ch_name)
-                elif chosen == act_bad:
-                    self._toggle_bad_channel(ch_name)
-                return
-            # ---- Left click: selection ----
-            if event.button() != Qt.MouseButton.LeftButton:
-                return
-
-            vb = self._label_vb if in_label else self._sig_vb
-            data_point = vb.mapSceneToView(pos)
+        # ---- Right click: context menu only in signal area ----
+        if event.button() == Qt.MouseButton.RightButton and in_signal:
+            data_point = self._sig_vb.mapSceneToView(pos)
             y = float(data_point.y())
+            row = int(y // float(self._spacing))
+            if row < 0 or row >= len(self._last_visible_abs):
+                return
 
-            centers = np.arange(len(self._visible_abs)) * self._spacing
-            idx_vis = int(np.argmin(np.abs(centers - y)))
-            idx_vis = max(0, min(idx_vis, len(self._visible_abs) - 1))
+            abs_idx = int(self._last_visible_abs[row])
 
-            idx_abs = int(self._visible_abs[idx_vis])
-            self.channelClicked.emit(idx_abs)
-            self.highlight_channel(idx_abs)
+            # If you right-click a channel that isn't selected, select only that one first
+            if abs_idx not in self._selected_abs_set:
+                self._selected_abs_set = {abs_idx}
+                self._selection_anchor_abs = abs_idx
+                self.highlight_selected_channels()
+                # optional: self.selectionChanged.emit(sorted(self._selected_abs_set))
 
+            selected_abs = sorted(self._selected_abs_set)
+            selected_names = [self._channel_names[i] for i in selected_abs]
+
+            menu = QtWidgets.QMenu()
+            act_open_panel = menu.addAction("Open Computation Panel")
+            menu.addSeparator()
+
+            act_hide = menu.addAction(f"Hide ({len(selected_names)})")
+
+            # If ALL are bad => offer Unmark, else offer Mark (sets all to bad)
+            all_bad = all(name in self._bad_channels for name in selected_names)
+            act_bad = menu.addAction("Unmark as bad" if all_bad else "Mark as bad")
+
+            chosen = menu.exec_(QtGui.QCursor.pos())
+            if chosen == act_open_panel:
+                self.requestOpenComputationPanel.emit(selected_abs)
+            elif chosen == act_hide:
+                self._hide_channels(selected_names)
+            elif chosen == act_bad:
+                self._set_bad_channels(selected_names, bad=not all_bad)
+
+            return
+
+        # ---- Left click: selection ----
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
+        vb = self._label_vb if in_label else self._sig_vb
+        data_point = vb.mapSceneToView(pos)
+        y = float(data_point.y())
+
+        centers = np.arange(len(self._visible_abs)) * self._spacing
+        idx_vis = int(np.argmin(np.abs(centers - y)))
+        idx_vis = max(0, min(idx_vis, len(self._visible_abs) - 1))
+
+        idx_abs = int(self._visible_abs[idx_vis])
+
+        mods = QtWidgets.QApplication.keyboardModifiers()
+        ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
+
+        # Visible list excluding hidden channels (needed for shift-range)
+        all_vis = self._all_visible_abs_indices()
+
+        if not ctrl and not shift:
+            # Normal click => single selection
+            self._selected_abs_set = {idx_abs}
+            self._selection_anchor_abs = idx_abs
+
+        elif ctrl and not shift:
+            # Ctrl-click => toggle one
+            if idx_abs in self._selected_abs_set:
+                self._selected_abs_set.remove(idx_abs)
+            else:
+                self._selected_abs_set.add(idx_abs)
+
+        else:
+            # Shift or Ctrl+Shift => range selection
+            if self._selection_anchor_abs is None:
+                self._selection_anchor_abs = idx_abs
+
+            if (idx_abs in all_vis) and (self._selection_anchor_abs in all_vis):
+                i1 = all_vis.index(self._selection_anchor_abs)
+                i2 = all_vis.index(idx_abs)
+                lo, hi = (i1, i2) if i1 <= i2 else (i2, i1)
+                range_set = set(all_vis[lo : hi + 1])
+
+                if ctrl:
+                    self._selected_abs_set |= range_set
+                else:
+                    self._selected_abs_set = range_set
+
+        # Keep existing "clicked" semantic (primary)
+        self.channelClicked.emit(idx_abs)
+
+        # Tell others (computation panel later)
+        self.selectionChanged.emit(sorted(self._selected_abs_set))
+
+        # Repaint highlight
+        self.highlight_selected_channels()
     # ---------------- Rendering ----------------
     def render(self):
         """Redraw the viewer for the current raw + view parameters."""
@@ -400,8 +457,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
 
-        if self._selected_abs is not None:
-            self.highlight_channel(self._selected_abs)
+        if self._selected_abs_set:
+            self.highlight_selected_channels()
 
 # ---------------- Data fetch ----------------
     def _get_visible_data_for_abs(
@@ -560,6 +617,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._bad_channels.remove(ch_name)
         else:
             self._bad_channels.add(ch_name)
+        self.render()
+
+    def _hide_channels(self, ch_names: list[str]):
+        if not ch_names:
+            return
+        self._hidden_channels.update(ch_names)
+        self._clamp_ch_start()
+        self.render()
+
+    def _set_bad_channels(self, ch_names: list[str], bad: bool):
+        if not ch_names:
+            return
+        if bad:
+            self._bad_channels.update(ch_names)
+        else:
+            for n in ch_names:
+                self._bad_channels.discard(n)
         self.render()
 
     # ---------------- Visible channel logic (DISPLAYED indices) ----------------
