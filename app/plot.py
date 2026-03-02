@@ -322,15 +322,24 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             in_label = self._label_vb.sceneBoundingRect().contains(pos)
             in_signal = self._sig_vb.sceneBoundingRect().contains(pos)
 
-            # ---- Right click: context menu only in signal area ----
-            if event.button() == Qt.MouseButton.RightButton and in_signal:
-                data_point = self._sig_vb.mapSceneToView(pos)
-                y = float(data_point.y())
-                row = int(y // float(self._spacing))
-                if row < 0 or row >= len(self._last_visible_abs):
-                    return
+            # ---- Right click: context menu acts on selected channel ----
+            if event.button() == Qt.MouseButton.RightButton and (in_signal or in_label):
+                # If a channel is selected AND it is currently visible, use it
+                if self._selected_abs is not None and self._selected_abs in self._visible_abs.tolist():
+                    abs_idx = int(self._selected_abs)
+                else:
+                    # Optional fallback: pick nearest row under cursor if nothing selected
+                    data_point = self._sig_vb.mapSceneToView(pos)
+                    y = float(data_point.y())
+                    row = int(y // float(self._spacing))
+                    if row < 0 or row >= len(self._last_visible_abs):
+                        return
+                    abs_idx = int(self._last_visible_abs[row])
 
-                abs_idx = self._last_visible_abs[row]
+                    # Set it as selected so user sees what they act on
+                    self.channelClicked.emit(abs_idx)
+                    self.highlight_channel(abs_idx)
+
                 ch_name = self._channel_names[abs_idx]
 
                 menu = QtWidgets.QMenu()
@@ -344,7 +353,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 elif chosen == act_bad:
                     self._toggle_bad_channel(ch_name)
                 return
-
             # ---- Left click: selection ----
             if event.button() != Qt.MouseButton.LeftButton:
                 return
@@ -527,6 +535,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
  # ---------------- Hide / Bad ----------------
     def _hide_channel(self, ch_name: str):
         self._hidden_channels.add(ch_name)
+
+        # if we just hid the selected channel, clear selection
+        if self._selected_abs is not None:
+            sel_name = self._channel_names[int(self._selected_abs)]
+            if sel_name == ch_name:
+                self._selected_abs = None
+                
         self._clamp_ch_start()
         self.render()
 
