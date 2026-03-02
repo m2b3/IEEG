@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog, QDialogButtonBox, QLineEdit
 )
-
+from app.time_controls import TimeWindowControl
 
 @dataclass
 class PanelState:
@@ -86,7 +86,11 @@ class ComputationPanel(QWidget):
         spin_row.addWidget(self.spin_win)
         t_layout.addLayout(spin_row)
 
+        self.time_ctl = TimeWindowControl(label_prefix="t0")
+        t_layout.addWidget(self.time_ctl)
         root.addWidget(gb_t, 0)
+
+        self.time_ctl.set_enabled(False)
 
         # --- Plot ---
         gb_p = QGroupBox("Output")
@@ -105,6 +109,7 @@ class ComputationPanel(QWidget):
         self.chk_link_time.toggled.connect(self._on_link_time_toggled)
         self.spin_win.valueChanged.connect(self._on_win_changed)
         self.btn_add.clicked.connect(self._open_add_channels_dialog)
+        self.time_ctl.t0Changed.connect(self._on_panel_t0_changed)
 
         # --- Throttled updates (smooth while dragging) ---
         self._update_timer = QTimer(self)  # or QTimer(self) if you imported it
@@ -128,25 +133,25 @@ class ComputationPanel(QWidget):
 
         self._sync_list_widget_from_state()
         self._request_update_plot()
-        self._sync_list_widget_from_state()
-        self._request_update_plot()  # (we’ll add throttling below)
         self.panelSelectionChanged.emit(self.state.selected_abs)
+        self._update_channels_title()
 
     def set_main_time(self, t0: float, main_win_s: float):
-        """
-        Push main time window. If link_time is ON, panel follows it.
-        Window length is clamped to [1, 10].
-        """
-        if self.state.link_time:
-            win = float(np.clip(main_win_s, 1.0, 10.0))
-            self.state.t0 = float(t0)
-            self.state.win = float(win)
-            self.spin_win.blockSignals(True)
-            self.spin_win.setValue(self.state.win)
-            self.spin_win.blockSignals(False)
+        if not self.state.link_time:
+            return
 
-            self._update_time_label()
-            self._update_plot()
+        self.state.t0 = float(t0)
+        self.state.win = float(np.clip(self.state.win, 1.0, 10.0))
+
+        self.spin_win.blockSignals(True)
+        self.spin_win.setValue(self.state.win)
+        self.spin_win.blockSignals(False)
+
+        # update slider range + position to match main time
+        self._update_slider_range()
+        self.time_ctl.set_t0(self.state.t0)   # <-- IMPORTANT (UI sync)
+
+        self._request_update_plot()
 
     # ---------- Internals ----------
     def _abs_to_display_name(self, abs_idx: int) -> str:
@@ -179,19 +184,33 @@ class ComputationPanel(QWidget):
 
     def _clear_channels(self):
         self.set_selected_channels_abs([], replace=True)
-        
+
     @Slot(bool)
     def _on_link_time_toggled(self, on: bool):
         self.state.link_time = bool(on)
+        self.time_ctl.set_enabled(not self.state.link_time)
         # when unlinking, keep current values; when relinking, MainWindow will push main time
 
     @Slot(float)
     def _on_win_changed(self, v: float):
-        v = float(np.clip(v, 1.0, 10.0))
-        self.state.win = v
+        # Clamp win to [1, 10]
+        self.state.win = float(np.clip(v, 1.0, 10.0))
         self._update_time_label()
-        if not self.state.link_time:
-            self._update_plot()
+
+        # Update the slider range because max t0 depends on window length
+        if self._raw is not None and self._raw.n_times > 1:
+            total_s = float(self._raw.times[-1])
+            self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
+
+        # Recompute plot in all cases (linked or not)
+        self._request_update_plot()
+        
+    def _update_slider_range(self):
+        if self._raw is None or self._raw.n_times <= 1:
+            self.time_ctl.set_range(0.0, 0.0, 0.0)  # or your local slider equivalent
+            return
+        total_s = float(self._raw.times[-1])
+        self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
 
     def _update_time_label(self):
         t0 = self.state.t0
@@ -209,6 +228,11 @@ class ComputationPanel(QWidget):
             self.curve.setData([], [])
             return
 
+        # ---- Clamp t0 so the [t0, t0+win] window is valid ----
+        total_s = float(self._raw.times[-1]) if self._raw.n_times > 1 else 0.0
+        max_t0 = max(0.0, total_s - float(self.state.win))
+        self.state.t0 = float(np.clip(float(self.state.t0), 0.0, max_t0))
+
         fs = float(self._raw.info["sfreq"])
         start = int(self.state.t0 * fs)
         end = int((self.state.t0 + self.state.win) * fs)
@@ -218,7 +242,7 @@ class ComputationPanel(QWidget):
         end = max(start + 1, min(end, n))
 
         raw_idx = self._picks[np.asarray(self.state.selected_abs, dtype=int)]
-        data_v, times = self._raw[raw_idx, start:end]  # shape (n_ch, n_samp)
+        data_v, times = self._raw[raw_idx, start:end]
         data_v = np.asarray(data_v)
         times = np.asarray(times)
 
@@ -226,11 +250,20 @@ class ComputationPanel(QWidget):
             self.curve.setData([], [])
             return
 
-        y = np.mean(data_v, axis=0)  # mean over channels, stays in Volts
-        # decimate for speed
+        y = np.mean(data_v, axis=0)
+
         max_pts = 2000
         step = max(1, y.size // max_pts)
         self.curve.setData(times[::step], y[::step])
+
+        t0 = float(self.state.t0)
+        t1 = t0 + float(self.state.win)
+
+        plot_item = self.plot.getPlotItem()
+        if plot_item is not None:
+            vb = plot_item.getViewBox()
+            if vb is not None:
+                vb.setRange(xRange=(t0, t1), padding=0.0)
 
     def _open_add_channels_dialog(self):
         """
@@ -318,3 +351,9 @@ class ComputationPanel(QWidget):
         if hasattr(self, "_update_timer") and self._update_timer.isActive():
             self._update_timer.stop()
         self._update_timer.start(int(delay_ms))
+
+    def _on_panel_t0_changed(self, t0: float):
+        if self.state.link_time:
+            return
+        self.state.t0 = float(t0)
+        self._request_update_plot()

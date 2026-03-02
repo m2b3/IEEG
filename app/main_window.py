@@ -8,8 +8,8 @@ from mne.io import BaseRaw
 
 from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QDoubleSpinBox, QFileDialog, QFrame,
-    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QSlider,
-    QSpinBox, QToolBar, QToolButton, QVBoxLayout, QWidget,QDockWidget
+    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,
+    QSpinBox, QToolBar, QToolButton, QVBoxLayout, QWidget, QDockWidget
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCursor
@@ -18,6 +18,7 @@ from app.menus import build_menubar
 from app.plot import MultiChannelViewer
 from app.console_viewer import ConsoleWindow
 from app.computation_panel import ComputationPanel
+from app.time_controls import TimeWindowControl
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -59,14 +60,8 @@ class MainWindow(QMainWindow):
         tl = QHBoxLayout(self.timeline)
         tl.setContentsMargins(12, 8, 12, 8)
 
-        self.t_label = QLabel("t0: 0.00 s")
-        self.time_slider = QSlider(Qt.Orientation.Horizontal)
-        self.time_slider.setMinimum(0)
-        self.time_slider.setMaximum(0)
-        self.time_slider.setValue(0)
-
-        tl.addWidget(self.t_label)
-        tl.addWidget(self.time_slider, 1)
+        self.time_ctl = TimeWindowControl(label_prefix="t0")
+        tl.addWidget(self.time_ctl, 1)
 
         self.timeline.hide()
         layout.addWidget(self.timeline, 0)
@@ -83,7 +78,6 @@ class MainWindow(QMainWindow):
 
         self._update_window_title()
 
-
         # ---- Computation dock (WIP) ----
         self.comp_dock = QDockWidget("Computation Panel", self)
         self.comp_dock.setAllowedAreas(
@@ -99,12 +93,13 @@ class MainWindow(QMainWindow):
 
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
-        self.viewer.timeWindowChanged.connect(self._sync_time_slider_from_viewer)
-        self.time_slider.valueChanged.connect(self._on_time_slider)
-
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
         self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
         self.viewer.requestOpenComputationPanel.connect(self._open_computation_panel)
+
+        # Timeline sync
+        self.viewer.timeWindowChanged.connect(self._sync_time_from_viewer)
+        self.time_ctl.t0Changed.connect(self._on_time_ctl_t0_changed)
 
         # keep panel time updated when main time moves
         self.viewer.timeWindowChanged.connect(self._push_time_to_comp_panel)
@@ -176,7 +171,6 @@ class MainWindow(QMainWindow):
         self.gain.valueChanged.connect(lambda v: self.viewer.set_view_params(gain=v))
         self.chan_range.valueChanged.connect(lambda v: self.viewer.set_view_params(chan_range=v))
 
-    
     def _add_presets_button(self, tb: QToolBar, target, values):
         """Small down-arrow button that pops a menu of preset values."""
         btn = QToolButton()
@@ -232,7 +226,7 @@ class MainWindow(QMainWindow):
 
             self.timeline.show()
             self._update_time_slider_range()
-            self._sync_time_slider_from_viewer(0.0)
+            self._sync_time_from_viewer(0.0)
 
             self.console.log(f"Loaded: {Path(path).name}")
             self.console.log(f"Channels: {n_channels}")
@@ -269,7 +263,6 @@ class MainWindow(QMainWindow):
         picks = np.arange(raw.info["nchan"], dtype=int)
         return raw, picks
     
-
     def _update_window_title(self):
         base = getattr(self, "_base_title", "Halyzia Shell")
 
@@ -304,33 +297,6 @@ class MainWindow(QMainWindow):
         """Toolbar time_range changed -> update viewer + slider range."""
         self.viewer.set_view_params(time_range=v)
         self._update_time_slider_range()
-
-    def _on_time_slider(self, v: int):
-        """Slider is in milliseconds."""
-        t0 = v / 1000.0
-        self.viewer.set_time_start(t0)
-        self.t_label.setText(f"t0: {self.viewer.time_start():.2f} s")
-
-    def _sync_time_slider_from_viewer(self, t0: float):
-        self.time_slider.blockSignals(True)
-        self.time_slider.setValue(int(round(t0 * 1000.0)))
-        self.time_slider.blockSignals(False)
-        self.t_label.setText(f"t0: {t0:.2f} s")
-
-    def _update_time_slider_range(self):
-        if self.current_raw is None:
-            self.time_slider.setMaximum(0)
-            return
-
-        total_s = float(self.current_raw.times[-1]) if self.current_raw.n_times > 1 else 0.0
-        window_s = float(self.time_range.value())
-        max_t0 = max(0.0, total_s - window_s)
-
-        self.time_slider.blockSignals(True)
-        self.time_slider.setMinimum(0)
-        self.time_slider.setMaximum(int(round(max_t0 * 1000.0)))
-        self.time_slider.setValue(int(round(self.viewer.time_start() * 1000.0)))
-        self.time_slider.blockSignals(False)
 
     # ---------------- Viewer interaction callbacks ----------------
 
@@ -401,4 +367,20 @@ class MainWindow(QMainWindow):
         # Highlight the same channels in main viewer (and treat it as selection)
         self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
 
-        
+ 
+    def _on_time_ctl_t0_changed(self, t0: float):
+        # user moved the timeline in main window
+        self.viewer.set_time_start(float(t0))
+
+    def _sync_time_from_viewer(self, t0: float):
+        # viewer scrolled/updated time -> update main timeline control
+        self.time_ctl.set_t0(float(t0))
+
+    def _update_time_slider_range(self):
+        if self.current_raw is None or self.current_raw.n_times <= 1:
+            self.time_ctl.set_range(0.0, 0.0, 0.0)
+            return
+
+        total_s = float(self.current_raw.times[-1])
+        window_s = float(self.time_range.value())
+        self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))

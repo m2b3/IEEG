@@ -31,6 +31,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     timeWindowChanged = Signal(float)     # emits t_start when visible time window changes
     selectionChanged = Signal(list)
     requestOpenComputationPanel = Signal(list)  # emits selected abs indices
+    cursorMoved = Signal(float)  # cursor x in seconds
 
     # Wheel zoom requests (handled by MainWindow via spinboxes)
     requestTimeRangeDelta = Signal(int)   # +1 zoom out, -1 zoom in
@@ -570,6 +571,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._cursor_line is None:
             return
         self._cursor_x = float(np.asarray(self._cursor_line.value()).item())
+        self.cursorMoved.emit(self._cursor_x)
 
     def _draw_minmax(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, n_vis: int):
         t0 = float(t_ds[0])
@@ -589,6 +591,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(txt)
             self._minmax_items.append(txt)
 
+    def set_cursor_x(self, x: float):
+        self._cursor_x = float(x)
+        if self._cursor_line is not None:
+            self._cursor_line.blockSignals(True)
+            self._cursor_line.setPos(self._cursor_x)
+            self._cursor_line.blockSignals(False)
+
+    def cursor_x(self) -> float:
+        return float(self._cursor_x) if self._cursor_x is not None else float(self._t_start)
  # ---------------- Hide / Bad ----------------
     def _hide_channel(self, ch_name: str):
         self._hidden_channels.add(ch_name)
