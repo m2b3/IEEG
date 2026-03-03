@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QToolBar, QToolButton, QVBoxLayout, QWidget, QDockWidget
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QCursor
+from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut
 
 from app.menus import build_menubar
 from app.plot import MultiChannelViewer
@@ -110,6 +110,22 @@ class MainWindow(QMainWindow):
         # Make computation panel follow the viewer cursor (instead of window start)
         self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
+
+        # --- Shortcuts (work even when focus is in child widgets) ---
+        self.sc_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        self.sc_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
+        self.sc_left.activated.connect(lambda: self._nudge_cursor(-1, 1))
+        self.sc_right.activated.connect(lambda: self._nudge_cursor(+1, 1))
+
+        self.sc_shift_left = QShortcut(QKeySequence("Shift+Left"), self)
+        self.sc_shift_right = QShortcut(QKeySequence("Shift+Right"), self)
+        self.sc_shift_left.activated.connect(lambda: self._nudge_cursor(-1, 10))
+        self.sc_shift_right.activated.connect(lambda: self._nudge_cursor(+1, 10))
+
+        self.sc_ctrl_left = QShortcut(QKeySequence("Ctrl+Left"), self)
+        self.sc_ctrl_right = QShortcut(QKeySequence("Ctrl+Right"), self)
+        self.sc_ctrl_left.activated.connect(lambda: self._nudge_cursor(-1, 50))
+        self.sc_ctrl_right.activated.connect(lambda: self._nudge_cursor(+1, 50))
 
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
@@ -399,3 +415,65 @@ class MainWindow(QMainWindow):
 
         # push t0 only (panel keeps its own window length)
         self.comp_panel.set_main_time(t0, main_win_s=win)
+
+    def keyPressEvent(self, event):
+        key = event.key()
+
+        if key not in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            super().keyPressEvent(event)
+            return
+
+        if self.viewer is None:
+            return
+
+        # 1-sample step
+        fs = getattr(self.viewer, "_fs", 1.0)
+        base_step = 1.0 / max(1.0, float(fs))
+
+        mods = event.modifiers()
+
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            base_step *= 10
+
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            base_step *= 50
+
+        dx = -base_step if key == Qt.Key.Key_Left else +base_step
+
+        x = float(self.viewer.cursor_x())
+        new_x = x + dx
+
+        raw = getattr(self.viewer, "_raw", None)
+        if raw is not None and raw.n_times > 1:
+            t_min = float(raw.times[0])
+            t_max = float(raw.times[-1])
+            new_x = max(t_min, min(new_x, t_max))
+
+        # Move cursor
+        self.viewer.set_cursor_x(new_x)
+
+        # IMPORTANT: manually emit so computation panel updates
+        self.viewer.cursorMoved.emit(float(new_x))
+
+        event.accept()
+
+    def _nudge_cursor(self, direction: int, mult: float = 1.0) -> None:
+        """direction: -1 for left, +1 for right"""
+        if self.viewer is None:
+            return
+
+        fs = float(getattr(self.viewer, "_fs", 1.0))
+        step = (1.0 / max(1.0, fs)) * float(mult)
+
+        x = float(self.viewer.cursor_x())
+        new_x = x + direction * step
+
+        raw = getattr(self.viewer, "_raw", None)
+        if raw is not None and raw.n_times > 1:
+            t_min = float(raw.times[0])
+            t_max = float(raw.times[-1])
+            new_x = max(t_min, min(new_x, t_max))
+
+        self.viewer.set_cursor_x(new_x)
+        # ensure computation panel + anything else listening updates
+        self.viewer.cursorMoved.emit(float(new_x))

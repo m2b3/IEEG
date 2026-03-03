@@ -11,7 +11,7 @@ from mne.io import BaseRaw
 from PySide6.QtCore import Qt, Slot, Signal, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog, QDialogButtonBox, QLineEdit
+    QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog, QDialogButtonBox, QLineEdit, QComboBox  
 )
 from app.time_controls import TimeWindowControl
 
@@ -21,6 +21,7 @@ class PanelState:
     t0: float
     win: float
     link_time: bool = True
+    algorithm: str = "mean"
 
 class ComputationPanel(QWidget):
     """
@@ -111,6 +112,16 @@ class ComputationPanel(QWidget):
         self.chk_match_main.toggled.connect(lambda _: self._request_update_plot())
         p_layout.insertWidget(0, self.chk_match_main)  # add above the plot
 
+        # --- Algorithm selector ---
+        algo_row = QHBoxLayout()
+        algo_row.addWidget(QLabel("Algorithm:"))
+
+        self.cbo_algo = QComboBox()
+        self.cbo_algo.addItem("Mean (across selected channels)", userData="mean")
+
+        algo_row.addWidget(self.cbo_algo, 1)
+        p_layout.addLayout(algo_row)
+
         # --- Wiring ---
         self.btn_remove.clicked.connect(self._remove_selected_items)
         self.btn_clear.clicked.connect(self._clear_channels)
@@ -118,6 +129,7 @@ class ComputationPanel(QWidget):
         self.spin_win.valueChanged.connect(self._on_win_changed)
         self.btn_add.clicked.connect(self._open_add_channels_dialog)
         self.time_ctl.t0Changed.connect(self._on_panel_t0_changed)
+        self.cbo_algo.currentIndexChanged.connect(self._on_algo_changed)
 
         # --- Throttled updates (smooth while dragging) ---
         self._update_timer = QTimer(self)  # or QTimer(self) if you imported it
@@ -258,20 +270,37 @@ class ComputationPanel(QWidget):
             self.curve.setData([], [])
             return
 
-        # raw returns volts (MNE convention), match viewer: convert to µV
-        data_uv = data_v * 1e6
+        # Decide algorithm (default to mean if not set)
+        algo = getattr(self.state, "algorithm", "mean")
 
-        # If only one channel selected, plot that channel directly
-        if data_uv.shape[0] == 1:
-            y = data_uv[0]
+        # ---- Compute output signal in VOLTS (analysis space) ----
+        if algo == "single":
+            # First selected channel only
+            y_v = data_v[0]
+            y_label = "Voltage (V)"
+        elif algo == "mean":
+            # Mean across selected channels
+            y_v = np.mean(data_v, axis=0)
+            y_label = "Mean voltage (V)"
         else:
-            # keep your current behavior: mean across selected channels
-            y = np.mean(data_uv, axis=0)
+            # Placeholder algorithms: fall back to mean for now (or return empty)
+            y_v = np.mean(data_v, axis=0)
+            y_label = f"{algo} (fallback mean) (V)"
 
-        # Optional: match viewer scaling
+        # ---- Optional: match viewer display (µV + viewer gain scaling) ----
         if self.chk_match_main.isChecked():
-            gain_factor = 1.0 / max(1e-9, (self._main_gain_uv * self._correction_factor))
+            y = y_v * 1e6  # convert to µV like the viewer does :contentReference[oaicite:0]{index=0}
+            gain_factor = 1.0 / max(1e-9, (self._main_gain_uv * self._correction_factor))  # same formula as viewer :contentReference[oaicite:1]{index=1}
             y = y * gain_factor
+            self.plot.setLabel("left", "Amplitude (µV, main-scaled)")
+        else:
+            y = y_v
+            self.plot.setLabel("left", y_label)
+
+        # ---- Downsample + plot ----
+        max_pts = 2000
+        step = max(1, y.size // max_pts)
+        self.curve.setData(times[::step], y[::step])
 
         max_pts = 2000
         step = max(1, y.size // max_pts)
@@ -383,3 +412,6 @@ class ComputationPanel(QWidget):
         self._main_gain_uv = float(gain_uv)
         self._request_update_plot()
 
+    def _on_algo_changed(self, _idx: int):
+        self.state.algorithm = str(self.cbo_algo.currentData() or "mean")
+        self._request_update_plot()
