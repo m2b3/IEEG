@@ -96,10 +96,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._label_vb = cast(pg.ViewBox, self.label_plot.getViewBox())
         self._sig_vb = cast(pg.ViewBox, self.signal_plot.getViewBox())
 
-        # Channel 0 at top
-        self._label_vb.invertY(True)
-        self._sig_vb.invertY(True)
-
         # control scrolling/zoom ourselves
         self._label_vb.setMouseEnabled(x=False, y=False)
         self._sig_vb.setMouseEnabled(x=False, y=False)
@@ -238,7 +234,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._visible_abs.size == 0:
             return
 
-        for row, c in enumerate(self._curves):
+        n = int(min(len(self._curves), int(self._visible_abs.size)))
+        for row in range(n):
+            c = self._curves[row]
             abs_idx = int(self._visible_abs[row])
             ch_name = self._channel_names[abs_idx]
 
@@ -249,9 +247,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             color = "r" if is_bad else "w"
             c.setPen(pg.mkPen(color, width=width))
 
-        for row, txt in enumerate(self._labels):
+        n_lbl = int(min(len(self._labels), int(self._visible_abs.size)))
+        for row in range(n_lbl):
             abs_idx = int(self._visible_abs[row])
-            txt.setColor((255, 255, 0) if abs_idx in self._selected_abs_set else (180, 180, 180))
+            self._labels[row].setColor((255, 255, 0) if abs_idx in self._selected_abs_set else (180, 180, 180))
 
     def set_selected_abs(self, selected_abs: list[int], *, anchor: int | None = None, emit: bool = True):
         self._selected_abs_set = set(int(i) for i in selected_abs)
@@ -334,11 +333,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if event.button() == Qt.MouseButton.RightButton and in_signal:
             data_point = self._sig_vb.mapSceneToView(pos)
             y = float(data_point.y())
-            row = int(y // float(self._spacing))
-            if row < 0 or row >= len(self._last_visible_abs):
+            plot_row = int(y // float(self._spacing))
+            n_vis = len(self._last_visible_abs)
+
+            if plot_row < 0 or plot_row >= n_vis:
                 return
 
-            abs_idx = int(self._last_visible_abs[row])
+            data_row = (n_vis - 1 - plot_row)  # <-- map plotted row back to data row
+            abs_idx = int(self._last_visible_abs[data_row])
 
             # If you right-click a channel that isn't selected, select only that one first
             if abs_idx not in self._selected_abs_set:
@@ -378,9 +380,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         data_point = vb.mapSceneToView(pos)
         y = float(data_point.y())
 
-        centers = np.arange(len(self._visible_abs)) * self._spacing
+        n_vis = len(self._visible_abs)
+        centers = (np.arange(n_vis)[::-1]) * self._spacing  # <-- top has largest y
         idx_vis = int(np.argmin(np.abs(centers - y)))
-        idx_vis = max(0, min(idx_vis, len(self._visible_abs) - 1))
+        idx_vis = max(0, min(idx_vis, n_vis - 1))
 
         idx_abs = int(self._visible_abs[idx_vis])
 
@@ -514,7 +517,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ch_name = self._channel_names[abs_idx]
             pen = pg.mkPen("r", width=1.5) if (ch_name in self._bad_channels) else pg.mkPen("w", width=1)
 
-            y = (seg_ds_uv[row] * gain_factor) + row * self._spacing
+            plot_row = (n_vis - 1 - row)
+            y = (seg_ds_uv[row] * gain_factor) + plot_row * self._spacing
+
             curve = self.signal_plot.plot(t_ds, y, pen=pen)
             self._curves.append(curve)
 
@@ -522,9 +527,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for i, abs_idx in enumerate(self._visible_abs):
             name = self._channel_names[int(abs_idx)]
             txt = pg.TextItem(text=name, anchor=(0, 0.5), color=(180, 180, 180))
-            txt.setPos(2.0, i * self._spacing)
-            self.label_plot.addItem(txt)
-            self._labels.append(txt)
+            for i, abs_idx in enumerate(self._visible_abs):
+                name = self._channel_names[int(abs_idx)]
+                txt = pg.TextItem(text=name, anchor=(0, 0.5), color=(180, 180, 180))
+
+                plot_row = (n_vis - 1 - i)
+                txt.setPos(2.0, plot_row * self._spacing)
+
+                self.label_plot.addItem(txt)
+                self._labels.append(txt)
 
     def _set_ranges(self, t_ds: np.ndarray, n_vis: int):
         y0 = -0.5 * self._spacing
@@ -581,7 +592,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         x_left = t0 - 0.5 * margin
 
         for i in range(n_vis):
-            y_center = i * self._spacing
+            plot_row = (n_vis - 1 - i)
+            y_center = plot_row * self._spacing
             txt = pg.TextItem(
                 text=f"±{self._gain_uv:.0f} µV",
                 anchor=(0.5, 0.5),

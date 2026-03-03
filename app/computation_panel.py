@@ -41,6 +41,9 @@ class ComputationPanel(QWidget):
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
 
+        self._main_gain_uv: float = 100.0   # keep in sync with MainWindow gain spinbox
+        self._correction_factor: float = 0.01  # must match viewer _draw_traces
+
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
@@ -98,10 +101,15 @@ class ComputationPanel(QWidget):
         self.plot = pg.PlotWidget()
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.setLabel("bottom", "Time (s)")
-        self.plot.setLabel("left", "Mean voltage (V)")
+        self.plot.setLabel("left", "Mean voltage (µV)")
         self.curve = self.plot.plot([], [])
         p_layout.addWidget(self.plot, 1)
         root.addWidget(gb_p, 3)
+
+        self.chk_match_main = QCheckBox("Match main display scaling")
+        self.chk_match_main.setChecked(True)
+        self.chk_match_main.toggled.connect(lambda _: self._request_update_plot())
+        p_layout.insertWidget(0, self.chk_match_main)  # add above the plot
 
         # --- Wiring ---
         self.btn_remove.clicked.connect(self._remove_selected_items)
@@ -250,7 +258,20 @@ class ComputationPanel(QWidget):
             self.curve.setData([], [])
             return
 
-        y = np.mean(data_v, axis=0)
+        # raw returns volts (MNE convention), match viewer: convert to µV
+        data_uv = data_v * 1e6
+
+        # If only one channel selected, plot that channel directly
+        if data_uv.shape[0] == 1:
+            y = data_uv[0]
+        else:
+            # keep your current behavior: mean across selected channels
+            y = np.mean(data_uv, axis=0)
+
+        # Optional: match viewer scaling
+        if self.chk_match_main.isChecked():
+            gain_factor = 1.0 / max(1e-9, (self._main_gain_uv * self._correction_factor))
+            y = y * gain_factor
 
         max_pts = 2000
         step = max(1, y.size // max_pts)
@@ -357,3 +378,8 @@ class ComputationPanel(QWidget):
             return
         self.state.t0 = float(t0)
         self._request_update_plot()
+
+    def set_main_gain_uv(self, gain_uv: float) -> None:
+        self._main_gain_uv = float(gain_uv)
+        self._request_update_plot()
+

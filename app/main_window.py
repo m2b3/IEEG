@@ -107,6 +107,9 @@ class MainWindow(QMainWindow):
         self.time_range.valueChanged.connect(lambda v: self._push_time_to_comp_panel(self.viewer.time_start()))
         #Channel selection updated 
         self.comp_panel.panelSelectionChanged.connect(self._on_comp_panel_selection_changed)
+        # Make computation panel follow the viewer cursor (instead of window start)
+        self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
+        self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
 
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
@@ -169,6 +172,7 @@ class MainWindow(QMainWindow):
         # ---- Connect toolbar -> viewer ----
         self.time_range.valueChanged.connect(self._on_time_range_changed)
         self.gain.valueChanged.connect(lambda v: self.viewer.set_view_params(gain=v))
+        self.gain.valueChanged.connect(lambda v: self.comp_panel.set_main_gain_uv(float(v)))
         self.chan_range.valueChanged.connect(lambda v: self.viewer.set_view_params(chan_range=v))
 
     def _add_presets_button(self, tb: QToolBar, target, values):
@@ -348,6 +352,7 @@ class MainWindow(QMainWindow):
     def _push_time_to_comp_panel(self, t0: float):
         main_win = float(self.time_range.value())  # toolbar value
         self.comp_panel.set_main_time(float(t0), main_win_s=main_win)
+        self.comp_panel.set_main_gain_uv(float(self.gain.value()))
 
     def _open_computation_panel(self, selected_abs: list[int]):
         # give the panel access to the current dataset mapping
@@ -367,7 +372,6 @@ class MainWindow(QMainWindow):
         # Highlight the same channels in main viewer (and treat it as selection)
         self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
 
- 
     def _on_time_ctl_t0_changed(self, t0: float):
         # user moved the timeline in main window
         self.viewer.set_time_start(float(t0))
@@ -384,3 +388,14 @@ class MainWindow(QMainWindow):
         total_s = float(self.current_raw.times[-1])
         window_s = float(self.time_range.value())
         self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))
+
+    def _on_viewer_cursor_moved(self, x: float):
+        if not hasattr(self, "comp_panel") or self.comp_panel is None:
+            return
+
+        # Center cursor in the computation window
+        win = float(self.comp_panel.state.win)  # panel's own fixed window length
+        t0 = max(0.0, float(x) - 0.5 * win)
+
+        # push t0 only (panel keeps its own window length)
+        self.comp_panel.set_main_time(t0, main_win_s=win)
