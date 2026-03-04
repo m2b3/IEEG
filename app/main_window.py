@@ -111,21 +111,47 @@ class MainWindow(QMainWindow):
         self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
 
-        # --- Shortcuts (work even when focus is in child widgets) ---
-        self.sc_left = QShortcut(QKeySequence(Qt.Key.Key_Left), self)
+        # --- Shortcuts ---
+        # --- Arrow-key scrolling (view navigation) ---
+        self.sc_left  = QShortcut(QKeySequence(Qt.Key.Key_Left),  self)
         self.sc_right = QShortcut(QKeySequence(Qt.Key.Key_Right), self)
-        self.sc_left.activated.connect(lambda: self._nudge_cursor(-1, 1))
-        self.sc_right.activated.connect(lambda: self._nudge_cursor(+1, 1))
+        self.sc_up    = QShortcut(QKeySequence(Qt.Key.Key_Up),    self)
+        self.sc_down  = QShortcut(QKeySequence(Qt.Key.Key_Down),  self)
 
-        self.sc_shift_left = QShortcut(QKeySequence("Shift+Left"), self)
+        # (optional but recommended) make sure it works even when focus is inside child widgets
+        for sc in (self.sc_left, self.sc_right, self.sc_up, self.sc_down):
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+
+        self.sc_left.activated.connect(lambda: self._scroll_time(-1, mult=1))
+        self.sc_right.activated.connect(lambda: self._scroll_time(+1, mult=1))
+        self.sc_up.activated.connect(lambda: self._scroll_channels(-1, mult=1))
+        self.sc_down.activated.connect(lambda: self._scroll_channels(+1, mult=1))
+
+        # Shift = faster
+        self.sc_shift_left  = QShortcut(QKeySequence("Shift+Left"),  self)
         self.sc_shift_right = QShortcut(QKeySequence("Shift+Right"), self)
-        self.sc_shift_left.activated.connect(lambda: self._nudge_cursor(-1, 10))
-        self.sc_shift_right.activated.connect(lambda: self._nudge_cursor(+1, 10))
+        self.sc_shift_up    = QShortcut(QKeySequence("Shift+Up"),    self)
+        self.sc_shift_down  = QShortcut(QKeySequence("Shift+Down"),  self)
+        for sc in (self.sc_shift_left, self.sc_shift_right, self.sc_shift_up, self.sc_shift_down):
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
 
-        self.sc_ctrl_left = QShortcut(QKeySequence("Ctrl+Left"), self)
+        self.sc_shift_left.activated.connect(lambda: self._scroll_time(-1, mult=5))
+        self.sc_shift_right.activated.connect(lambda: self._scroll_time(+1, mult=5))
+        self.sc_shift_up.activated.connect(lambda: self._scroll_channels(-1, mult=5))
+        self.sc_shift_down.activated.connect(lambda: self._scroll_channels(+1, mult=5))
+
+        # Ctrl = very fast
+        self.sc_ctrl_left  = QShortcut(QKeySequence("Ctrl+Left"),  self)
         self.sc_ctrl_right = QShortcut(QKeySequence("Ctrl+Right"), self)
-        self.sc_ctrl_left.activated.connect(lambda: self._nudge_cursor(-1, 50))
-        self.sc_ctrl_right.activated.connect(lambda: self._nudge_cursor(+1, 50))
+        self.sc_ctrl_up    = QShortcut(QKeySequence("Ctrl+Up"),    self)
+        self.sc_ctrl_down  = QShortcut(QKeySequence("Ctrl+Down"),  self)
+        for sc in (self.sc_ctrl_left, self.sc_ctrl_right, self.sc_ctrl_up, self.sc_ctrl_down):
+            sc.setContext(Qt.ShortcutContext.ApplicationShortcut)
+
+        self.sc_ctrl_left.activated.connect(lambda: self._scroll_time(-1, mult=20))
+        self.sc_ctrl_right.activated.connect(lambda: self._scroll_time(+1, mult=20))
+        self.sc_ctrl_up.activated.connect(lambda: self._scroll_channels(-1, mult=20))
+        self.sc_ctrl_down.activated.connect(lambda: self._scroll_channels(+1, mult=20))
 
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
@@ -419,66 +445,31 @@ class MainWindow(QMainWindow):
         window_s = float(self.time_range.value())
         self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))
 
-# ---------------- Keyboard shortcuts / cursor nudging ----------------
+# ---------------- Keyboard shortcuts / cursor nudging -------------
 
-    def keyPressEvent(self, event):
-        key = event.key()
-
-        if key not in (Qt.Key.Key_Left, Qt.Key.Key_Right):
-            super().keyPressEvent(event)
-            return
-
+    def _scroll_time(self, direction: int, mult: float = 1.0) -> None:
+        """direction: -1 left, +1 right"""
         if self.viewer is None:
             return
 
-        # 1-sample step
-        fs = getattr(self.viewer, "_fs", 1.0)
-        base_step = 1.0 / max(1.0, float(fs))
+        # scroll by a fraction of the visible window (feels natural)
+        base = 0.10 * float(self.time_range.value())  # 10% of current window
+        dt = direction * base * float(mult)
 
-        mods = event.modifiers()
-
-        if mods & Qt.KeyboardModifier.ShiftModifier:
-            base_step *= 10
-
-        if mods & Qt.KeyboardModifier.ControlModifier:
-            base_step *= 50
-
-        dx = -base_step if key == Qt.Key.Key_Left else +base_step
-
-        x = float(self.viewer.cursor_x())
-        new_x = x + dx
+        new_t0 = float(self.viewer.time_start()) + dt
 
         raw = getattr(self.viewer, "_raw", None)
         if raw is not None and raw.n_times > 1:
             t_min = float(raw.times[0])
-            t_max = float(raw.times[-1])
-            new_x = max(t_min, min(new_x, t_max))
+            t_max = float(raw.times[-1]) - float(self.time_range.value())
+            new_t0 = max(t_min, min(new_t0, max(t_min, t_max)))
 
-        # Move cursor
-        self.viewer.set_cursor_x(new_x)
+        self.viewer.set_time_start(new_t0)
 
-        # IMPORTANT: manually emit so computation panel updates
-        self.viewer.cursorMoved.emit(float(new_x))
 
-        event.accept()
-
-    def _nudge_cursor(self, direction: int, mult: float = 1.0) -> None:
-        """direction: -1 for left, +1 for right"""
-        if self.viewer is None:
-            return
-
-        fs = float(getattr(self.viewer, "_fs", 1.0))
-        step = (1.0 / max(1.0, fs)) * float(mult)
-
-        x = float(self.viewer.cursor_x())
-        new_x = x + direction * step
-
-        raw = getattr(self.viewer, "_raw", None)
-        if raw is not None and raw.n_times > 1:
-            t_min = float(raw.times[0])
-            t_max = float(raw.times[-1])
-            new_x = max(t_min, min(new_x, t_max))
-
-        self.viewer.set_cursor_x(new_x)
-        # ensure computation panel + anything else listening updates
-        self.viewer.cursorMoved.emit(float(new_x))
+    def _scroll_channels(self, direction: int, mult: int = 1) -> None:
+            """direction: -1 up, +1 down (move channel window)"""
+            if self.viewer is None:
+                return
+            step = int(direction * int(mult))
+            self.viewer.set_channel_start(self.viewer.channel_start() + step)
