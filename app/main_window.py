@@ -365,6 +365,8 @@ class MainWindow(QMainWindow):
 
         menu.exec_(QCursor.pos())
 
+# ---------------- Viewer interaction callbacks ----------------
+
     def _push_time_to_comp_panel(self, t0: float):
         main_win = float(self.time_range.value())  # toolbar value
         self.comp_panel.set_main_time(float(t0), main_win_s=main_win)
@@ -388,6 +390,18 @@ class MainWindow(QMainWindow):
         # Highlight the same channels in main viewer (and treat it as selection)
         self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
 
+    def _on_viewer_cursor_moved(self, x: float):
+        if not hasattr(self, "comp_panel") or self.comp_panel is None:
+            return
+
+        # Center cursor in the computation window
+        win = float(self.comp_panel.state.win)  # panel's own fixed window length
+        t0 = max(0.0, float(x) - 0.5 * win)
+
+        # push t0 only (panel keeps its own window length)
+        self.comp_panel.set_main_time(t0, main_win_s=win)
+    
+
     def _on_time_ctl_t0_changed(self, t0: float):
         # user moved the timeline in main window
         self.viewer.set_time_start(float(t0))
@@ -405,16 +419,7 @@ class MainWindow(QMainWindow):
         window_s = float(self.time_range.value())
         self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))
 
-    def _on_viewer_cursor_moved(self, x: float):
-        if not hasattr(self, "comp_panel") or self.comp_panel is None:
-            return
-
-        # Center cursor in the computation window
-        win = float(self.comp_panel.state.win)  # panel's own fixed window length
-        t0 = max(0.0, float(x) - 0.5 * win)
-
-        # push t0 only (panel keeps its own window length)
-        self.comp_panel.set_main_time(t0, main_win_s=win)
+# ---------------- Keyboard shortcuts / cursor nudging ----------------
 
     def keyPressEvent(self, event):
         key = event.key()

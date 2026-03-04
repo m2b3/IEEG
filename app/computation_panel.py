@@ -173,7 +173,11 @@ class ComputationPanel(QWidget):
 
         self._request_update_plot()
 
-    # ---------- Internals ----------
+    def set_main_gain_uv(self, gain_uv: float) -> None:
+        self._main_gain_uv = float(gain_uv)
+        self._request_update_plot()
+
+    # ---------- Internals : mapping & list syncing----------
     def _abs_to_display_name(self, abs_idx: int) -> str:
         if 0 <= abs_idx < len(self._ch_names_displayed):
             return self._ch_names_displayed[abs_idx]
@@ -194,7 +198,8 @@ class ComputationPanel(QWidget):
             it.setData(Qt.ItemDataRole.UserRole, int(abs_idx))
             self.list_channels.addItem(it)
         self.list_channels.blockSignals(False)
-
+    
+    # ---------- Internals : selecting editing actions----------
     def _remove_selected_items(self):
         to_remove = {int(it.data(Qt.ItemDataRole.UserRole)) for it in self.list_channels.selectedItems()}
         if not to_remove:
@@ -204,116 +209,6 @@ class ComputationPanel(QWidget):
 
     def _clear_channels(self):
         self.set_selected_channels_abs([], replace=True)
-
-    @Slot(bool)
-    def _on_link_time_toggled(self, on: bool):
-        self.state.link_time = bool(on)
-        self.time_ctl.set_enabled(not self.state.link_time)
-        # when unlinking, keep current values; when relinking, MainWindow will push main time
-
-    @Slot(float)
-    def _on_win_changed(self, v: float):
-        # Clamp win to [1, 10]
-        self.state.win = float(np.clip(v, 1.0, 10.0))
-        self._update_time_label()
-
-        # Update the slider range because max t0 depends on window length
-        if self._raw is not None and self._raw.n_times > 1:
-            total_s = float(self._raw.times[-1])
-            self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
-
-        # Recompute plot in all cases (linked or not)
-        self._request_update_plot()
-        
-    def _update_slider_range(self):
-        if self._raw is None or self._raw.n_times <= 1:
-            self.time_ctl.set_range(0.0, 0.0, 0.0)  # or your local slider equivalent
-            return
-        total_s = float(self._raw.times[-1])
-        self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
-
-    def _update_time_label(self):
-        t0 = self.state.t0
-        t1 = t0 + self.state.win
-        self.lbl_t.setText(f"t: [{t0:.2f}, {t1:.2f}] s  (win={self.state.win:.1f}s)")
-
-    def _update_plot(self):
-        self._update_time_label()
-
-        if self._raw is None or self._picks is None:
-            self.curve.setData([], [])
-            return
-
-        if not self.state.selected_abs:
-            self.curve.setData([], [])
-            return
-
-        # ---- Clamp t0 so the [t0, t0+win] window is valid ----
-        total_s = float(self._raw.times[-1]) if self._raw.n_times > 1 else 0.0
-        max_t0 = max(0.0, total_s - float(self.state.win))
-        self.state.t0 = float(np.clip(float(self.state.t0), 0.0, max_t0))
-
-        fs = float(self._raw.info["sfreq"])
-        start = int(self.state.t0 * fs)
-        end = int((self.state.t0 + self.state.win) * fs)
-
-        n = int(self._raw.n_times)
-        start = max(0, min(start, max(0, n - 1)))
-        end = max(start + 1, min(end, n))
-
-        raw_idx = self._picks[np.asarray(self.state.selected_abs, dtype=int)]
-        data_v, times = self._raw[raw_idx, start:end]
-        data_v = np.asarray(data_v)
-        times = np.asarray(times)
-
-        if data_v.size == 0 or times.size < 2:
-            self.curve.setData([], [])
-            return
-
-        # Decide algorithm (default to mean if not set)
-        algo = getattr(self.state, "algorithm", "mean")
-
-        # ---- Compute output signal in VOLTS (analysis space) ----
-        if algo == "single":
-            # First selected channel only
-            y_v = data_v[0]
-            y_label = "Voltage (V)"
-        elif algo == "mean":
-            # Mean across selected channels
-            y_v = np.mean(data_v, axis=0)
-            y_label = "Mean voltage (V)"
-        else:
-            # Placeholder algorithms: fall back to mean for now (or return empty)
-            y_v = np.mean(data_v, axis=0)
-            y_label = f"{algo} (fallback mean) (V)"
-
-        # ---- Optional: match viewer display (µV + viewer gain scaling) ----
-        if self.chk_match_main.isChecked():
-            y = y_v * 1e6  # convert to µV like the viewer does :contentReference[oaicite:0]{index=0}
-            gain_factor = 1.0 / max(1e-9, (self._main_gain_uv * self._correction_factor))  # same formula as viewer :contentReference[oaicite:1]{index=1}
-            y = y * gain_factor
-            self.plot.setLabel("left", "Amplitude (µV, main-scaled)")
-        else:
-            y = y_v
-            self.plot.setLabel("left", y_label)
-
-        # ---- Downsample + plot ----
-        max_pts = 2000
-        step = max(1, y.size // max_pts)
-        self.curve.setData(times[::step], y[::step])
-
-        max_pts = 2000
-        step = max(1, y.size // max_pts)
-        self.curve.setData(times[::step], y[::step])
-
-        t0 = float(self.state.t0)
-        t1 = t0 + float(self.state.win)
-
-        plot_item = self.plot.getPlotItem()
-        if plot_item is not None:
-            vb = plot_item.getViewBox()
-            if vb is not None:
-                vb.setRange(xRange=(t0, t1), padding=0.0)
 
     def _open_add_channels_dialog(self):
         """
@@ -388,19 +283,40 @@ class ComputationPanel(QWidget):
 
         # Add (dedup) to panel selection and refresh
         self.set_selected_channels_abs(chosen_abs, replace=False)
+    
+    # ---------- Internals : time control & linking----------
 
-# ---------------- Other methods ----------------
+    @Slot(bool)
+    def _on_link_time_toggled(self, on: bool):
+        self.state.link_time = bool(on)
+        self.time_ctl.set_enabled(not self.state.link_time)
+        # when unlinking, keep current values; when relinking, MainWindow will push main time
 
-    def _update_channels_title(self):
+    @Slot(float)
+    def _on_win_changed(self, v: float):
+        # Clamp win to [1, 10]
+        self.state.win = float(np.clip(v, 1.0, 10.0))
+        self._update_time_label()
 
-        # if you kept gb_ch as local var, promote it to self.gb_ch
-        self.gb_ch.setTitle(f"Channels ({len(self.state.selected_abs)})")
+        # Update the slider range because max t0 depends on window length
+        if self._raw is not None and self._raw.n_times > 1:
+            total_s = float(self._raw.times[-1])
+            self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
 
-    def _request_update_plot(self, delay_ms: int = 40) -> None:
-        """Throttle plot updates: restart a single-shot timer."""
-        if hasattr(self, "_update_timer") and self._update_timer.isActive():
-            self._update_timer.stop()
-        self._update_timer.start(int(delay_ms))
+        # Recompute plot in all cases (linked or not)
+        self._request_update_plot()
+        
+    def _update_slider_range(self):
+        if self._raw is None or self._raw.n_times <= 1:
+            self.time_ctl.set_range(0.0, 0.0, 0.0)  # or your local slider equivalent
+            return
+        total_s = float(self._raw.times[-1])
+        self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
+
+    def _update_time_label(self):
+        t0 = self.state.t0
+        t1 = t0 + self.state.win
+        self.lbl_t.setText(f"t: [{t0:.2f}, {t1:.2f}] s  (win={self.state.win:.1f}s)")
 
     def _on_panel_t0_changed(self, t0: float):
         if self.state.link_time:
@@ -408,9 +324,93 @@ class ComputationPanel(QWidget):
         self.state.t0 = float(t0)
         self._request_update_plot()
 
-    def set_main_gain_uv(self, gain_uv: float) -> None:
-        self._main_gain_uv = float(gain_uv)
-        self._request_update_plot()
+    # ---------- Internals : Plotting----------
+    def _update_plot(self):
+        self._update_time_label()
+
+        if self._raw is None or self._picks is None:
+            self.curve.setData([], [])
+            return
+
+        if not self.state.selected_abs:
+            self.curve.setData([], [])
+            return
+
+        # ---- Clamp t0 so the [t0, t0+win] window is valid ----
+        total_s = float(self._raw.times[-1]) if self._raw.n_times > 1 else 0.0
+        max_t0 = max(0.0, total_s - float(self.state.win))
+        self.state.t0 = float(np.clip(float(self.state.t0), 0.0, max_t0))
+
+        fs = float(self._raw.info["sfreq"])
+        start = int(self.state.t0 * fs)
+        end = int((self.state.t0 + self.state.win) * fs)
+
+        n = int(self._raw.n_times)
+        start = max(0, min(start, max(0, n - 1)))
+        end = max(start + 1, min(end, n))
+
+        raw_idx = self._picks[np.asarray(self.state.selected_abs, dtype=int)]
+        data_v, times = self._raw[raw_idx, start:end]
+        data_v = np.asarray(data_v)
+        times = np.asarray(times)
+
+        if data_v.size == 0 or times.size < 2:
+            self.curve.setData([], [])
+            return
+
+        # Decide algorithm (default to mean if not set)
+        algo = getattr(self.state, "algorithm", "mean")
+
+        # ---- Compute output signal in VOLTS (analysis space) ----
+        if algo == "single":
+            # First selected channel only
+            y_v = data_v[0]
+            y_label = "Voltage (V)"
+        elif algo == "mean":
+            # Mean across selected channels
+            y_v = np.mean(data_v, axis=0)
+            y_label = "Mean voltage (V)"
+        else:
+            # Placeholder algorithms: fall back to mean for now (or return empty)
+            y_v = np.mean(data_v, axis=0)
+            y_label = f"{algo} (fallback mean) (V)"
+
+        # ---- Optional: match viewer display (µV + viewer gain scaling) ----
+        if self.chk_match_main.isChecked():
+            y = y_v * 1e6  # convert to µV like the viewer does :contentReference[oaicite:0]{index=0}
+            gain_factor = 1.0 / max(1e-9, (self._main_gain_uv * self._correction_factor))  # same formula as viewer :contentReference[oaicite:1]{index=1}
+            y = y * gain_factor
+            self.plot.setLabel("left", "Amplitude (µV, main-scaled)")
+        else:
+            y = y_v
+            self.plot.setLabel("left", y_label)
+
+        # ---- Downsample + plot ----
+        max_pts = 2000
+        step = max(1, y.size // max_pts)
+        self.curve.setData(times[::step], y[::step])
+
+        t0 = float(self.state.t0)
+        t1 = t0 + float(self.state.win)
+
+        plot_item = self.plot.getPlotItem()
+        if plot_item is not None:
+            vb = plot_item.getViewBox()
+            if vb is not None:
+                vb.setRange(xRange=(t0, t1), padding=0.0)
+
+    def _request_update_plot(self, delay_ms: int = 40) -> None:
+        """Throttle plot updates: restart a single-shot timer."""
+        if hasattr(self, "_update_timer") and self._update_timer.isActive():
+            self._update_timer.stop()
+        self._update_timer.start(int(delay_ms))
+
+# ---------------- Internals : Small UI helpers ----------------
+
+    def _update_channels_title(self):
+
+        # if you kept gb_ch as local var, promote it to self.gb_ch
+        self.gb_ch.setTitle(f"Channels ({len(self.state.selected_abs)})")
 
     def _on_algo_changed(self, _idx: int):
         self.state.algorithm = str(self.cbo_algo.currentData() or "mean")

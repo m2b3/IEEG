@@ -152,7 +152,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         # Reset view
         self._t_start = 0.0
         self._ch_start = 0
-        self._selected_abs = None
+        self._selected_abs_set.clear()   
 
         # Reset per-dataset annotations (do NOT carry across datasets)
         self._hidden_channels.clear()
@@ -261,6 +261,16 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if emit and hasattr(self, "selectionChanged"):
             self.selectionChanged.emit(sorted(self._selected_abs_set))
 
+    def set_cursor_x(self, x: float):
+        self._cursor_x = float(x)
+        if self._cursor_line is not None:
+            self._cursor_line.blockSignals(True)
+            self._cursor_line.setPos(self._cursor_x)
+            self._cursor_line.blockSignals(False)
+
+    def cursor_x(self) -> float:
+        return float(self._cursor_x) if self._cursor_x is not None else float(self._t_start)
+ 
     # ---------------- Interaction ----------------
 
     def _wheel_dy(self, ev) -> int:
@@ -430,6 +440,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         # Repaint highlight
         self.highlight_selected_channels()
+   
     # ---------------- Rendering ----------------
     def render(self):
         """Redraw the viewer for the current raw + view parameters."""
@@ -464,7 +475,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._selected_abs_set:
             self.highlight_selected_channels()
 
-# ---------------- Data fetch ----------------
+    # ---------------- Data fetch ----------------
     def _get_visible_data_for_abs(
         self,
         raw: BaseRaw,
@@ -496,6 +507,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         t_ds = times[::step]
         seg_ds_uv = data_uv[:, ::step]
         return seg_ds_uv, t_ds
+    
     # ---------------- Render helpers ----------------
     def _clear_plots(self):
         self.signal_plot.clear()
@@ -527,15 +539,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for i, abs_idx in enumerate(self._visible_abs):
             name = self._channel_names[int(abs_idx)]
             txt = pg.TextItem(text=name, anchor=(0, 0.5), color=(180, 180, 180))
-            for i, abs_idx in enumerate(self._visible_abs):
-                name = self._channel_names[int(abs_idx)]
-                txt = pg.TextItem(text=name, anchor=(0, 0.5), color=(180, 180, 180))
 
-                plot_row = (n_vis - 1 - i)
-                txt.setPos(2.0, plot_row * self._spacing)
+            plot_row = (n_vis - 1 - i)
+            txt.setPos(2.0, plot_row * self._spacing)
 
-                self.label_plot.addItem(txt)
-                self._labels.append(txt)
+            self.label_plot.addItem(txt)
+            self._labels.append(txt)
 
     def _set_ranges(self, t_ds: np.ndarray, n_vis: int):
         y0 = -0.5 * self._spacing
@@ -603,25 +612,19 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(txt)
             self._minmax_items.append(txt)
 
-    def set_cursor_x(self, x: float):
-        self._cursor_x = float(x)
-        if self._cursor_line is not None:
-            self._cursor_line.blockSignals(True)
-            self._cursor_line.setPos(self._cursor_x)
-            self._cursor_line.blockSignals(False)
-
-    def cursor_x(self) -> float:
-        return float(self._cursor_x) if self._cursor_x is not None else float(self._t_start)
  # ---------------- Hide / Bad ----------------
-    def _hide_channel(self, ch_name: str):
+    def _hide_channel(self, ch_name: str) -> None:
         self._hidden_channels.add(ch_name)
 
-        # if we just hid the selected channel, clear selection
-        if self._selected_abs is not None:
-            sel_name = self._channel_names[int(self._selected_abs)]
-            if sel_name == ch_name:
-                self._selected_abs = None
-                
+        # Remove hidden channel from selection (selection stored as abs indices)
+        try:
+            abs_idx = self._channel_names.index(ch_name)
+        except ValueError:
+            abs_idx = None
+
+        if abs_idx is not None:
+            self._selected_abs_set.discard(abs_idx)
+
         self._clamp_ch_start()
         self.render()
 
@@ -659,7 +662,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 self._bad_channels.discard(n)
         self.render()
 
-    # ---------------- Visible channel logic (DISPLAYED indices) ----------------
+  
+      # ---------------- Visible window calculation ----------------
+   
     def _all_visible_abs_indices(self) -> list[int]:
         if self._raw is None:
             return []
@@ -680,7 +685,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         max_start = max(0, len(all_vis) - count)
         self._ch_start = max(0, min(int(self._ch_start), max_start))
 
-# ---------------- Utility ----------------
+ # ---------------- Utility ----------------
     def _clamp_time_start(self):
         if self._raw is None or self._raw.n_times <= 1:
             self._t_start = 0.0
