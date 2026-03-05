@@ -15,45 +15,30 @@ from app.annotations import (
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
 )
 
-class _ClickableAnnoRectItem(QtWidgets.QGraphicsRectItem):
+class AnnotationRect(QtWidgets.QGraphicsRectItem):
     def __init__(self, viewer: "MultiChannelViewer", anno_id: str, *args):
         super().__init__(*args)
         self._viewer = viewer
         self._anno_id = str(anno_id)
-        self.setAcceptedMouseButtons(
-            QtCore.Qt.MouseButton.LeftButton | QtCore.Qt.MouseButton.RightButton
-        )
+        self.setAcceptedMouseButtons(Qt.MouseButton.RightButton)
 
-    def _show_menu(self, screen_pos):
+    def mousePressEvent(self, event):
+        if event.button() != Qt.MouseButton.RightButton:
+            return super().mousePressEvent(event)
+
         menu = QtWidgets.QMenu()
         act_edit = menu.addAction("Edit annotation…")
         act_del = menu.addAction("Delete annotation")
 
-        chosen = menu.exec_(screen_pos)
+        chosen = menu.exec_(event.screenPos())
         if chosen == act_edit:
+            # MainWindow is already connected to this signal :contentReference[oaicite:4]{index=4}
             self._viewer.requestEditAnnotation.emit(self._anno_id)
         elif chosen == act_del:
             self._viewer.delete_annotation(self._anno_id)
 
-    def mousePressEvent(self, event):
-        # Always link plot click -> dock selection
-        if event.button() in (QtCore.Qt.MouseButton.LeftButton, QtCore.Qt.MouseButton.RightButton):
-            self._viewer.annotationSelected.emit(self._anno_id)
-
-        # Right click (or left click if you want) opens menu
-        if event.button() == QtCore.Qt.MouseButton.RightButton:
-            self._show_menu(event.screenPos())
-            event.accept()
-            return
-
-        # For left click: just select + allow normal behavior
-        super().mousePressEvent(event)
-
-    def contextMenuEvent(self, event):
-        self._viewer.annotationSelected.emit(self._anno_id)
-        self._show_menu(event.screenPos())
         event.accept()
-        
+
 class MultiChannelViewer(pg.GraphicsLayoutWidget):
     """
     Widget that displays multiple EEG channels stacked vertically.
@@ -722,7 +707,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 y0 = yc - h / 2.0
                 height = h
 
-            rect = _ClickableAnnoRectItem(
+            rect = AnnotationRect(
                 self,
                 a.id,
                 t0,

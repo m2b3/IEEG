@@ -108,9 +108,6 @@ class MainWindow(QMainWindow):
         self.anno_dock.hide()
         self._anno_items_by_id = {}
 
-        # When clicking an annotation in the list, jump to it
-        self.anno_list.itemClicked.connect(self._on_annotation_item_clicked)
-
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
@@ -133,7 +130,7 @@ class MainWindow(QMainWindow):
         self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
         self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
-
+        
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
         self.sc_left  = QShortcut(QKeySequence(Qt.Key.Key_Left),  self)
@@ -588,6 +585,7 @@ class MainWindow(QMainWindow):
         self.viewer.jump_to_annotation(str(anno_id))
 
     def _on_request_edit_annotation(self, anno_id: str):
+
         a = self.viewer.get_annotation_by_id(anno_id)
         if a is None:
             return
