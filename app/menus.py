@@ -30,7 +30,7 @@ def build_menubar(main_window):
     # -------- Edit --------
     edit_menu = menubar.addMenu("Edit")
     add_action(edit_menu, "Implantation", lambda: print("TODO: Implantation"))
-    add_action(edit_menu, "Annotate", lambda: print("TODO: Annotate"))
+    add_action(edit_menu, "Annotate", main_window.on_annotate)
 
     # -------- Preprocessing --------
     pre_menu = menubar.addMenu("Preprocessing")

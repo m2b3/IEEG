@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, List, cast
+from typing import Optional, List, cast, Any
 
 import numpy as np
 import pyqtgraph as pg
@@ -9,7 +9,11 @@ from pyqtgraph.GraphicsScene.GraphicsScene import GraphicsScene
 from mne.io import BaseRaw
 from PySide6.QtCore import Signal, Qt, QEvent
 from PySide6 import QtCore, QtGui, QtWidgets 
-
+from app.annotations import (
+    Annotation, new_id,
+    ANNOTATION_STYLES,
+    SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
+)
 class MultiChannelViewer(pg.GraphicsLayoutWidget):
     """
     Widget that displays multiple EEG channels stacked vertically.
@@ -36,6 +40,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     # Wheel zoom requests (handled by MainWindow via spinboxes)
     requestTimeRangeDelta = Signal(int)   # +1 zoom out, -1 zoom in
     requestChanRangeDelta = Signal(int)   # +1 show more channels, -1 show fewer
+    annotationsChanged = Signal()
+    requestEditAnnotation = Signal(str)  # anno_id
 
     # ---------------- Init ----------------
     def __init__(self, parent=None):
@@ -127,6 +133,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         # row->channel mapping for the last render (needed for right-click)
         self._last_visible_ch_indices: list[int] = []
 
+        # ---- Annotations (persistent) ----
+        self._annotations: list[Annotation] = []
+        self._anno_rois: dict[str, pg.RectROI] = {}
+        self._anno_labels: dict[str, pg.TextItem] = {}
+
+        # Annotation mode (armed by MainWindow)
+        self._annotation_mode: bool = False
+        self._pending_kind: str | None = None
+        self._pending_note: str = ""
+        self._pending_scope: str = SCOPE_CLICKED
+
+        # Drag state for creation
+        self._anno_drag_active: bool = False
+        self._anno_drag_start_t: float | None = None
+        self._anno_drag_y: float | None = None
+        self._anno_preview: pg.RectROI | None = None
+
     # ---------------- Public API ----------------
     def channel_start(self) -> int:
         return int(self._ch_start)
@@ -158,6 +181,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hidden_channels.clear()
         self._bad_channels.clear()
         self._last_visible_abs = []
+
+        self._annotations.clear()
+        self._clear_all_annotation_items()
+        self.annotationsChanged.emit()
 
         # Show axis + grid now that we have data
         self.signal_plot.showAxis("bottom")
@@ -271,6 +298,75 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def cursor_x(self) -> float:
         return float(self._cursor_x) if self._cursor_x is not None else float(self._t_start)
  
+    def start_annotation_mode(self, *, kind: str, note: str = "", scope: str = SCOPE_CLICKED) -> None:
+        if self._raw is None:
+            return
+        self._annotation_mode = True
+        self._pending_kind = str(kind)
+        self._pending_note = str(note or "")
+        self._pending_scope = str(scope)
+
+    def stop_annotation_mode(self) -> None:
+        self._annotation_mode = False
+        self._pending_kind = None
+        self._pending_note = ""
+        self._anno_drag_active = False
+        self._anno_drag_start_t = None
+        self._anno_drag_y = None
+        if self._anno_preview is not None:
+            try:
+                self.signal_plot.removeItem(self._anno_preview)
+            except Exception:
+                pass
+            self._anno_preview = None
+
+    def get_annotations(self) -> list[Annotation]:
+        return list(self._annotations)
+
+    def get_annotation_by_id(self, anno_id: str) -> Annotation | None:
+        for a in self._annotations:
+            if a.id == anno_id:
+                return a
+        return None
+
+    def update_annotation(self, anno_id: str, *, kind: str, note: str) -> None:
+        # update data
+        for i, a in enumerate(self._annotations):
+            if a.id == anno_id:
+                self._annotations[i] = Annotation(
+                    id=a.id,
+                    kind=str(kind),
+                    t_start=a.t_start,
+                    t_end=a.t_end,
+                    abs_channel=a.abs_channel,
+                    note=str(note or ""),
+                )
+                break
+
+        # update visuals
+        self._apply_annotation_style(anno_id)
+        self.annotationsChanged.emit()
+
+    def delete_annotation(self, anno_id: str) -> None:
+        self._annotations = [a for a in self._annotations if a.id != anno_id]
+        self._remove_annotation_items(anno_id)
+        self.annotationsChanged.emit()
+
+    def jump_to_annotation(self, anno_id: str) -> None:
+        a = self.get_annotation_by_id(anno_id)
+        if a is None:
+            return
+
+        # center time
+        center = 0.5 * (float(a.t_start) + float(a.t_end))
+        new_t0 = center - 0.5 * float(self._time_range)
+        self.set_time_start(new_t0)
+
+        # ensure channel visible if not global
+        if a.abs_channel is not None:
+            self.ensure_channel_visible(int(a.abs_channel))
+
+
     # ---------------- Interaction ----------------
 
     def _wheel_dy(self, ev) -> int:
@@ -311,24 +407,93 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ev.ignore()
 
     def eventFilter(self, obj, ev):
-            if obj in (self.viewport(), self):
-                if ev.type() == QEvent.Type.Wheel:
-                    scene_pos = self.mapToScene(ev.position().toPoint())
-
-                    in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
-                    in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
-
-                    if in_signal:
-                        self._handle_wheel(ev, "signal")
-                        return True
-                    if in_label:
-                        self._handle_wheel(ev, "label")
-                        return True
-
-                    ev.ignore()
+        if obj in (self.viewport(), self):
+            # Cancel annotation mode with Esc
+            if ev.type() == QEvent.Type.KeyPress and self._annotation_mode:
+                if ev.key() == Qt.Key.Key_Escape:
+                    self.stop_annotation_mode()
+                    ev.accept()
                     return True
 
-            return super().eventFilter(obj, ev)
+            # Wheel handling (your existing behavior)
+            if ev.type() == QEvent.Type.Wheel:
+                scene_pos = self.mapToScene(ev.position().toPoint())
+
+                in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
+                in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
+
+                if in_signal:
+                    self._handle_wheel(ev, "signal")
+                    return True
+                if in_label:
+                    self._handle_wheel(ev, "label")
+                    return True
+
+                ev.ignore()
+                return True
+
+            # Annotation creation mode (only on signal plot)
+            if self._annotation_mode and self._pending_kind is not None:
+                if ev.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease):
+                    scene_pos = self.mapToScene(ev.position().toPoint())
+                    if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                        return super().eventFilter(obj, ev)
+
+                    p = self._sig_vb.mapSceneToView(scene_pos)
+                    t = float(p.x())
+                    y = float(p.y())
+
+                    if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.LeftButton:
+                        self._anno_drag_active = True
+                        self._anno_drag_start_t = t
+                        self._anno_drag_y = y
+                        self._update_preview_roi(t0=t, t1=t, y=y)
+                        ev.accept()
+                        return True
+
+                    if ev.type() == QEvent.Type.MouseMove and self._anno_drag_active:
+                        if self._anno_drag_start_t is None or self._anno_drag_y is None:
+                            return True
+                        self._update_preview_roi(t0=self._anno_drag_start_t, t1=t, y=self._anno_drag_y)
+                        ev.accept()
+                        return True
+
+                    if ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.LeftButton:
+                        if not self._anno_drag_active:
+                            return True
+
+                        t0 = float(self._anno_drag_start_t if self._anno_drag_start_t is not None else t)
+                        t1 = float(t)
+
+                        if abs(t1 - t0) < 1e-6:
+                            # click => small default window (100ms)
+                            dt = 0.10
+                            t0 = t0 - dt / 2.0
+                            t1 = t0 + dt
+
+                        if t1 < t0:
+                            t0, t1 = t1, t0
+
+                        y0 = float(self._anno_drag_y if self._anno_drag_y is not None else y)
+
+                        self._anno_drag_active = False
+                        self._anno_drag_start_t = None
+                        self._anno_drag_y = None
+
+                        # Remove preview ROI
+                        if self._anno_preview is not None:
+                            try:
+                                self.signal_plot.removeItem(self._anno_preview)
+                            except Exception:
+                                pass
+                            self._anno_preview = None
+
+                        self._create_annotation_from_drag(t0=t0, t1=t1, y=y0)
+                        self.stop_annotation_mode()
+                        ev.accept()
+                        return True
+
+        return super().eventFilter(obj, ev)
 
     def _on_mouse_clicked(self, event):
         """Left click selects channel. Right click on signal opens menu."""
@@ -612,6 +777,243 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(txt)
             self._minmax_items.append(txt)
 
+    def _abs_channel_from_y(self, y: float) -> int | None:
+        n_vis = len(getattr(self, "_last_visible_abs", []))
+        if n_vis <= 0:
+            return None
+
+        plot_row = int(y // float(self._spacing))
+        if plot_row < 0 or plot_row >= n_vis:
+            return None
+
+        data_row = (n_vis - 1 - plot_row)
+        return int(self._last_visible_abs[data_row])
+
+    def _row_center_y_for_abs(self, abs_idx: int) -> float | None:
+        visible_abs = list(getattr(self, "_last_visible_abs", []))
+        if abs_idx not in visible_abs:
+            return None
+        n_vis = len(visible_abs)
+        data_row = visible_abs.index(abs_idx)
+        plot_row = (n_vis - 1 - data_row)
+        return float(plot_row) * float(self._spacing)
+
+    def _update_preview_roi(self, *, t0: float, t1: float, y: float) -> None:
+        kind = self._pending_kind or "Other"
+        rgb = ANNOTATION_STYLES.get(kind, (0, 200, 0))
+        x0, x1 = (t0, t1) if t0 <= t1 else (t1, t0)
+
+        abs_idx = self._abs_channel_from_y(y)
+        if abs_idx is None:
+            return
+        yc = self._row_center_y_for_abs(abs_idx)
+        if yc is None:
+            return
+
+        h = 0.90 * float(self._spacing)
+        y0 = yc - h / 2.0
+
+        if self._anno_preview is None:
+            self._anno_preview = pg.RectROI([x0, y0], [max(1e-6, x1 - x0), h], pen=None, movable=False)
+            self._anno_preview.setZValue(-5)
+            self.signal_plot.addItem(self._anno_preview)
+
+        self._anno_preview.setPos([x0, y0])
+        self._anno_preview.setSize([max(1e-6, x1 - x0), h])
+        self._anno_preview.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60))
+
+    def _create_annotation_from_drag(self, *, t0: float, t1: float, y: float) -> None:
+        kind = self._pending_kind or "Other"
+        note = self._pending_note
+        scope = self._pending_scope
+
+        clicked_abs = self._abs_channel_from_y(y)
+
+       # --- decide which channels to annotate ---
+        # Global handled separately (no targets list needed)
+        if scope == SCOPE_GLOBAL:
+            anno_id = new_id()
+            a = Annotation(
+                id=anno_id,
+                kind=kind,
+                t_start=float(t0),
+                t_end=float(t1),
+                abs_channel=None,          # None means global
+                note=str(note or ""),
+            )
+            self._annotations.append(a)
+            self._add_annotation_items(a)
+            self.annotationsChanged.emit()
+            return
+
+        # Non-global targets: only ints
+        targets: list[int] = []
+
+        if scope == SCOPE_SELECTED:
+            if self._selected_abs_set:
+                targets = [int(x) for x in sorted(self._selected_abs_set)]
+            elif clicked_abs is not None:
+                targets = [int(clicked_abs)]
+        else:  # SCOPE_CLICKED
+            if clicked_abs is not None:
+                targets = [int(clicked_abs)]
+
+        for abs_ch in targets:
+            anno_id = new_id()
+            a = Annotation(
+                id=anno_id,
+                kind=kind,
+                t_start=float(t0),
+                t_end=float(t1),
+                abs_channel=abs_ch,
+                note=str(note or ""),
+            )
+            self._annotations.append(a)
+            self._add_annotation_items(a)
+
+        self.annotationsChanged.emit()
+    
+    def _add_annotation_items(self, a: Annotation) -> None:
+        rgb = ANNOTATION_STYLES.get(a.kind, (0, 200, 0))
+        h = 0.90 * float(self._spacing)
+
+        if a.abs_channel is None:
+            # Global: span full visible height
+            n_vis = len(getattr(self, "_last_visible_abs", []))
+            if n_vis <= 0:
+                return
+            y0 = -h / 2.0
+            height = float(n_vis) * float(self._spacing)
+        else:
+            yc = self._row_center_y_for_abs(int(a.abs_channel))
+            if yc is None:
+                # channel not visible right now; we still keep the annotation data
+                return
+            y0 = yc - h / 2.0
+            height = h
+
+        roi = _AnnotationROI(
+            viewer=self,
+            anno_id=a.id,
+            pos=[float(a.t_start), float(y0)],
+            size=[max(1e-6, float(a.t_end - a.t_start)), float(height)],
+            brush=pg.mkBrush(rgb[0], rgb[1], rgb[2], 60),
+        )
+        roi.setZValue(-5)
+
+        # Constrain vertical movement: we only allow time edits
+        roi.sigRegionChanged.connect(lambda: self._keep_roi_y_fixed(a.id))
+        roi.sigRegionChangeFinished.connect(lambda: self._commit_roi_to_annotation(a.id))
+
+        self.signal_plot.addItem(roi)
+        self._anno_rois[a.id] = roi
+
+        # Note label (displayed next to annotation)
+        label_txt = a.note if a.note else ""
+        txt_item = pg.TextItem(text=label_txt, color=(255, 255, 255), anchor=(0, 1))
+        txt_item.setZValue(-4)
+        self.signal_plot.addItem(txt_item)
+        self._anno_labels[a.id] = txt_item
+
+        self._reposition_annotation_label(a.id)
+
+    def _keep_roi_y_fixed(self, anno_id: str) -> None:
+        """During drag/resize, keep ROI pinned to the correct channel row."""
+        a = self.get_annotation_by_id(anno_id)
+        roi = self._anno_rois.get(anno_id)
+        if a is None or roi is None:
+            return
+
+        if a.abs_channel is None:
+            return  # global can span
+
+        yc = self._row_center_y_for_abs(int(a.abs_channel))
+        if yc is None:
+            return
+        h = 0.90 * float(self._spacing)
+        y0 = yc - h / 2.0
+
+        pos = roi.pos()
+        roi.setPos([pos.x(), y0])
+
+    def _commit_roi_to_annotation(self, anno_id: str) -> None:
+        """After user finishes resizing/moving ROI, write new t_start/t_end back to data."""
+        a = self.get_annotation_by_id(anno_id)
+        roi = self._anno_rois.get(anno_id)
+        if a is None or roi is None:
+            return
+
+        pos = roi.pos()
+        size = roi.size()
+        t_start = float(pos.x())
+        t_end = float(pos.x() + size[0])
+
+        # Update stored annotation
+        for i, ann in enumerate(self._annotations):
+            if ann.id == anno_id:
+                self._annotations[i] = Annotation(
+                    id=ann.id,
+                    kind=ann.kind,
+                    t_start=t_start,
+                    t_end=t_end,
+                    abs_channel=ann.abs_channel,
+                    note=ann.note,
+                )
+                break
+
+        self._reposition_annotation_label(anno_id)
+        self.annotationsChanged.emit()
+
+    def _reposition_annotation_label(self, anno_id: str) -> None:
+        a = self.get_annotation_by_id(anno_id)
+        roi = self._anno_rois.get(anno_id)
+        txt = self._anno_labels.get(anno_id)
+        if a is None or roi is None or txt is None:
+            return
+
+        if not a.note:
+            txt.setText("")
+            return
+
+        pos = roi.pos()
+        # Place label near left edge of the region
+        txt.setPos(pos.x(), pos.y())
+
+    def _apply_annotation_style(self, anno_id: str) -> None:
+        a = self.get_annotation_by_id(anno_id)
+        roi = self._anno_rois.get(anno_id)
+        txt = self._anno_labels.get(anno_id)
+        if a is None:
+            return
+
+        rgb = ANNOTATION_STYLES.get(a.kind, (0, 200, 0))
+        if roi is not None:
+            roi.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60))
+
+        if txt is not None:
+            txt.setText(a.note or "")
+
+        self._reposition_annotation_label(anno_id)
+
+    def _remove_annotation_items(self, anno_id: str) -> None:
+        roi = self._anno_rois.pop(anno_id, None)
+        if roi is not None:
+            try:
+                self.signal_plot.removeItem(roi)
+            except Exception:
+                pass
+
+        txt = self._anno_labels.pop(anno_id, None)
+        if txt is not None:
+            try:
+                self.signal_plot.removeItem(txt)
+            except Exception:
+                pass
+
+    def _clear_all_annotation_items(self) -> None:
+        for anno_id in list(self._anno_rois.keys()):
+            self._remove_annotation_items(anno_id)
+
  # ---------------- Hide / Bad ----------------
     def _hide_channel(self, ch_name: str) -> None:
         self._hidden_channels.add(ch_name)
@@ -716,3 +1118,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             s = 10
         return float(s * p)
 
+
+class _AnnotationROI(pg.RectROI):
+    def __init__(self, *, viewer: MultiChannelViewer, anno_id: str, pos, size, brush):
+        super().__init__(pos, size, pen=None, movable=True)
+        self._viewer = viewer
+        self._anno_id = anno_id
+        self.setBrush(brush)
+
+    def contextMenuEvent(self, ev):
+        menu = QtWidgets.QMenu()
+        act_edit = menu.addAction("Edit…")
+        act_del = menu.addAction("Delete")
+        chosen = menu.exec_(ev.screenPos().toPoint())
+
+        if chosen == act_del:
+            self._viewer.delete_annotation(self._anno_id)
+        elif chosen == act_edit:
+            self._viewer.requestEditAnnotation.emit(self._anno_id)
+
+        ev.accept()

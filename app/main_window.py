@@ -8,17 +8,22 @@ from mne.io import BaseRaw
 
 from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QDoubleSpinBox, QFileDialog, QFrame,
-    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,
-    QSpinBox, QToolBar, QToolButton, QVBoxLayout, QWidget, QDockWidget
+    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,QDialog, QDialogButtonBox, 
+    QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout, 
+    QWidget, QDockWidget, QListWidget, QListWidgetItem
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QIcon, QColor
 
 from app.menus import build_menubar
 from app.plot import MultiChannelViewer
 from app.console_viewer import ConsoleWindow
 from app.computation_panel import ComputationPanel
 from app.time_controls import TimeWindowControl
+from app.annotations import (
+    ANNOTATION_TYPES, ANNOTATION_STYLES, 
+    ANNOTATION_SCOPES, SCOPE_SELECTED
+)
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -91,6 +96,20 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.comp_dock)
         self.comp_dock.hide()
 
+        # ---- Annotations dock ----
+        self.anno_dock = QDockWidget("Annotations", self)
+        self.anno_dock.setAllowedAreas(
+            Qt.DockWidgetArea.LeftDockWidgetArea
+            | Qt.DockWidgetArea.RightDockWidgetArea
+        )
+        self.anno_list = QListWidget()
+        self.anno_dock.setWidget(self.anno_list)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.anno_dock)
+        self.anno_dock.hide()
+
+        # When clicking an annotation in the list, jump to it
+        self.anno_list.itemClicked.connect(self._on_annotation_item_clicked)
+
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
@@ -110,6 +129,8 @@ class MainWindow(QMainWindow):
         # Make computation panel follow the viewer cursor (instead of window start)
         self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
+        self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
+        self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
 
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
@@ -426,7 +447,6 @@ class MainWindow(QMainWindow):
 
         # push t0 only (panel keeps its own window length)
         self.comp_panel.set_main_time(t0, main_win_s=win)
-    
 
     def _on_time_ctl_t0_changed(self, t0: float):
         # user moved the timeline in main window
@@ -466,10 +486,127 @@ class MainWindow(QMainWindow):
 
         self.viewer.set_time_start(new_t0)
 
-
     def _scroll_channels(self, direction: int, mult: int = 1) -> None:
             """direction: -1 up, +1 down (move channel window)"""
             if self.viewer is None:
                 return
             step = int(direction * int(mult))
             self.viewer.set_channel_start(self.viewer.channel_start() + step)
+
+# ---------------- Annotations -------------
+
+    def on_annotate(self):
+        if self.current_raw is None:
+            QMessageBox.information(self, "Annotate", "Load a file before annotating.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add annotation")
+
+        layout = QFormLayout(dlg)
+
+        combo = QComboBox(dlg)
+        for t in ANNOTATION_TYPES:
+            combo.addItem(self._color_icon(ANNOTATION_STYLES[t]), t)
+
+        scope = QComboBox(dlg)
+        scope.addItems(ANNOTATION_SCOPES)
+        scope.setCurrentText(SCOPE_SELECTED)
+
+        note = QLineEdit(dlg)
+        note.setPlaceholderText("Optional note…")
+
+        layout.addRow("Type:", combo)
+        layout.addRow("Scope:", scope)
+        layout.addRow("Note:", note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg
+        )
+        layout.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        kind = combo.currentText()
+        scope_txt = scope.currentText()
+        note_txt = note.text().strip()
+
+        self.viewer.start_annotation_mode(kind=kind, note=note_txt, scope=scope_txt)
+        self.console.log(f"Annotation mode: {kind} ({scope_txt}). Drag on signal. Esc to cancel.")
+
+    def _color_icon(self, rgb: tuple[int, int, int]) -> QIcon:
+        pm = QPixmap(12, 12)
+        pm.fill(QColor(*rgb))
+        return QIcon(pm)  
+    
+    def _refresh_annotation_list(self):
+        """Rebuild the dock list from viewer annotations."""
+        annos = self.viewer.get_annotations()
+
+        self.anno_list.blockSignals(True)
+        self.anno_list.clear()
+
+        for a in annos:
+            if a.abs_channel is None:
+                ch_txt = "GLOBAL"
+            else:
+                # abs_channel is index in displayed channel list; map to name
+                ch_txt = self.viewer._channel_names[a.abs_channel] if hasattr(self.viewer, "_channel_names") else str(a.abs_channel)
+
+            txt = f"[{a.kind}] {ch_txt}  {a.t_start:.3f}–{a.t_end:.3f}"
+            if a.note:
+                txt += f"  |  {a.note}"
+
+            item = QListWidgetItem(txt)
+            item.setData(Qt.ItemDataRole.UserRole, a.id)
+            self.anno_list.addItem(item)
+
+        self.anno_list.blockSignals(False)
+
+        # Show dock if there is at least one annotation
+        if self.anno_list.count() > 0:
+            self.anno_dock.show()
+            self.anno_dock.raise_()
+
+    def _on_annotation_item_clicked(self, item: QListWidgetItem):
+        anno_id = item.data(Qt.ItemDataRole.UserRole)
+        if not anno_id:
+            return
+        self.viewer.jump_to_annotation(str(anno_id))
+
+    def _on_request_edit_annotation(self, anno_id: str):
+        a = self.viewer.get_annotation_by_id(anno_id)
+        if a is None:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit annotation")
+        layout = QFormLayout(dlg)
+
+        combo = QComboBox(dlg)
+        for t in ANNOTATION_TYPES:
+            combo.addItem(self._color_icon(ANNOTATION_STYLES[t]), t)
+        combo.setCurrentText(a.kind)
+
+        note = QLineEdit(dlg)
+        note.setText(a.note)
+
+        layout.addRow("Type:", combo)
+        layout.addRow("Note:", note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg
+        )
+        layout.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self.viewer.update_annotation(anno_id, kind=combo.currentText(), note=note.text().strip())
