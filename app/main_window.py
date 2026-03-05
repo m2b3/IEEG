@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self.anno_dock.setWidget(self.anno_list)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.anno_dock)
         self.anno_dock.hide()
+        self._anno_items_by_id = {}
 
         # When clicking an annotation in the list, jump to it
         self.anno_list.itemClicked.connect(self._on_annotation_item_clicked)
@@ -131,6 +132,7 @@ class MainWindow(QMainWindow):
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
         self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
         self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
+        self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
 
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
@@ -549,13 +551,17 @@ class MainWindow(QMainWindow):
 
         self.anno_list.blockSignals(True)
         self.anno_list.clear()
+        self._anno_items_by_id.clear()  # IMPORTANT: clear BEFORE rebuilding
 
         for a in annos:
             if a.abs_channel is None:
                 ch_txt = "GLOBAL"
             else:
-                # abs_channel is index in displayed channel list; map to name
-                ch_txt = self.viewer._channel_names[a.abs_channel] if hasattr(self.viewer, "_channel_names") else str(a.abs_channel)
+                # abs_channel is index in displayed channel list; map to name if available
+                if hasattr(self.viewer, "_channel_names") and 0 <= a.abs_channel < len(self.viewer._channel_names):
+                    ch_txt = self.viewer._channel_names[a.abs_channel]
+                else:
+                    ch_txt = str(a.abs_channel)
 
             txt = f"[{a.kind}] {ch_txt}  {a.t_start:.3f}–{a.t_end:.3f}"
             if a.note:
@@ -564,6 +570,9 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(txt)
             item.setData(Qt.ItemDataRole.UserRole, a.id)
             self.anno_list.addItem(item)
+
+            # Link id -> list item so plot-click can select it
+            self._anno_items_by_id[str(a.id)] = item
 
         self.anno_list.blockSignals(False)
 
@@ -610,3 +619,20 @@ class MainWindow(QMainWindow):
             return
 
         self.viewer.update_annotation(anno_id, kind=combo.currentText(), note=note.text().strip())
+
+    def _on_plot_annotation_selected(self, anno_id: str):
+        # Ensure dock is visible when user clicks an annotation
+        if self.anno_dock.isHidden():
+            self.anno_dock.show()
+
+        item = self._anno_items_by_id.get(str(anno_id))
+        if item is None:
+            # list may be stale; refresh and retry once
+            self._refresh_annotation_list()
+            item = self._anno_items_by_id.get(str(anno_id))
+            if item is None:
+                return
+
+        # Select + scroll into view
+        self.anno_list.setCurrentItem(item)
+        self.anno_list.scrollToItem(item)

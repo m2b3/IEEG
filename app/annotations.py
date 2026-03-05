@@ -1,6 +1,5 @@
 # app/annotations.py
 from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
 import uuid

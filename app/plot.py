@@ -14,6 +14,46 @@ from app.annotations import (
     ANNOTATION_STYLES,
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
 )
+
+class _ClickableAnnoRectItem(QtWidgets.QGraphicsRectItem):
+    def __init__(self, viewer: "MultiChannelViewer", anno_id: str, *args):
+        super().__init__(*args)
+        self._viewer = viewer
+        self._anno_id = str(anno_id)
+        self.setAcceptedMouseButtons(
+            QtCore.Qt.MouseButton.LeftButton | QtCore.Qt.MouseButton.RightButton
+        )
+
+    def _show_menu(self, screen_pos):
+        menu = QtWidgets.QMenu()
+        act_edit = menu.addAction("Edit annotation…")
+        act_del = menu.addAction("Delete annotation")
+
+        chosen = menu.exec_(screen_pos)
+        if chosen == act_edit:
+            self._viewer.requestEditAnnotation.emit(self._anno_id)
+        elif chosen == act_del:
+            self._viewer.delete_annotation(self._anno_id)
+
+    def mousePressEvent(self, event):
+        # Always link plot click -> dock selection
+        if event.button() in (QtCore.Qt.MouseButton.LeftButton, QtCore.Qt.MouseButton.RightButton):
+            self._viewer.annotationSelected.emit(self._anno_id)
+
+        # Right click (or left click if you want) opens menu
+        if event.button() == QtCore.Qt.MouseButton.RightButton:
+            self._show_menu(event.screenPos())
+            event.accept()
+            return
+
+        # For left click: just select + allow normal behavior
+        super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        self._viewer.annotationSelected.emit(self._anno_id)
+        self._show_menu(event.screenPos())
+        event.accept()
+        
 class MultiChannelViewer(pg.GraphicsLayoutWidget):
     """
     Widget that displays multiple EEG channels stacked vertically.
@@ -42,6 +82,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     requestChanRangeDelta = Signal(int)   # +1 show more channels, -1 show fewer
     annotationsChanged = Signal()
     requestEditAnnotation = Signal(str)  # anno_id
+    annotationSelected = QtCore.Signal(str)  # emitted when user clicks an annotation in the plot
 
     # ---------------- Init ----------------
     def __init__(self, parent=None):
@@ -257,6 +298,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         elif pos >= self._ch_start + n_vis:
             self.set_channel_start(pos - n_vis + 1)
 
+    def center_channel_on(self, abs_idx: int) -> None:
+        """
+        Scroll channel window so abs_idx is roughly centered vertically.
+        abs_idx is the index in the displayed channel list (same indexing your annotations use).
+        """
+        if self._raw is None or self._picks.size == 0:
+            return
+
+        all_vis = self._all_visible_abs_indices()
+        if abs_idx not in all_vis:
+            return  # hidden or invalid
+
+        pos = all_vis.index(int(abs_idx))
+        n_vis = int(min(self._chan_range, len(all_vis)))
+        new_start = pos - (n_vis // 2)
+        self.set_channel_start(new_start)
+
     def highlight_selected_channels(self):
         """Highlight selected channels (thicker trace + yellow label)."""
         if self._visible_abs.size == 0:
@@ -363,9 +421,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         new_t0 = center - 0.5 * float(self._time_range)
         self.set_time_start(new_t0)
 
-        # ensure channel visible if not global
+        # center channel if not global
         if a.abs_channel is not None:
-            self.ensure_channel_visible(int(a.abs_channel))
+            self.center_channel_on(int(a.abs_channel))
 
 
     # ---------------- Interaction ----------------
@@ -627,6 +685,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     note=str(note or ""),
                 )
             )
+        self.annotationsChanged.emit()
    
     def _draw_annotations(self, n_vis: int) -> None:
         """Draw annotation overlays on the signal plot."""
@@ -663,31 +722,22 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 y0 = yc - h / 2.0
                 height = h
 
-            rect = QtWidgets.QGraphicsRectItem(
+            rect = _ClickableAnnoRectItem(
+                self,
+                a.id,
                 t0,
                 y0,
                 max(1e-6, t1 - t0),
-                height
+                height,
             )
-
-            rect.setBrush(brush)  # type: ignore
+            # keep your styling
+            rect.setBrush(brush)
             rect.setPen(pg.mkPen(None))
             rect.setZValue(-5)
+
             self.signal_plot.addItem(rect)
             self._annotation_items.append(rect)
-
-            # Optional note label
-            if note:
-                txt = pg.TextItem(
-                    text=note,
-                    anchor=(0, 1),
-                    color=(255, 255, 255)
-                )
-                txt.setPos(t0, y0)
-                txt.setZValue(-4)
-                self.signal_plot.addItem(txt)
-                self._annotation_items.append(txt)
-                
+                            
     # ---------------- Rendering ----------------
     def render(self):
         """Redraw the viewer for the current raw + view parameters."""
