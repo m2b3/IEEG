@@ -1,5 +1,5 @@
 from PySide6.QtGui import QAction
-
+from PySide6.QtGui import QKeySequence  
 
 def add_action(menu, name, slot):
     action = QAction(name, menu)
@@ -16,14 +16,22 @@ def build_menubar(main_window):
     file_menu = menubar.addMenu("File")
     add_action(file_menu, "New", lambda: print("TODO: New"))
     add_action(file_menu, "Open", main_window.on_open)
+
     file_menu.addSeparator()
 
-    act_saveas = add_action(file_menu, "Save as",lambda: print("TODO: Save as"))
+    act_save = add_action(file_menu, "Save", main_window.on_save)
+    act_save.setShortcut(QKeySequence.StandardKey.Save)    # Ctrl+S
+
+    act_saveas = add_action(file_menu, "Save as…", main_window.on_save_as)
+    act_saveas.setShortcut(QKeySequence.StandardKey.SaveAs)     # Ctrl+Shift+S
+
     file_menu.addSeparator()
+
     act_close = add_action(file_menu, "Close", lambda: print ("TODO: Close"))
     add_action(file_menu, "Settings", lambda: print ("TODO: Settings"))
     add_action(file_menu, "Exit", main_window.close)
 
+    main_window._act_save = act_save
     main_window._act_saveas = act_saveas
     main_window._act_close = act_close
 
@@ -101,4 +109,4 @@ def build_menubar(main_window):
     ]
     main_window._menus_always_enabled = [file_menu, help_menu]# ✅ store what should be disabled until a file is loaded
     
-    return act_saveas, act_close
+    return act_save, act_saveas, act_close

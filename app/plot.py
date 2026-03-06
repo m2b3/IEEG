@@ -65,9 +65,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     # Wheel zoom requests (handled by MainWindow via spinboxes)
     requestTimeRangeDelta = Signal(int)   # +1 zoom out, -1 zoom in
     requestChanRangeDelta = Signal(int)   # +1 show more channels, -1 show fewer
+    # Annotations
     annotationsChanged = Signal()
     requestEditAnnotation = Signal(str)  # anno_id
     annotationSelected = QtCore.Signal(str)  # emitted when user clicks an annotation in the plot
+    #  Saving data
+    hiddenChannelsChanged = Signal()
+    badChannelsChanged = Signal()
 
     # ---------------- Init ----------------
     def __init__(self, parent=None):
@@ -342,6 +346,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def cursor_x(self) -> float:
         return float(self._cursor_x) if self._cursor_x is not None else float(self._t_start)
  
+
+    # ---------------- Annotation ----------------
+
     def start_annotation_mode(self, *, kind: str, note: str = "", scope: str = SCOPE_CLICKED) -> None:
         if self._raw is None:
             return
@@ -410,7 +417,25 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if a.abs_channel is not None:
             self.center_channel_on(int(a.abs_channel))
 
+    # ---------------- Load saved data ----------------
 
+    def set_annotations(self, annos: list[Annotation]) -> None:
+        self._annotations = list(annos)
+        self.annotationsChanged.emit()
+        self.render()
+
+    def set_hidden_channels(self, hidden: set[str]) -> None:
+        self._hidden_channels = set(hidden)
+        # if you already have a signal like hiddenChannelsChanged, emit it here
+        if hasattr(self, "hiddenChannelsChanged"):
+            self.hiddenChannelsChanged.emit()
+        self.render()
+
+    def set_bad_channels(self, bad: set[str]) -> None:
+        self._bad_channels = set(bad)
+        if hasattr(self, "badChannelsChanged"):
+            self.badChannelsChanged.emit()
+        self.render()
     # ---------------- Interaction ----------------
 
     def _wheel_dy(self, ev) -> int:
@@ -1156,11 +1181,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hidden_channels.discard(ch_name)
         self._clamp_ch_start()
         self.render()
+        self.hiddenChannelsChanged.emit()
 
     def unhide_all_channels(self):
         self._hidden_channels.clear()
         self._clamp_ch_start()
         self.render()
+        self.hiddenChannelsChanged.emit()
 
     def _toggle_bad_channel(self, ch_name: str):
         if ch_name in self._bad_channels:
@@ -1175,6 +1202,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hidden_channels.update(ch_names)
         self._clamp_ch_start()
         self.render()
+        self.hiddenChannelsChanged.emit()
 
     def _set_bad_channels(self, ch_names: list[str], bad: bool):
         if not ch_names:
@@ -1185,6 +1213,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             for n in ch_names:
                 self._bad_channels.discard(n)
         self.render()
+        self.badChannelsChanged.emit()
 
   
       # ---------------- Visible window calculation ----------------

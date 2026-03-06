@@ -24,6 +24,7 @@ from app.annotations import (
     ANNOTATION_TYPES, ANNOTATION_STYLES, 
     ANNOTATION_SCOPES, SCOPE_SELECTED
 )
+from app.session_io import save_session, default_session_path_for, load_session, apply_session
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -36,13 +37,16 @@ class MainWindow(QMainWindow):
         self.resize(1400, 800)
 
         # ---- Menu bar ----
-        self._act_saveas, self._act_close = build_menubar(self)
+        self._act_save, self._act_saveas, self._act_close = build_menubar(self)
+        self._act_save.setEnabled(False)
         self._act_saveas.setEnabled(False)
         self._act_close.setEnabled(False)
 
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(False)
         
+
+
         # ---- Toolbar (controls) ----
         self._build_toolbar()
         self.tb.setEnabled(False) 
@@ -82,6 +86,9 @@ class MainWindow(QMainWindow):
         self.loaded_file: Path | None = None
 
         self._update_window_title()
+
+        self.session_path: Path | None = None
+        self.session_dirty: bool = False
 
         # ---- Computation dock (WIP) ----
         self.comp_dock = QDockWidget("Computation Panel", self)
@@ -128,6 +135,9 @@ class MainWindow(QMainWindow):
         self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
         self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
+        self.viewer.annotationsChanged.connect(self._mark_session_dirty)
+        self.viewer.hiddenChannelsChanged.connect(self._mark_session_dirty)
+        self.viewer.badChannelsChanged.connect(self._mark_session_dirty)
         self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
         
@@ -254,7 +264,7 @@ class MainWindow(QMainWindow):
         btn.setStyleSheet("QToolButton::menu-indicator { image: none; }")
         tb.addWidget(btn)
 
-    # ---------------- File/data loading ----------------
+    # ---------------- File/data loading & Saving----------------
 
     def on_open(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -273,6 +283,9 @@ class MainWindow(QMainWindow):
             self.current_raw = raw
             self.current_picks = picks
             self._update_window_title()
+
+            self.session_path = None
+            self.session_dirty = False      
 
             n_channels = len(picks)
 
@@ -303,9 +316,29 @@ class MainWindow(QMainWindow):
 
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(True)
+                
+        # Reset session bookkeeping for this EEG
+        self.session_path = None
+        self.session_dirty = False
+
+        # Enable Save As now that a file is loaded
+        self._act_save.setEnabled(False)      # no session path yet
         self._act_saveas.setEnabled(True)
         self._act_close.setEnabled(True)
-        self.tb.setEnabled(True)
+
+        # Auto-load matching session (if present)
+        if self.loaded_file is not None:
+            candidate = default_session_path_for(self.loaded_file)
+            if candidate.exists():
+                try:
+                    payload = load_session(candidate)
+                    apply_session(self, payload, source_path=candidate)
+                    self.console.log(f"Loaded session: {candidate}")
+                    self._act_save.setEnabled(True)  # now Save overwrites this session file
+                except Exception as e:
+                    # Don’t crash opening EEG; just warn
+                    QMessageBox.warning(self, "Session load failed", str(e))
+
 
     def _load_eeg_file(self, file_path: Path):
         """Load EEG file via MNE and return (raw, eeg_picks)."""
@@ -330,7 +363,9 @@ class MainWindow(QMainWindow):
         return raw, picks
     
     def _update_window_title(self):
-        base = getattr(self, "_base_title", "Halyzia Shell")
+        base = getattr(self, "_base_title", "iEEG tool")
+        if getattr(self, "session_dirty", False):
+            base = base + " *"
 
         # If nothing loaded yet
         if self.current_raw is None:
@@ -356,6 +391,67 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             f"{base} | Folder: {file_txt} | Ch: {n_sel}/{n_total} | Dur: {dur_s:.1f}s | Fs: {sfreq:.1f}Hz"
         )
+
+    def _mark_session_dirty(self) -> None:
+        if self.current_raw is None:
+            return
+        if not self.session_dirty:
+            self.session_dirty = True
+            self._update_window_title()
+
+    def _mark_session_clean(self) -> None:
+        if self.session_dirty:
+            self.session_dirty = False
+            self._update_window_title()
+
+    def on_save(self) -> None:
+        """
+        Save to the last chosen session_path. If none -> Save As.
+        """
+        if self.current_raw is None:
+            QMessageBox.information(self, "Save", "Load a file before saving a session.")
+            return
+
+        if self.session_path is None:
+            self.on_save_as()
+            return
+
+        try:
+            save_session(self.session_path, self)
+            self.console.log(f"Saved session: {self.session_path}")
+            self._mark_session_clean()
+        except Exception as e:
+            QMessageBox.critical(self, "Save error", str(e))
+
+    def on_save_as(self) -> None:
+        """
+        Ask user where to save, then write JSON.
+        """
+        if self.current_raw is None:
+            QMessageBox.information(self, "Save as", "Load a file before saving a session.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save session as",
+            "",
+            "Session (*.json);;All files (*)",
+        )
+        if not path:
+            return
+
+        p = Path(path)
+        if p.suffix.lower() != ".json":
+            p = p.with_suffix(".json")
+
+        try:
+            save_session(p, self)
+            self.session_path = p
+            self.console.log(f"Saved session: {p}")
+            self._mark_session_clean()
+            self._act_save.setEnabled(True)  # now Save is meaningful
+        except Exception as e:
+            QMessageBox.critical(self, "Save error", str(e))
 
     # ---------------- UI ↔ viewer syncing ----------------
 
