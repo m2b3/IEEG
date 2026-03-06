@@ -4,9 +4,24 @@ This is an EEG / iEEG viewer built with PySide6, PyQtGraph and MNE.
 
 It allows visualisation and interaction with multi-channel electrophysiological recordings (EDF, FIF, BDF, etc.).
 
----
+The viewer is designed for interactive exploration and review of EEG/iEEG data.
 
-# 1. How the Program Works
+---
+# Main Features
+
+Multi-channel EEG/iEEG visualization
+
+Fast interactive navigation
+
+Channel selection and scaling
+
+Manual event/segment annotation
+
+Persistent review projects (.ieeg)
+
+Restoration of annotations and review state
+
+# 1.1 How the Program Works
 
 I_EEG is structured around a main viewer that:
 
@@ -26,6 +41,86 @@ Rendering is optimized to:
 - Only load visible channels
 - Only load visible time window
 - Decimate data for responsiveness
+
+
+
+# 1.2 Annotation System
+
+The viewer supports manual signal annotation for review.
+
+Users can mark events such as: Epileptic Spike, Ripple, Fast ripple, Artifact, Bad segment, Other
+
+Annotation workflow :
+
+- Open a dataset or project
+
+- Select Edit → Annotate
+
+- Choose:
+
+    annotation type
+
+    scope
+
+    optional note
+
+- Drag on the signal to create an annotation
+
+Annotations appear as semi-transparent overlays on the signal and are listed in the Annotations Dock. They can be edited, deleted, navigated from the annotation list dock pannel
+
+# 1.3. Project System
+
+Review data is stored using project files.
+
+Raw EEG files remain unchanged.
+
+The viewer saves review state in a .ieeg project file (JSON format).
+
+Project files store:
+
+- path to the raw EEG file
+
+- annotations
+
+- hidden channels
+
+- bad channels
+
+Example structure:
+
+{
+  "format": "ieeg-review-project",
+  "version": 1,
+  "source": {
+    "raw_file": "path/to/eeg.edf"
+  },
+  "review": {
+    "annotations": [...],
+    "hidden_channels": [...],
+    "bad_channels": [...]
+  }
+}
+# 1.4 Project workflow
+
+File → New Project
+
+    Select a raw EEG file
+
+    Create a new .ieeg project
+
+File → Open Project
+
+    Load an existing project
+
+    Restore annotations and review state
+
+File → Save
+
+    Update the current project
+
+File → Save As
+
+    Save the current review state to a new project file
 
 ---
 
@@ -59,14 +154,13 @@ python main.py
 # 4. How to Use the Program
 ## 4.1 Loading a File
 
-File → Open
+File → New Project or Open Project
 
-Select an EDF / FIF / supported EEG file
 
-## 4.2 Main Interactions
-Scrolling : Mouse wheel or two-finger scroll → scroll through channels
+## 4.2 Navigation
+Scroll channels : Mouse wheel or trackpad scroll
 
-Zoom
+Zoom 
 
 - Shift + wheel over signal area → zoom time range
 
@@ -86,24 +180,28 @@ Channels → controls number of visible channels
 
 Amplitude → controls vertical scaling (± µV)
 
-Fichier md if required / too long
+
 
 # 5. Testing the program
 To test the viewer:
 
 1 Launch the application
 
-2 Open a sample EEG file
+2 Create a new project from an EEG file
 
 3 Verify:
 
-Channels scroll correctly
+channels scroll correctly
 
-Zoom works with Shift + wheel
+zoom works with Shift + wheel
 
-Channel selection highlights properly
+channel selection highlights correctly
 
-Timeline slider synchronizes with the plot
+timeline slider synchronizes with the plot
+
+annotations can be created and edited
+
+projects save and reload correctly
 
 
 # 6. Project status
