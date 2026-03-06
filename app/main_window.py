@@ -284,16 +284,13 @@ class MainWindow(QMainWindow):
 
         self.viewer.set_raw(raw, picks)
 
-        # Refresh UI pieces that depend on loaded data
-        self._update_time_slider_range()
+        ## Opening a raw file alone is not the same as opening a project
+        self.project_path = None
+        self.project_dirty = False
+
+        self._enable_loaded_ui()
+        self._act_save.setEnabled(False)  # no bound project yet
         self._update_window_title()
-
-        # Enable actions that require a loaded dataset
-        self.tb.setEnabled(True)
-        self.timeline.show()
-
-        for m in getattr(self, "_menus_disabled_until_loaded", []):
-            m.setEnabled(True)
 
         return True
 
@@ -361,7 +358,7 @@ class MainWindow(QMainWindow):
 
         raw_path = Path(path)
 
-        project_default = str(raw_path.with_suffix(".ieeg"))
+        project_default = str(raw_path.with_suffix("")) + ".ieeg"
         proj_path_str, _ = QFileDialog.getSaveFileName(
             self,
             "Create project file",
@@ -378,6 +375,7 @@ class MainWindow(QMainWindow):
         # Reuse the normal raw-file opening flow so UI/state setup stays centralized
         if not self._open_raw_file(raw_path):
             return
+        self._enable_loaded_ui()
 
         # Project bookkeeping
         self.project_path = project_path
@@ -418,9 +416,14 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open project error", str(e))
             return
 
-        raw_file = payload.get("source", {}).get("raw_file")
-        if not raw_file:
-            QMessageBox.critical(self, "Open project error", "Project does not contain a raw_file path.")
+        source = payload.get("source")
+        if not isinstance(source, dict):
+            QMessageBox.critical(self, "Open project error", "Project is missing a valid 'source' section.")
+            return
+
+        raw_file = source.get("raw_file")
+        if not isinstance(raw_file, str) or not raw_file.strip():
+            QMessageBox.critical(self, "Open project error", "Project does not contain a valid raw_file path.")
             return
 
         raw_path = Path(raw_file)
@@ -432,42 +435,37 @@ class MainWindow(QMainWindow):
             )
             return
 
-        try:
-            raw, picks = self._load_eeg_file(raw_path)
-        except Exception as e:
-            QMessageBox.critical(self, "Open EEG error", str(e))
+        # Reuse the standard raw-file opening flow
+        if not self._open_raw_file(raw_path):
             return
 
-        # load raw into UI
-        self.current_raw = raw
-        self.current_picks = picks
-        self.loaded_file = raw_path
+        review = payload.get("review")
+        if not isinstance(review, dict):
+            review = {}
 
-        self.viewer.set_raw(raw, picks)
+        annos = review.get("annotations", [])
+        hidden_raw = review.get("hidden_channels", [])
+        bad_raw = review.get("bad_channels", [])
 
-        # restore review state
-    
-        annos = payload.get("review", {}).get("annotations", [])
-        hidden = set(payload.get("review", {}).get("hidden_channels", []))
-        bad = set(payload.get("review", {}).get("bad_channels", []))
+        hidden = set(hidden_raw) if isinstance(hidden_raw, list) else set()
+        bad = set(bad_raw) if isinstance(bad_raw, list) else set()
 
         self._restoring_project = True
         try:
-            self.viewer.set_annotations_from_dicts(annos)
+            self.viewer.set_annotations_from_dicts(annos if isinstance(annos, list) else [])
             self.viewer.set_hidden_channels(hidden)
             self.viewer.set_bad_channels(bad)
         finally:
             self._restoring_project = False
 
-        self._update_time_slider_range()
-
+        # Re-bind the loaded dataset to its project file
         self.project_path = project_path
-        self._act_save.setEnabled(True)
-        self._act_saveas.setEnabled(True)
-        self._act_close.setEnabled(True)
+        self.project_dirty = False
 
-        self._mark_project_clean()
+        self._enable_loaded_ui()
+        self._act_save.setEnabled(True)
         self._update_window_title()
+
         self.console.log(f"Project opened: {project_path}")
 
     def on_save_project(self) -> None:
@@ -532,6 +530,19 @@ class MainWindow(QMainWindow):
         if self.project_dirty:
             self.project_dirty = False
             self._update_window_title()
+
+    def _enable_loaded_ui(self) -> None:
+        self.tb.setEnabled(True)
+        self.timeline.show()
+        self._update_time_slider_range()
+        self._sync_time_from_viewer(0.0)
+
+        for m in getattr(self, "_menus_disabled_until_loaded", []):
+            m.setEnabled(True)
+
+        self._act_save.setEnabled(True)
+        self._act_saveas.setEnabled(True)
+        self._act_close.setEnabled(True)
 
     # ---------------- UI ↔ viewer syncing ----------------
 
