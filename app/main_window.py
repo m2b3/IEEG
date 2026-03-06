@@ -24,7 +24,7 @@ from app.annotations import (
     ANNOTATION_TYPES, ANNOTATION_STYLES, 
     ANNOTATION_SCOPES, SCOPE_SELECTED
 )
-from app.session_io import save_session, default_session_path_for, load_session, apply_session
+from app.project_io import save_project, load_project
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -44,7 +44,6 @@ class MainWindow(QMainWindow):
 
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(False)
-        
 
 
         # ---- Toolbar (controls) ----
@@ -85,10 +84,10 @@ class MainWindow(QMainWindow):
         self.current_picks: np.ndarray | None = None
         self.loaded_file: Path | None = None
 
-        self._update_window_title()
-
         self.session_path: Path | None = None
         self.session_dirty: bool = False
+
+        self._update_window_title()
 
         # ---- Computation dock (WIP) ----
         self.comp_dock = QDockWidget("Computation Panel", self)
@@ -135,9 +134,9 @@ class MainWindow(QMainWindow):
         self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
         self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
-        self.viewer.annotationsChanged.connect(self._mark_session_dirty)
-        self.viewer.hiddenChannelsChanged.connect(self._mark_session_dirty)
-        self.viewer.badChannelsChanged.connect(self._mark_session_dirty)
+        self.viewer.annotationsChanged.connect(self._mark_project_dirty)
+        self.viewer.hiddenChannelsChanged.connect(self._mark_project_dirty)
+        self.viewer.badChannelsChanged.connect(self._mark_project_dirty)
         self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
         
@@ -266,79 +265,35 @@ class MainWindow(QMainWindow):
 
     # ---------------- File/data loading & Saving----------------
 
-    def on_open(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open EDF file",
-            "",
-            "EEG/iEEG files (*.edf *.bdf *.fif *.vhdr *.set *.cnt);;All files (*)",
-        )
-        if not path:
-            return
-
+    def _open_raw_file(self, raw_path: Path) -> bool:
+        """
+        Load a raw EEG/iEEG file into the UI.
+        Returns True on success, False on failure.
+        """
         try:
-            raw, picks = self._load_eeg_file(Path(path))
-
-            self.loaded_file = Path(path)
-            self.current_raw = raw
-            self.current_picks = picks
-            self._update_window_title()
-
-            self.session_path = None
-            self.session_dirty = False      
-
-            n_channels = len(picks)
-
-            self.chan_range.blockSignals(True)
-            self.chan_range.setMaximum(n_channels)
-            self.chan_range.setValue(min(self.chan_range.value(), n_channels))
-            self.chan_range.blockSignals(False)
-
-            self.viewer.set_raw(raw, picks=picks)
-            self.viewer.set_view_params(
-                chan_range=self.chan_range.value(),
-                gain=self.gain.value(),
-                time_range=self.time_range.value(),
-            )
-
-            self.tb.setEnabled(True)
-
-            self.timeline.show()
-            self._update_time_slider_range()
-            self._sync_time_from_viewer(0.0)
-
-            self.console.log(f"Loaded: {Path(path).name}")
-            self.console.log(f"Channels: {n_channels}")
-            self.console.log(f"Sampling rate: {raw.info['sfreq']} Hz")
-
+            raw, picks = self._load_eeg_file(raw_path)
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+            QMessageBox.critical(self, "Open EEG error", str(e))
+            return False
+
+        self.current_raw = raw
+        self.current_picks = picks
+        self.loaded_file = raw_path
+
+        self.viewer.set_raw(raw, picks)
+
+        # Refresh UI pieces that depend on loaded data
+        self._update_time_slider_range()
+        self._update_window_title()
+
+        # Enable actions that require a loaded dataset
+        self.tb.setEnabled(True)
+        self.timeline.show()
 
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(True)
-                
-        # Reset session bookkeeping for this EEG
-        self.session_path = None
-        self.session_dirty = False
 
-        # Enable Save As now that a file is loaded
-        self._act_save.setEnabled(False)      # no session path yet
-        self._act_saveas.setEnabled(True)
-        self._act_close.setEnabled(True)
-
-        # Auto-load matching session (if present)
-        if self.loaded_file is not None:
-            candidate = default_session_path_for(self.loaded_file)
-            if candidate.exists():
-                try:
-                    payload = load_session(candidate)
-                    apply_session(self, payload, source_path=candidate)
-                    self.console.log(f"Loaded session: {candidate}")
-                    self._act_save.setEnabled(True)  # now Save overwrites this session file
-                except Exception as e:
-                    # Don’t crash opening EEG; just warn
-                    QMessageBox.warning(self, "Session load failed", str(e))
-
+        return True
 
     def _load_eeg_file(self, file_path: Path):
         """Load EEG file via MNE and return (raw, eeg_picks)."""
@@ -364,8 +319,8 @@ class MainWindow(QMainWindow):
     
     def _update_window_title(self):
         base = getattr(self, "_base_title", "iEEG tool")
-        if getattr(self, "session_dirty", False):
-            base = base + " *"
+        if getattr(self, "project_dirty", False):
+            base += " *"
 
         # If nothing loaded yet
         if self.current_raw is None:
@@ -392,66 +347,188 @@ class MainWindow(QMainWindow):
             f"{base} | Folder: {file_txt} | Ch: {n_sel}/{n_total} | Dur: {dur_s:.1f}s | Fs: {sfreq:.1f}Hz"
         )
 
-    def _mark_session_dirty(self) -> None:
-        if self.current_raw is None:
-            return
-        if not self.session_dirty:
-            self.session_dirty = True
-            self._update_window_title()
-
-    def _mark_session_clean(self) -> None:
-        if self.session_dirty:
-            self.session_dirty = False
-            self._update_window_title()
-
-    def on_save(self) -> None:
-        """
-        Save to the last chosen session_path. If none -> Save As.
-        """
-        if self.current_raw is None:
-            QMessageBox.information(self, "Save", "Load a file before saving a session.")
+    def on_new_project(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open EEG/iEEG file",
+            "",
+            "EEG files (*.edf *.bdf *.fif *.vhdr *.set *.cnt);;All files (*)",
+        )
+        if not path:
             return
 
-        if self.session_path is None:
-            self.on_save_as()
+        raw_path = Path(path)
+
+        try:
+            raw, picks = self._load_eeg_file(raw_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Open EEG error", str(e))
+            return
+
+        project_default = str(raw_path.with_suffix(".ieeg"))
+        proj_path_str, _ = QFileDialog.getSaveFileName(
+            self,
+            "Create project file",
+            project_default,
+            "iEEG Project (*.ieeg);;All files (*)",
+        )
+        if not proj_path_str:
+            return
+
+        project_path = Path(proj_path_str)
+        if project_path.suffix.lower() != ".ieeg":
+            project_path = project_path.with_suffix(".ieeg")
+
+        # load raw into UI
+        self.current_raw = raw
+        self.current_picks = picks
+        self.loaded_file = raw_path
+
+        self.viewer.set_raw(raw, picks)
+        self._update_time_slider_range()
+        self._update_window_title()
+
+        # project bookkeeping
+        self.project_path = project_path
+        self.project_dirty = False
+
+        self._act_save.setEnabled(True)
+        self._act_saveas.setEnabled(True)
+        self._act_close.setEnabled(True)
+
+        # save initial empty project
+        try:
+            save_project(project_path, self)
+            self.console.log(f"Project created: {project_path}")
+            self._mark_project_clean()
+        except Exception as e:
+            QMessageBox.critical(self, "Create project error", str(e))
+
+    def on_open_project(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open project",
+            "",
+            "iEEG Project (*.ieeg);;All files (*)",
+        )
+        if not path:
+            return
+
+        project_path = Path(path)
+
+        try:
+            payload = load_project(project_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Open project error", str(e))
+            return
+
+        raw_file = payload.get("source", {}).get("raw_file")
+        if not raw_file:
+            QMessageBox.critical(self, "Open project error", "Project does not contain a raw_file path.")
+            return
+
+        raw_path = Path(raw_file)
+        if not raw_path.exists():
+            QMessageBox.critical(
+                self,
+                "Open project error",
+                f"Raw EEG file not found:\n{raw_path}",
+            )
             return
 
         try:
-            save_session(self.session_path, self)
-            self.console.log(f"Saved session: {self.session_path}")
-            self._mark_session_clean()
+            raw, picks = self._load_eeg_file(raw_path)
         except Exception as e:
-            QMessageBox.critical(self, "Save error", str(e))
-
-    def on_save_as(self) -> None:
-        """
-        Ask user where to save, then write JSON.
-        """
-        if self.current_raw is None:
-            QMessageBox.information(self, "Save as", "Load a file before saving a session.")
+            QMessageBox.critical(self, "Open EEG error", str(e))
             return
+
+        # load raw into UI
+        self.current_raw = raw
+        self.current_picks = picks
+        self.loaded_file = raw_path
+
+        self.viewer.set_raw(raw, picks)
+
+        # restore review state
+        annos = payload.get("review", {}).get("annotations", [])
+        hidden = set(payload.get("review", {}).get("hidden_channels", []))
+        bad = set(payload.get("review", {}).get("bad_channels", []))
+
+        self.viewer.set_annotations_from_dicts(annos)
+        self.viewer.set_hidden_channels(hidden)
+        self.viewer.set_bad_channels(bad)
+
+        self._update_time_slider_range()
+
+        self.project_path = project_path
+        self._act_save.setEnabled(True)
+        self._act_saveas.setEnabled(True)
+        self._act_close.setEnabled(True)
+
+        self._mark_project_clean()
+        self._update_window_title()
+        self.console.log(f"Project opened: {project_path}")
+
+    def on_save_project(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Save project", "Load a dataset first.")
+            return
+
+        if self.project_path is None:
+            self.on_save_project_as()
+            return
+
+        try:
+            save_project(self.project_path, self)
+            self.console.log(f"Project saved: {self.project_path}")
+            self._mark_project_clean()
+        except Exception as e:
+            QMessageBox.critical(self, "Save project error", str(e))
+
+    def on_save_project_as(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Save project as", "Load a dataset first.")
+            return
+
+        default = ""
+        if self.project_path is not None:
+            default = str(self.project_path)
+        elif self.loaded_file is not None:
+            default = str(self.loaded_file.with_suffix(".ieeg"))
 
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save session as",
-            "",
-            "Session (*.json);;All files (*)",
+            "Save project as",
+            default,
+            "iEEG Project (*.ieeg);;All files (*)",
         )
         if not path:
             return
 
         p = Path(path)
-        if p.suffix.lower() != ".json":
-            p = p.with_suffix(".json")
+        if p.suffix.lower() != ".ieeg":
+            p = p.with_suffix(".ieeg")
 
         try:
-            save_session(p, self)
-            self.session_path = p
-            self.console.log(f"Saved session: {p}")
-            self._mark_session_clean()
-            self._act_save.setEnabled(True)  # now Save is meaningful
+            save_project(p, self)
+            self.project_path = p
+            self.console.log(f"Project saved: {p}")
+            self._mark_project_clean()
+            self._act_save.setEnabled(True)
         except Exception as e:
-            QMessageBox.critical(self, "Save error", str(e))
+            QMessageBox.critical(self, "Save project error", str(e))
+
+    def _mark_project_dirty(self) -> None:
+        if self.current_raw is None:
+            return
+        if not self.project_dirty:
+            self.project_dirty = True
+            self._update_window_title()
+
+    def _mark_project_clean(self) -> None:
+        if self.project_dirty:
+            self.project_dirty = False
+            self._update_window_title()
 
     # ---------------- UI ↔ viewer syncing ----------------
 

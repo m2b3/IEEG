@@ -14,15 +14,15 @@ def build_menubar(main_window):
     menubar.clear()   
     # -------- File --------
     file_menu = menubar.addMenu("File")
-    add_action(file_menu, "New", lambda: print("TODO: New"))
-    add_action(file_menu, "Open", main_window.on_open)
+    add_action(file_menu, "New", main_window.on_new_project)
+    add_action(file_menu, "Open", main_window.on_open_project)
 
     file_menu.addSeparator()
 
-    act_save = add_action(file_menu, "Save", main_window.on_save)
+    act_save = add_action(file_menu, "Save", main_window.on_save_project)
     act_save.setShortcut(QKeySequence.StandardKey.Save)    # Ctrl+S
 
-    act_saveas = add_action(file_menu, "Save as…", main_window.on_save_as)
+    act_saveas = add_action(file_menu, "Save as…", main_window.on_save_project_as)
     act_saveas.setShortcut(QKeySequence.StandardKey.SaveAs)     # Ctrl+Shift+S
 
     file_menu.addSeparator()

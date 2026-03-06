@@ -420,22 +420,49 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     # ---------------- Load saved data ----------------
 
     def set_annotations(self, annos: list[Annotation]) -> None:
+        """
+        Replace all current annotations with the provided list.
+        Used when restoring a project file.
+        """
         self._annotations = list(annos)
         self.annotationsChanged.emit()
         self.render()
 
+    def set_annotations_from_dicts(self, annos: list[dict]) -> None:
+        """
+        Restore annotations from a list of plain dicts loaded from a project file.
+        """
+        restored: list[Annotation] = []
+        for d in annos:
+            restored.append(
+                Annotation(
+                    id=str(d.get("id", "")),
+                    kind=str(d.get("kind", "Other")),
+                    t_start=float(d.get("t_start", 0.0)),
+                    t_end=float(d.get("t_end", 0.0)),
+                    abs_channel=(None if d.get("abs_channel", None) is None else int(d["abs_channel"])),
+                    note=str(d.get("note", "")),
+                )
+            )
+
+        self.set_annotations(restored)
+
     def set_hidden_channels(self, hidden: set[str]) -> None:
+        """
+        Replace hidden-channel state and rerender.
+        """
         self._hidden_channels = set(hidden)
-        # if you already have a signal like hiddenChannelsChanged, emit it here
-        if hasattr(self, "hiddenChannelsChanged"):
-            self.hiddenChannelsChanged.emit()
+        self.hiddenChannelsChanged.emit()
         self.render()
 
     def set_bad_channels(self, bad: set[str]) -> None:
+        """
+        Replace bad-channel state and rerender.
+        """
         self._bad_channels = set(bad)
-        if hasattr(self, "badChannelsChanged"):
-            self.badChannelsChanged.emit()
+        self.badChannelsChanged.emit()
         self.render()
+        
     # ---------------- Interaction ----------------
 
     def _wheel_dy(self, ev) -> int:
