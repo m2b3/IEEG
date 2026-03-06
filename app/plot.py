@@ -463,6 +463,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.badChannelsChanged.emit()
         self.render()
         
+    def get_hidden_channels(self) -> list[str]:
+        return sorted(self._hidden_channels)
+
+    def get_bad_channels(self) -> list[str]:
+        return sorted(self._bad_channels)
+
+    def get_channel_names(self) -> list[str]:
+        return list(self._channel_names)
+
     # ---------------- Interaction ----------------
 
     def _wheel_dy(self, ev) -> int:

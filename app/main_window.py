@@ -84,10 +84,11 @@ class MainWindow(QMainWindow):
         self.current_picks: np.ndarray | None = None
         self.loaded_file: Path | None = None
 
-        self.session_path: Path | None = None
-        self.session_dirty: bool = False
+        self.project_path: Path | None = None
+        self.project_dirty: bool = False
 
         self._update_window_title()
+        self._restoring_project = False
 
         # ---- Computation dock (WIP) ----
         self.comp_dock = QDockWidget("Computation Panel", self)
@@ -113,6 +114,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.anno_dock)
         self.anno_dock.hide()
         self._anno_items_by_id = {}
+        self.anno_list.itemClicked.connect(self._on_annotation_item_clicked)
 
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
@@ -346,7 +348,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(
             f"{base} | Folder: {file_txt} | Ch: {n_sel}/{n_total} | Dur: {dur_s:.1f}s | Fs: {sfreq:.1f}Hz"
         )
-
+    
     def on_new_project(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
@@ -358,12 +360,6 @@ class MainWindow(QMainWindow):
             return
 
         raw_path = Path(path)
-
-        try:
-            raw, picks = self._load_eeg_file(raw_path)
-        except Exception as e:
-            QMessageBox.critical(self, "Open EEG error", str(e))
-            return
 
         project_default = str(raw_path.with_suffix(".ieeg"))
         proj_path_str, _ = QFileDialog.getSaveFileName(
@@ -379,29 +375,29 @@ class MainWindow(QMainWindow):
         if project_path.suffix.lower() != ".ieeg":
             project_path = project_path.with_suffix(".ieeg")
 
-        # load raw into UI
-        self.current_raw = raw
-        self.current_picks = picks
-        self.loaded_file = raw_path
+        # Reuse the normal raw-file opening flow so UI/state setup stays centralized
+        if not self._open_raw_file(raw_path):
+            return
 
-        self.viewer.set_raw(raw, picks)
-        self._update_time_slider_range()
-        self._update_window_title()
-
-        # project bookkeeping
+        # Project bookkeeping
         self.project_path = project_path
         self.project_dirty = False
+        self._update_window_title()
 
         self._act_save.setEnabled(True)
         self._act_saveas.setEnabled(True)
         self._act_close.setEnabled(True)
 
-        # save initial empty project
+        # Save initial empty project
         try:
             save_project(project_path, self)
             self.console.log(f"Project created: {project_path}")
             self._mark_project_clean()
         except Exception as e:
+            # Roll back project binding if initial save failed
+            self.project_path = None
+            self.project_dirty = False
+            self._act_save.setEnabled(False)
             QMessageBox.critical(self, "Create project error", str(e))
 
     def on_open_project(self) -> None:
@@ -450,13 +446,18 @@ class MainWindow(QMainWindow):
         self.viewer.set_raw(raw, picks)
 
         # restore review state
+    
         annos = payload.get("review", {}).get("annotations", [])
         hidden = set(payload.get("review", {}).get("hidden_channels", []))
         bad = set(payload.get("review", {}).get("bad_channels", []))
 
-        self.viewer.set_annotations_from_dicts(annos)
-        self.viewer.set_hidden_channels(hidden)
-        self.viewer.set_bad_channels(bad)
+        self._restoring_project = True
+        try:
+            self.viewer.set_annotations_from_dicts(annos)
+            self.viewer.set_hidden_channels(hidden)
+            self.viewer.set_bad_channels(bad)
+        finally:
+            self._restoring_project = False
 
         self._update_time_slider_range()
 
@@ -521,6 +522,8 @@ class MainWindow(QMainWindow):
     def _mark_project_dirty(self) -> None:
         if self.current_raw is None:
             return
+        if getattr(self, "_restoring_project", False):
+            return
         if not self.project_dirty:
             self.project_dirty = True
             self._update_window_title()
@@ -567,7 +570,7 @@ class MainWindow(QMainWindow):
 
     def _show_hidden_channels_menu(self):
     
-        hidden = sorted(self.viewer._hidden_channels)
+        hidden = self.viewer.get_hidden_channels()
         menu = QMenu()
 
         if not hidden:
@@ -593,7 +596,7 @@ class MainWindow(QMainWindow):
 
     def _open_computation_panel(self, selected_abs: list[int]):
         # give the panel access to the current dataset mapping
-        displayed_names = getattr(self.viewer, "_channel_names", [])
+        displayed_names = self.viewer.get_channel_names()
         self.comp_panel.set_data_context(self.current_raw, self.current_picks, displayed_names)
 
         # default channels = selection at creation/open
@@ -723,13 +726,14 @@ class MainWindow(QMainWindow):
         self.anno_list.clear()
         self._anno_items_by_id.clear()  # IMPORTANT: clear BEFORE rebuilding
 
+        channel_names = self.viewer.get_channel_names()
+
         for a in annos:
             if a.abs_channel is None:
                 ch_txt = "GLOBAL"
             else:
-                # abs_channel is index in displayed channel list; map to name if available
-                if hasattr(self.viewer, "_channel_names") and 0 <= a.abs_channel < len(self.viewer._channel_names):
-                    ch_txt = self.viewer._channel_names[a.abs_channel]
+                if 0 <= a.abs_channel < len(channel_names):
+                    ch_txt = channel_names[a.abs_channel]
                 else:
                     ch_txt = str(a.abs_channel)
 
