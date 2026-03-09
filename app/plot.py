@@ -1357,6 +1357,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         max_start = max(0, len(all_vis) - count)
         self._ch_start = max(0, min(int(self._ch_start), max_start))
 
+ # ---------------- Refrencing ----------------
+
+    def get_bipolar_montage(self):
+        return self._bipolar_montage
+
+    def get_raw_channel_names(self) -> list[str]:
+        return list(self._channel_names)
+
  # ---------------- Utility ----------------
     def _clamp_time_start(self):
         if self._raw is None or self._raw.n_times <= 1:

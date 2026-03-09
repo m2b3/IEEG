@@ -8,10 +8,11 @@ from mne.io import BaseRaw
 
 from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QDoubleSpinBox, QFileDialog, QFrame,
-    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox,QDialog, QDialogButtonBox, 
-    QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout, 
-    QWidget, QDockWidget, QListWidget, QListWidgetItem
+    QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
+    QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
+    QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem
 )
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QIcon, QColor
 
@@ -25,7 +26,9 @@ from app.annotations import (
     ANNOTATION_SCOPES, SCOPE_SELECTED
 )
 from app.project_io import save_project, load_project
-from app.referencing import build_automatic_bipolar_montage
+from app.referencing import ( build_automatic_bipolar_montage, BipolarMontage,
+    update_pair_channel2, extract_core_contact_label,)
+
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -50,6 +53,8 @@ class MainWindow(QMainWindow):
         # ---- Toolbar (controls) ----
         self._build_toolbar()
         self.tb.setEnabled(False) 
+
+
 
         # ---- Central widget (viewer + timeline) ----
         central = QWidget()
@@ -242,6 +247,13 @@ class MainWindow(QMainWindow):
         self.btn_hidden.setText("Hidden…")
         self.btn_hidden.clicked.connect(self._show_hidden_channels_menu)
         tb.addWidget(self.btn_hidden)
+
+        # Edit bipolar referencing 
+        self.btn_edit_bipolar = QToolButton()
+        self.btn_edit_bipolar.setText("Edit Bipolar…")
+        self.btn_edit_bipolar.setEnabled(False)
+        self.btn_edit_bipolar.clicked.connect(self.on_edit_bipolar_pairs)
+        tb.addWidget(self.btn_edit_bipolar)
 
         # ---- Connect toolbar -> viewer ----
         self.time_range.valueChanged.connect(self._on_time_range_changed)
@@ -833,6 +845,8 @@ class MainWindow(QMainWindow):
             return
 
         self.viewer.set_monopolar_mode()
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(False)
         self.console.log("Reference mode: Monopolar")
 
     def on_reference_bipolar(self) -> None:
@@ -857,6 +871,8 @@ class MainWindow(QMainWindow):
             return
 
         self.viewer.set_bipolar_mode(montage)
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(True)
         self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
 
         if montage.skipped_channels:
@@ -879,3 +895,116 @@ class MainWindow(QMainWindow):
             print("UNPARSED:")
             for ch in montage.unparsed_channels[:20]:
                 print("  ", ch)
+
+    def on_edit_bipolar_pairs(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Edit bipolar pairs", "Load a dataset first.")
+            return
+
+        if self.viewer.reference_mode() != "bipolar":
+            QMessageBox.information(self, "Edit bipolar pairs", "Switch to bipolar mode first.")
+            return
+
+        montage = self.viewer.get_bipolar_montage()
+        if montage is None or not montage.pairs:
+            QMessageBox.information(self, "Edit bipolar pairs", "No bipolar montage to edit.")
+            return
+
+        raw_names = self.viewer.get_raw_channel_names()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit bipolar pairs")
+        dlg.resize(700, 500)
+
+        layout = QVBoxLayout(dlg)
+
+        table = QTableWidget(len(montage.pairs), 4, dlg)
+        table.setHorizontalHeaderLabels(["Pair", "Ch1", "Ch2", "Origin"])
+        table.verticalHeader().setVisible(False)
+
+        combos = []
+
+        for row, pair in enumerate(montage.pairs):
+            pair_item = QTableWidgetItem(pair.name)
+            pair_item.setFlags(pair_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+            ch1_item = QTableWidgetItem(pair.ch1)
+            ch1_item.setFlags(ch1_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+            origin_item = QTableWidgetItem(pair.origin)
+            origin_item.setFlags(origin_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+            table.setItem(row, 0, pair_item)
+            table.setItem(row, 1, ch1_item)
+            table.setItem(row, 3, origin_item)
+
+            combo = QComboBox(table)
+            combo.addItems(raw_names)
+            if pair.ch2 in raw_names:
+                combo.setCurrentText(pair.ch2)
+
+        def _update_pair_preview(new_text: str, row=row, ch1=pair.ch1):
+            item = table.item(row, 0)
+            if item is None:
+                return
+
+            ch1_core = extract_core_contact_label(ch1) or ch1
+            ch2_core = extract_core_contact_label(new_text) or new_text
+
+            item.setText(f"{ch1_core}-{ch2_core}")
+
+
+        combo.currentTextChanged.connect(_update_pair_preview)
+        table.setCellWidget(row, 2, combo)
+        combos.append(combo)
+
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        new_pairs = []
+        for pair, combo in zip(montage.pairs, combos):
+            new_ch2 = combo.currentText().strip()
+
+            if not new_ch2:
+                QMessageBox.warning(self, "Edit bipolar pairs", "Empty channel name is not allowed.")
+                return
+
+            if new_ch2 == pair.ch1:
+                QMessageBox.warning(
+                    self,
+                    "Edit bipolar pairs",
+                    f"Invalid pair for {pair.ch1}: ch1 and ch2 cannot be the same."
+                )
+                return
+
+            new_pairs.append(update_pair_channel2(pair, new_ch2))
+
+        new_montage = BipolarMontage(
+            pairs=new_pairs,
+            unparsed_channels=list(montage.unparsed_channels),
+            non_consecutive_channels=list(montage.non_consecutive_channels),
+            bad_channel_skips=list(montage.bad_channel_skips),
+        )
+
+        self.viewer.set_bipolar_mode(new_montage)
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(True)
+        self._mark_project_dirty()
+        self.console.log("Bipolar pairs updated.")
+
+    def _refresh_display_name_dependent_ui(self) -> None:
+        displayed_names = self.viewer.get_channel_names()
+        self.comp_panel.set_data_context(self.current_raw, self.current_picks, displayed_names)
+        self._refresh_annotation_list()
+            
