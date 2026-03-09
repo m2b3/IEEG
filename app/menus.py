@@ -48,8 +48,8 @@ def build_menubar(main_window):
     ## Submenu Re-Referencing
     ref_menu = pre_menu.addMenu("Re-referencing")
 
-    add_action(ref_menu, "Monopolar", lambda: print("TODO"))
-    add_action(ref_menu, "Bipolar", lambda: print("TODO"))
+    add_action(ref_menu, "Monopolar", main_window.on_reference_monopolar)
+    add_action(ref_menu, "Bipolar", main_window.on_reference_bipolar)
     add_action(ref_menu, "Average", lambda: print("TODO"))
     add_action(ref_menu, "Median", lambda: print("TODO"))
     add_action(ref_menu, "Common Reference", lambda: print("TODO"))

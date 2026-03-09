@@ -14,6 +14,7 @@ from app.annotations import (
     ANNOTATION_STYLES,
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
 )
+from app.referencing import BipolarMontage, BipolarPair
 
 class AnnotationRect(QtWidgets.QGraphicsRectItem):
     def __init__(self, viewer: "MultiChannelViewer", anno_id: str, *args):
@@ -82,6 +83,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._fs: float = 1.0
         self._picks: np.ndarray = np.array([], dtype=int)
         self._channel_names: List[str] = []
+
+        self._reference_mode: str = "monopolar"
+        self._bipolar_montage: BipolarMontage | None = None
+        self._display_names: List[str] = []
+        self._monopolar_abs_to_pick_idx: list[int] = []
+        self._bipolar_pairs: list[BipolarPair] = []
 
         # ---- View params ----
         self._t_start: float = 0.0
@@ -202,6 +209,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._picks = np.asarray(picks, dtype=int)
 
         self._channel_names = [raw.ch_names[i] for i in self._picks.tolist()]
+
+        self._reference_mode = "monopolar"
+        self._bipolar_montage = None
+        self._display_names = list(self._channel_names)
+        self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
+        self._bipolar_pairs = []
 
         # Reset view
         self._t_start = 0.0
@@ -470,7 +483,28 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         return sorted(self._bad_channels)
 
     def get_channel_names(self) -> list[str]:
-        return list(self._channel_names)
+        return list(self._display_names if self._display_names else self._channel_names)
+    
+    def set_monopolar_mode(self) -> None:
+        self._reference_mode = "monopolar"
+        self._display_names = list(self._channel_names)
+        self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
+        self._clamp_ch_start()
+        self.render()
+
+    def set_bipolar_mode(self, montage: BipolarMontage) -> None:
+        self._reference_mode = "bipolar"
+        self._bipolar_montage = montage
+        self._bipolar_pairs = list(montage.pairs)
+        self._display_names = [pair.name for pair in self._bipolar_pairs]
+        self._clamp_ch_start()
+        self.render()
+
+    def reference_mode(self) -> str:
+        return str(self._reference_mode)
+
+    def get_display_channel_names(self) -> list[str]:
+        return list(self._display_names)
 
     # ---------------- Interaction ----------------
 
@@ -833,13 +867,62 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         start_samp = max(0, min(start_samp, n_samples - 1))
         end_samp = max(start_samp + 1, min(end_samp, n_samples))
 
-        raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
-        data_v, times = raw[raw_ch_picks, start_samp:end_samp]
+        if self._reference_mode == "monopolar":
+            raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
+            data_v, times = raw[raw_ch_picks, start_samp:end_samp]
 
-        data_v = np.asarray(data_v)
-        times = np.asarray(times)
+            data_v = np.asarray(data_v, dtype=float)
+            times = np.asarray(times, dtype=float)
 
-        if times.ndim != 1 or times.size < 2 or data_v.shape[1] < 2:
+        elif self._reference_mode == "bipolar":
+            if not self._bipolar_pairs:
+                return None, None
+
+            name_to_pick_idx = {
+                self._channel_names[i]: int(picks[i])
+                for i in range(len(self._channel_names))
+            }
+
+            pair_rows: list[np.ndarray] = []
+            times_arr: Optional[np.ndarray] = None
+
+            for abs_idx in visible_abs:
+                if abs_idx < 0 or abs_idx >= len(self._bipolar_pairs):
+                    continue
+
+                pair = self._bipolar_pairs[abs_idx]
+                raw_idx_1 = name_to_pick_idx.get(pair.ch1)
+                raw_idx_2 = name_to_pick_idx.get(pair.ch2)
+                if raw_idx_1 is None or raw_idx_2 is None:
+                    continue
+
+                d1, t1 = raw[[int(raw_idx_1)], start_samp:end_samp]
+                d2, _ = raw[[int(raw_idx_2)], start_samp:end_samp]
+
+                d1_arr = np.asarray(d1, dtype=float)
+                d2_arr = np.asarray(d2, dtype=float)
+
+                if d1_arr.ndim != 2 or d2_arr.ndim != 2 or d1_arr.shape[0] == 0 or d2_arr.shape[0] == 0:
+                    continue
+
+                if times_arr is None:
+                    times_arr = np.asarray(t1, dtype=float)
+
+                pair_rows.append(d1_arr[0, :] - d2_arr[0, :])
+
+            if times_arr is None or not pair_rows:
+                return None, None
+
+            data_v = np.vstack(pair_rows).astype(float, copy=False)
+            times = times_arr
+
+        else:
+            return None, None
+
+        if data_v.ndim != 2 or times.ndim != 1:
+            return None, None
+
+        if times.size < 2 or data_v.shape[1] < 2:
             return None, None
 
         data_uv = data_v * 1e6
@@ -851,7 +934,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         t_ds = times[::step]
         seg_ds_uv = data_uv[:, ::step]
         return seg_ds_uv, t_ds
-    
+        
     # ---------------- Render helpers ----------------
     def _clear_plots(self):
         self.signal_plot.clear()

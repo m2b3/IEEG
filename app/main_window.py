@@ -25,6 +25,7 @@ from app.annotations import (
     ANNOTATION_SCOPES, SCOPE_SELECTED
 )
 from app.project_io import save_project, load_project
+from app.referencing import build_automatic_bipolar_montage
 
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
@@ -822,3 +823,59 @@ class MainWindow(QMainWindow):
         # Select + scroll into view
         self.anno_list.setCurrentItem(item)
         self.anno_list.scrollToItem(item)
+
+
+# ---------------- Referencing  -------------
+    
+    def on_reference_monopolar(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        self.viewer.set_monopolar_mode()
+        self.console.log("Reference mode: Monopolar")
+
+    def on_reference_bipolar(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        channel_names = self.viewer._channel_names
+        bad_channels = self.viewer.get_bad_channels()
+
+        montage = build_automatic_bipolar_montage(
+            channel_names,
+            bad_channels=bad_channels,
+        )
+
+        if not montage.pairs:
+            QMessageBox.warning(
+                self,
+                "Bipolar montage",
+                "No valid bipolar pairs could be generated automatically.",
+            )
+            return
+
+        self.viewer.set_bipolar_mode(montage)
+        self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
+
+        if montage.skipped_channels:
+            skipped = ", ".join(montage.skipped_channels)
+            QMessageBox.information(
+                self,
+                "Automatic bipolar montage",
+                "Some channels were not paired automatically:\n\n"
+                f"{skipped}"
+            )
+
+            print("CHANNEL NAMES:")
+            for ch in channel_names[:20]:
+                print("  ", ch)
+
+            print("GENERATED PAIRS:")
+            for pair in montage.pairs[:20]:
+                print("  ", pair)
+
+            print("UNPARSED:")
+            for ch in montage.unparsed_channels[:20]:
+                print("  ", ch)
