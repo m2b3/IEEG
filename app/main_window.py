@@ -41,7 +41,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self._base_title = "Halyzia Shell"
+        self._base_title = "iEEG Tool"
         self.setWindowTitle(self._base_title)
         self.resize(1400, 800)
 
@@ -67,6 +67,20 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+
+
+        self.montage_label = QLabel("Montage: Monopolar")
+        self.montage_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.montage_label.setStyleSheet("""
+            QLabel {
+                font-weight: 600;
+                padding: 4px 8px;
+                color: #dddddd;
+                background-color: #2b2b2b;
+                border-bottom: 1px solid #444444;
+            }
+        """)
+        layout.addWidget(self.montage_label, 0)
 
         self.viewer = MultiChannelViewer()
         layout.addWidget(self.viewer, 1)
