@@ -326,9 +326,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for row in range(n):
             c = self._curves[row]
             abs_idx = int(self._visible_abs[row])
-            ch_name = self._channel_names[abs_idx]
-
-            is_bad = ch_name in self._bad_channels
+            raw_name = self._channel_names[abs_idx]
+            
+            is_bad = raw_name in self._bad_channels
             is_selected = abs_idx in self._selected_abs_set
 
             width = 3 if is_selected else 1
@@ -485,6 +485,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def get_channel_names(self) -> list[str]:
         return list(self._display_names if self._display_names else self._channel_names)
     
+    def _display_name_for_abs(self, abs_idx: int) -> str:
+        names = self.get_channel_names()
+        if 0 <= int(abs_idx) < len(names):
+            return str(names[int(abs_idx)])
+        return str(abs_idx)
+
     def set_monopolar_mode(self) -> None:
         self._reference_mode = "monopolar"
         self._display_names = list(self._channel_names)
@@ -961,15 +967,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             curve = self.signal_plot.plot(t_ds, y, pen=pen)
             self._curves.append(curve)
+    
+    def _draw_labels(self, n_vis: int) -> None:
+        self._labels = []
 
-    def _draw_labels(self, n_vis: int):
-        for i, abs_idx in enumerate(self._visible_abs):
-            name = self._channel_names[int(abs_idx)]
-            txt = pg.TextItem(text=name, anchor=(0, 0.5), color=(180, 180, 180))
+        for row in range(n_vis):
+            abs_idx = int(self._visible_abs[row])
+            ch_name = self.get_channel_names()[abs_idx]
 
-            plot_row = (n_vis - 1 - i)
-            txt.setPos(2.0, plot_row * self._spacing)
+            plot_row = (n_vis - 1 - row)
+            y = plot_row * float(self._spacing)
 
+            txt = pg.TextItem(
+                text=ch_name,
+                anchor=(1.0, 0.5),
+                color=(180, 180, 180),
+            )
+            txt.setPos(98.0, y)
             self.label_plot.addItem(txt)
             self._labels.append(txt)
 
@@ -1338,10 +1352,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
       # ---------------- Visible window calculation ----------------
    
     def _all_visible_abs_indices(self) -> list[int]:
-        if self._raw is None:
-            return []
-        return [i for i, name in enumerate(self._channel_names) if name not in self._hidden_channels]
+        names = self.get_channel_names()
+        visible = []
 
+        for abs_idx, ch_name in enumerate(names):
+            raw_name = self._channel_names[abs_idx] if abs_idx < len(self._channel_names) else ch_name
+
+            if raw_name in self._hidden_channels:
+                continue
+            if raw_name in self._bad_channels:
+                continue
+
+            visible.append(abs_idx)
+
+        return visible
+    
     def _visible_window_abs_indices(self) -> list[int]:
         all_vis = self._all_visible_abs_indices()
         count = int(self._chan_range)
