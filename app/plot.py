@@ -188,9 +188,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._anno_drag_y: float | None = None
         self._anno_preview: pg.RectROI | None = None
 
-        # Bipolar montage cache
+        #  Montage 
         self._cached_bipolar_data_key = None
         self._cached_bipolar_data = None
+        self._common_ref_name: str | None = None
 
     def clear(self) -> None:
         """Reset viewer to an empty state."""
@@ -572,6 +573,20 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def get_display_channel_names(self) -> list[str]:
         return list(self._display_names)
 
+    def set_common_reference_mode(self, ref_name: str) -> None:
+        if ref_name not in self._channel_names:
+            return
+
+        self._reference_mode = "common"
+        self._common_ref_name = str(ref_name)
+        self._display_names = list(self._channel_names)
+        self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
+        self._clamp_ch_start()
+        self.render()
+
+    def common_reference_name(self) -> str | None:
+        return self._common_ref_name
+
     # ---------------- Interaction ----------------
 
     def _wheel_dy(self, ev) -> int:
@@ -940,6 +955,53 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
 
+
+        elif self._reference_mode == "average":
+            raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
+            data_v, times = raw[raw_ch_picks, start_samp:end_samp]
+
+            data_v = np.asarray(data_v, dtype=float)
+            times = np.asarray(times, dtype=float)
+
+            if data_v.shape[0] > 0:
+                ref = np.mean(data_v, axis=0, keepdims=True)
+                data_v = data_v - ref
+
+        elif self._reference_mode == "median":
+            raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
+            data_v, times = raw[raw_ch_picks, start_samp:end_samp]
+
+            data_v = np.asarray(data_v, dtype=float)
+            times = np.asarray(times, dtype=float)
+
+            if data_v.shape[0] > 0:
+                ref = np.median(data_v, axis=0, keepdims=True)
+                data_v = data_v - ref
+
+        
+        elif self._reference_mode == "common":
+            if not self._common_ref_name:
+                return None, None
+
+            if self._common_ref_name not in self._channel_names:
+                return None, None
+
+            ref_abs = self._channel_names.index(self._common_ref_name)
+            ref_raw_pick = int(picks[ref_abs])
+
+            vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
+            data_v, times = raw[vis_raw_picks, start_samp:end_samp]
+            data_v = np.asarray(data_v, dtype=float)
+            times = np.asarray(times, dtype=float)
+
+            ref_data, _ = raw[[ref_raw_pick], start_samp:end_samp]
+            ref_data = np.asarray(ref_data, dtype=float)
+
+            if ref_data.ndim != 2 or ref_data.shape[0] == 0:
+                return None, None
+
+            data_v = data_v - ref_data[0:1, :]
+
         elif self._reference_mode == "bipolar":
             if self._bipolar_montage is None or not self._bipolar_montage.pairs:
                 return None, None
@@ -957,7 +1019,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             data_v = full_data[np.asarray(valid_visible_abs, dtype=int), start_samp:end_samp]
             times = np.asarray(raw.times[start_samp:end_samp], dtype=float)
-
 
         else:
             return None, None
@@ -1480,6 +1541,20 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cached_bipolar_data_key = key
         self._cached_bipolar_data = full_data
         return full_data
+
+    def set_average_mode(self) -> None:
+        self._reference_mode = "average"
+        self._display_names = list(self._channel_names)
+        self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
+        self._clamp_ch_start()
+        self.render()
+
+    def set_median_mode(self) -> None:
+        self._reference_mode = "median"
+        self._display_names = list(self._channel_names)
+        self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
+        self._clamp_ch_start()
+        self.render()
 
  # ---------------- Utility ----------------
     def _clamp_time_start(self):

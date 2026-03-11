@@ -770,7 +770,19 @@ class MainWindow(QMainWindow):
 
     def _update_montage_label(self) -> None:
         mode = self.viewer.reference_mode()
-        pretty = "Bipolar" if mode == "bipolar" else "Monopolar"
+
+        if mode == "bipolar":
+            pretty = "Bipolar"
+        elif mode == "average":
+            pretty = "Average"
+        elif mode == "median":
+            pretty = "Median"
+        elif mode == "common":
+            ref_name = self.viewer.common_reference_name() or "?"
+            pretty = f"Common ({ref_name})"
+        else:
+            pretty = "Monopolar"
+
         self.montage_label.setText(f"Montage: {pretty}")
 
 # ---------------- Keyboard shortcuts / cursor nudging -------------
@@ -1447,3 +1459,74 @@ class MainWindow(QMainWindow):
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
         self._update_montage_label()
+
+    def on_reference_average(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        self.viewer.set_average_mode()
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(False)
+        self._mark_project_dirty()
+        self._update_montage_label()
+        self.console.log("Reference mode: Average")
+
+    def on_reference_median(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        self.viewer.set_median_mode()
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(False)
+        self._mark_project_dirty()
+        self._update_montage_label()
+        self.console.log("Reference mode: Median")
+
+    def on_reference_common(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        channel_names = self.viewer.get_raw_channel_names()
+        if not channel_names:
+            QMessageBox.information(self, "Re-referencing", "No channels available.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Choose common reference")
+
+        layout = QFormLayout(dlg)
+
+        combo = QComboBox(dlg)
+        combo.addItems(channel_names)
+
+        current_ref = self.viewer.common_reference_name()
+        if current_ref and current_ref in channel_names:
+            combo.setCurrentText(current_ref)
+
+        layout.addRow("Reference channel:", combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        layout.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        ref_name = combo.currentText().strip()
+        if not ref_name:
+            return
+
+        self.viewer.set_common_reference_mode(ref_name)
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(False)
+        self._mark_project_dirty()
+        self._update_montage_label()
+        self.console.log(f"Reference mode: Common ({ref_name})")
+

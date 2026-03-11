@@ -50,9 +50,9 @@ def build_menubar(main_window):
 
     add_action(ref_menu, "Monopolar", main_window.on_reference_monopolar)
     add_action(ref_menu, "Bipolar", main_window.on_reference_bipolar)
-    add_action(ref_menu, "Average", lambda: print("TODO"))
-    add_action(ref_menu, "Median", lambda: print("TODO"))
-    add_action(ref_menu, "Common Reference", lambda: print("TODO"))
+    add_action(ref_menu, "Average", main_window.on_reference_average)
+    add_action(ref_menu, "Median", main_window.on_reference_median)
+    add_action(ref_menu, "Common Reference", main_window.on_reference_common)
 
     # -------- Detect --------
     detect_menu = menubar.addMenu("Detect")
