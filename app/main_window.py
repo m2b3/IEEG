@@ -56,11 +56,9 @@ class MainWindow(QMainWindow):
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(False)
 
-
         # ---- Toolbar (controls) ----
         self._build_toolbar()
         self.tb.setEnabled(False) 
-
 
 
         # ---- Central widget (viewer + timeline) ----
@@ -220,6 +218,39 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.quit()
             event.accept()
+
+    def on_close_project(self) -> None:
+        if self.current_raw is None:
+            return
+
+        self.current_raw = None
+        self.current_picks = None
+        self.loaded_file = None
+        self.project_path = None
+        self.project_dirty = False
+        self._saved_bipolar_montage = None
+
+        self.viewer.clear()
+
+        self.tb.setEnabled(False)
+        self.timeline.hide()
+        self.comp_dock.hide()
+        self.anno_dock.hide()
+        self.anno_list.clear()
+
+        for m in getattr(self, "_menus_disabled_until_loaded", []):
+            m.setEnabled(False)
+
+        self._act_save.setEnabled(False)
+        self._act_saveas.setEnabled(False)
+        self._act_close.setEnabled(False)
+
+        self.btn_edit_bipolar.setEnabled(False)
+        self.montage_label.setText("Montage: Monopolar")
+        self._update_window_title()
+
+        self.console.log("File closed.")
+
 
     # ---------------- UI construction ----------------
 

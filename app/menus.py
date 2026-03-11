@@ -27,7 +27,7 @@ def build_menubar(main_window):
 
     file_menu.addSeparator()
 
-    act_close = add_action(file_menu, "Close", lambda: print ("TODO: Close"))
+    act_close = add_action(file_menu, "Close", main_window.on_close_project)
     add_action(file_menu, "Settings", lambda: print ("TODO: Settings"))
     add_action(file_menu, "Exit", main_window.close)
 

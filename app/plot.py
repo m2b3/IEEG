@@ -192,6 +192,60 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cached_bipolar_data_key = None
         self._cached_bipolar_data = None
 
+    def clear(self) -> None:
+        """Reset viewer to an empty state."""
+        self._raw = None
+        self._fs = 1.0
+        self._picks = np.array([], dtype=int)
+        self._channel_names = []
+
+        self._reference_mode = "monopolar"
+        self._bipolar_montage = None
+        self._display_names = []
+        self._monopolar_abs_to_pick_idx = []
+        self._bipolar_pairs = []
+
+        self._t_start = 0.0
+        self._ch_start = 0
+        self._visible_abs = np.array([], dtype=int)
+        self._last_visible_abs = []
+        self._last_visible_ch_indices = []
+
+        self._selected_abs_set.clear()
+        self._selection_anchor_abs = None
+
+        self._hidden_channels.clear()
+        self._bad_channels.clear()
+
+        self._annotations.clear()
+        self._clear_annotation_items()
+
+        for roi in self._anno_rois.values():
+            try:
+                self.signal_plot.removeItem(roi)
+            except Exception:
+                pass
+        self._anno_rois.clear()
+
+        for txt in self._anno_labels.values():
+            try:
+                self.signal_plot.removeItem(txt)
+            except Exception:
+                pass
+        self._anno_labels.clear()
+
+        self.stop_annotation_mode()
+        self._clear_plots()
+        self._clear_bipolar_cache()
+
+        for ax in ("bottom", "left", "right", "top"):
+            self.signal_plot.hideAxis(ax)
+
+        self.annotationsChanged.emit()
+        self.hiddenChannelsChanged.emit()
+        self.badChannelsChanged.emit()
+        self.update()
+   
     # ---------------- Public API ----------------
     def channel_start(self) -> int:
         return int(self._ch_start)
