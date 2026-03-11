@@ -5,16 +5,40 @@ from pathlib import Path
 from dataclasses import asdict
 from typing import Any
 
-PROJECT_VERSION = 1
+PROJECT_VERSION = 2
 PROJECT_FORMAT = "ieeg-review-project"
+
+
+def _serialize_bipolar_montage_if_edited(montage) -> dict[str, Any] | None:
+    if montage is None or not getattr(montage, "pairs", None):
+        return None
+
+    has_manual_edit = any(getattr(pair, "origin", "") == "manual" for pair in montage.pairs)
+    if not has_manual_edit:
+        return None
+
+    return {
+        "pairs": [
+            {
+                "name": pair.name,
+                "ch1": pair.ch1,
+                "ch2": pair.ch2,
+                "origin": pair.origin,
+            }
+            for pair in montage.pairs
+        ],
+        "unparsed_channels": list(getattr(montage, "unparsed_channels", [])),
+        "non_consecutive_channels": list(getattr(montage, "non_consecutive_channels", [])),
+        "bad_channel_skips": list(getattr(montage, "bad_channel_skips", [])),
+    }
 
 
 def build_project_dict(main_window) -> dict[str, Any]:
     viewer = main_window.viewer
 
     annotations = [asdict(a) for a in viewer.get_annotations()]
+    bipolar_montage = getattr(main_window, "_saved_bipolar_montage", None)
 
-    project_name = None
     if getattr(main_window, "project_path", None) is not None:
         project_name = Path(main_window.project_path).stem
     elif getattr(main_window, "loaded_file", None) is not None:
@@ -29,12 +53,14 @@ def build_project_dict(main_window) -> dict[str, Any]:
         "source": {
             "raw_file": str(main_window.loaded_file) if main_window.loaded_file else None,
         },
-       "review": {
+        "review": {
             "annotations": annotations,
             "hidden_channels": viewer.get_hidden_channels(),
             "bad_channels": viewer.get_bad_channels(),
+            "bipolar_montage": _serialize_bipolar_montage_if_edited(bipolar_montage),
         },
     }
+
 
 def save_project(path: Path, main_window) -> None:
     payload = build_project_dict(main_window)
@@ -42,6 +68,7 @@ def save_project(path: Path, main_window) -> None:
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
+
 
 def load_project(path: Path) -> dict[str, Any]:
     path = Path(path)
@@ -65,7 +92,7 @@ def load_project(path: Path) -> dict[str, Any]:
     version_raw = payload.get("version")
     if not isinstance(version_raw, int):
         raise ValueError(f"Invalid project version: {version_raw!r}")
-    if version_raw != PROJECT_VERSION:
+    if version_raw not in (1, 2):
         raise ValueError(f"Unsupported project version: {version_raw!r}")
 
     source = payload.get("source")

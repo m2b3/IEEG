@@ -29,6 +29,7 @@ from app.project_io import save_project, load_project
 from app.referencing import (
     build_automatic_bipolar_montage,
     BipolarMontage,
+    BipolarPair,
     update_pair_channel2,
     extract_core_contact_label,
     parse_channel_label,
@@ -111,6 +112,7 @@ class MainWindow(QMainWindow):
 
         self.project_path: Path | None = None
         self.project_dirty: bool = False
+        self._saved_bipolar_montage: BipolarMontage | None = None
 
         self._update_window_title()
         self._restoring_project = False
@@ -315,6 +317,8 @@ class MainWindow(QMainWindow):
         self.loaded_file = raw_path
 
         self.viewer.set_raw(raw, picks)
+        self._saved_bipolar_montage = None
+        self._update_montage_label()
 
         ## Opening a raw file alone is not the same as opening a project
         self.project_path = None
@@ -478,6 +482,7 @@ class MainWindow(QMainWindow):
         annos = review.get("annotations", [])
         hidden_raw = review.get("hidden_channels", [])
         bad_raw = review.get("bad_channels", [])
+        saved_montage_raw = review.get("bipolar_montage")
 
         hidden = set(hidden_raw) if isinstance(hidden_raw, list) else set()
         bad = set(bad_raw) if isinstance(bad_raw, list) else set()
@@ -487,6 +492,11 @@ class MainWindow(QMainWindow):
             self.viewer.set_annotations_from_dicts(annos if isinstance(annos, list) else [])
             self.viewer.set_hidden_channels(hidden)
             self.viewer.set_bad_channels(bad)
+            self._saved_bipolar_montage = (
+                self._restore_bipolar_montage_from_dict(saved_montage_raw)
+                if isinstance(saved_montage_raw, dict)
+                else None
+            )
         finally:
             self._restoring_project = False
 
@@ -497,6 +507,11 @@ class MainWindow(QMainWindow):
         self._enable_loaded_ui()
         self._act_save.setEnabled(True)
         self._update_window_title()
+
+        self.viewer.set_monopolar_mode()
+        self.btn_edit_bipolar.setEnabled(False)
+        self._refresh_display_name_dependent_ui()
+        self._update_montage_label()
 
         self.console.log(f"Project opened: {project_path}")
 
@@ -576,6 +591,46 @@ class MainWindow(QMainWindow):
         self._act_saveas.setEnabled(True)
         self._act_close.setEnabled(True)
 
+    def _restore_bipolar_montage_from_dict(self, data: dict) -> BipolarMontage | None:
+        if not isinstance(data, dict):
+            return None
+
+        pairs_raw = data.get("pairs", [])
+        if not isinstance(pairs_raw, list):
+            return None
+
+        pairs: list[BipolarPair] = []
+        for item in pairs_raw:
+            if not isinstance(item, dict):
+                continue
+
+            name = item.get("name")
+            ch1 = item.get("ch1")
+            ch2 = item.get("ch2")
+            origin = item.get("origin", "manual")
+
+            if not isinstance(name, str) or not isinstance(ch1, str) or not isinstance(ch2, str):
+                continue
+
+            pairs.append(
+                BipolarPair(
+                    name=name,
+                    ch1=ch1,
+                    ch2=ch2,
+                    origin=str(origin),
+                )
+            )
+
+        if not pairs:
+            return None
+
+        return BipolarMontage(
+            pairs=pairs,
+            unparsed_channels=list(data.get("unparsed_channels", [])),
+            non_consecutive_channels=list(data.get("non_consecutive_channels", [])),
+            bad_channel_skips=list(data.get("bad_channel_skips", [])),
+        )
+
     # ---------------- UI ↔ viewer syncing ----------------
 
     def _on_time_range_changed(self, v: float):
@@ -630,8 +685,6 @@ class MainWindow(QMainWindow):
 
         menu.exec_(QCursor.pos())
 
-# ---------------- Viewer interaction callbacks ----------------
-
     def _push_time_to_comp_panel(self, t0: float):
         main_win = float(self.time_range.value())  # toolbar value
         self.comp_panel.set_main_time(float(t0), main_win_s=main_win)
@@ -682,6 +735,11 @@ class MainWindow(QMainWindow):
         total_s = float(self.current_raw.times[-1])
         window_s = float(self.time_range.value())
         self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))
+
+    def _update_montage_label(self) -> None:
+        mode = self.viewer.reference_mode()
+        pretty = "Bipolar" if mode == "bipolar" else "Monopolar"
+        self.montage_label.setText(f"Montage: {pretty}")
 
 # ---------------- Keyboard shortcuts / cursor nudging -------------
 
@@ -870,6 +928,7 @@ class MainWindow(QMainWindow):
         self.viewer.set_monopolar_mode()
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(False)
+        self._update_montage_label()
         self.console.log("Reference mode: Monopolar")
 
     def on_reference_bipolar(self) -> None:
@@ -877,13 +936,16 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
-        channel_names = self.viewer._channel_names
-        bad_channels = self.viewer.get_bad_channels()
+        montage = self._saved_bipolar_montage
 
-        montage = build_automatic_bipolar_montage(
-            channel_names,
-            bad_channels=bad_channels,
-        )
+        if montage is None or not montage.pairs:
+            channel_names = self.viewer.get_raw_channel_names()
+            bad_channels = self.viewer.get_bad_channels()
+
+            montage = build_automatic_bipolar_montage(
+                channel_names,
+                bad_channels=bad_channels,
+            )
 
         if not montage.pairs:
             QMessageBox.warning(
@@ -896,9 +958,10 @@ class MainWindow(QMainWindow):
         self.viewer.set_bipolar_mode(montage)
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(True)
+        self._update_montage_label()
         self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
 
-        if montage.skipped_channels:
+        if self._saved_bipolar_montage is None and montage.skipped_channels:
             skipped = ", ".join(montage.skipped_channels)
             QMessageBox.information(
                 self,
@@ -906,18 +969,6 @@ class MainWindow(QMainWindow):
                 "Some channels were not paired automatically:\n\n"
                 f"{skipped}"
             )
-
-            print("CHANNEL NAMES:")
-            for ch in channel_names[:20]:
-                print("  ", ch)
-
-            print("GENERATED PAIRS:")
-            for pair in montage.pairs[:20]:
-                print("  ", pair)
-
-            print("UNPARSED:")
-            for ch in montage.unparsed_channels[:20]:
-                print("  ", ch)
 
     def on_edit_bipolar_pairs(self) -> None:
         if self.current_raw is None:
@@ -1105,10 +1156,14 @@ class MainWindow(QMainWindow):
             bad_channel_skips=list(montage.bad_channel_skips),
         )
 
+        has_manual_edit = any(pair.origin == "manual" for pair in new_montage.pairs)
+        self._saved_bipolar_montage = new_montage if has_manual_edit else None
+
         self.viewer.set_bipolar_mode(new_montage)
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(bool(new_montage.pairs))
         self._mark_project_dirty()
+        self._update_montage_label()
         self.console.log("Bipolar pairs updated.")
 
         if cross_group_warnings:
@@ -1121,6 +1176,9 @@ class MainWindow(QMainWindow):
    
     def _on_bad_channels_changed(self) -> None:
         self._mark_project_dirty()
+
+        # Saved edited montage may no longer be valid if bad channels changed.
+        self._saved_bipolar_montage = None
 
         if self.viewer.reference_mode() != "bipolar":
             return
@@ -1139,3 +1197,4 @@ class MainWindow(QMainWindow):
         self.viewer.set_bipolar_mode(montage)
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
+        self._update_montage_label()
