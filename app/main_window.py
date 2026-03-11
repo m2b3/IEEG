@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QDoubleSpinBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
     QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
-    QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem
+    QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
+    QHeaderView
 )
 
 from PySide6.QtCore import Qt
@@ -985,97 +986,302 @@ class MainWindow(QMainWindow):
             return
 
         bad_names = set(self.viewer.get_bad_channels())
+        hidden_names = set(self.viewer.get_hidden_channels())
+
         raw_names = [
             name for name in self.viewer.get_raw_channel_names()
             if name not in bad_names
         ]
 
+        excluded_candidates = [
+            ch for ch in montage.skipped_channels
+            if ch not in bad_names and ch not in hidden_names
+        ]
+
+        # keep order, remove duplicates
+        seen_excluded = set()
+        excluded_names = []
+        for ch in excluded_candidates:
+            if ch not in seen_excluded:
+                seen_excluded.add(ch)
+                excluded_names.append(ch)
+
         dlg = QDialog(self)
         dlg.setWindowTitle("Edit bipolar pairs")
-        dlg.resize(700, 500)
+        dlg.resize(820, 560)
 
         layout = QVBoxLayout(dlg)
 
-        table = QTableWidget(len(montage.pairs), 4, dlg)
+        # --- top controls ---
+        top_bar = QHBoxLayout()
+
+        filter_label = QLabel("Filter:")
+        filter_combo = QComboBox(dlg)
+        filter_combo.addItems(["Default", "Origin: manual first"])
+
+        add_pair_btn = QToolButton(dlg)
+        add_pair_btn.setText("Add new pair")
+
+        top_bar.addWidget(filter_label)
+        top_bar.addWidget(filter_combo)
+        top_bar.addStretch(1)
+        top_bar.addWidget(add_pair_btn)
+
+        layout.addLayout(top_bar)
+
+        table = QTableWidget(0, 4, dlg)
         table.setHorizontalHeaderLabels(["Pair", "Ch1", "Ch2", "Origin"])
         table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
 
-        combos: list[QComboBox] = []
+        row_meta: list[dict] = []
 
-        for row, pair in enumerate(montage.pairs):
-            pair_item = QTableWidgetItem(pair.name)
-            pair_item.setFlags(pair_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        def _pair_display_name(ch1: str, ch2: str) -> str:
+            ch1_core = extract_core_contact_label(ch1) or ch1
+            ch2_core = extract_core_contact_label(ch2) or ch2
+            return f"{ch1_core}-{ch2_core}"
 
-            ch1_item = QTableWidgetItem(pair.ch1)
-            ch1_item.setFlags(ch1_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        def _insert_row(
+            *,
+            row_index: int,
+            pair_name: str,
+            ch1_value: str,
+            ch2_value: str,
+            origin_value: str,
+            editable_ch1: bool,
+            editable_ch2: bool,
+            ch1_choices: list[str] | None = None,
+            ch2_choices: list[str] | None = None,
+            source_pair=None,
+            is_new: bool = False,
+        ) -> None:
+            table.insertRow(row_index)
 
-            origin_item = QTableWidgetItem(pair.origin)
+            name_item = QTableWidgetItem(pair_name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row_index, 0, name_item)
+
+            if editable_ch1:
+                ch1_combo = QComboBox(table)
+                for ch in (ch1_choices or []):
+                    ch1_combo.addItem(ch)
+                if ch1_value in (ch1_choices or []):
+                    ch1_combo.setCurrentText(ch1_value)
+                table.setCellWidget(row_index, 1, ch1_combo)
+            else:
+                ch1_item = QTableWidgetItem(ch1_value)
+                ch1_item.setFlags(ch1_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row_index, 1, ch1_item)
+                ch1_combo = None
+
+            if editable_ch2:
+                ch2_combo = QComboBox(table)
+                for ch in (ch2_choices or []):
+                    ch2_combo.addItem(ch)
+                if ch2_value in (ch2_choices or []):
+                    ch2_combo.setCurrentText(ch2_value)
+                table.setCellWidget(row_index, 2, ch2_combo)
+            else:
+                ch2_item = QTableWidgetItem(ch2_value)
+                ch2_item.setFlags(ch2_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row_index, 2, ch2_item)
+                ch2_combo = None
+
+            origin_item = QTableWidgetItem(origin_value)
             origin_item.setFlags(origin_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            table.setItem(row_index, 3, origin_item)
 
-            table.setItem(row, 0, pair_item)
-            table.setItem(row, 1, ch1_item)
-            table.setItem(row, 3, origin_item)
+            meta = {
+                "source_pair": source_pair,
+                "is_new": is_new,
+                "editable_ch1": editable_ch1,
+                "editable_ch2": editable_ch2,
+                "ch1_combo": ch1_combo,
+                "ch2_combo": ch2_combo,
+            }
+            row_meta.insert(row_index, meta)
 
-            combo = QComboBox(table)
-            combo.addItems(raw_names)
-            if pair.ch2 in raw_names:
-                combo.setCurrentText(pair.ch2)
+            def _current_ch1() -> str:
+                if ch1_combo is not None:
+                    return ch1_combo.currentText().strip()
+                return ch1_value
 
-            def _update_pair_preview(new_text: str, row=row, pair=pair):
+            def _current_ch2() -> str:
+                if ch2_combo is not None:
+                    return ch2_combo.currentText().strip()
+                return ch2_value
+
+            def _refresh_preview() -> None:
+                name_item_local = table.item(row_index, 0)
+                origin_item_local = table.item(row_index, 3)
+                if name_item_local is None or origin_item_local is None:
+                    return
+
+                cur_ch1 = _current_ch1()
+                cur_ch2 = _current_ch2()
+
+                if not cur_ch1 or not cur_ch2:
+                    return
+
+                # unchanged existing row -> restore original label/origin
+                if (not is_new) and source_pair is not None and cur_ch2 == source_pair.ch2:
+                    name_item_local.setText(source_pair.name)
+                    origin_item_local.setText(source_pair.origin)
+                    return
+
+                name_item_local.setText(_pair_display_name(cur_ch1, cur_ch2))
+                origin_item_local.setText("manual")
+
+            if ch1_combo is not None:
+                ch1_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
+            if ch2_combo is not None:
+                ch2_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
+
+        def _rebuild_table(order_mode: str) -> None:
+            current_rows = []
+
+            for row in range(table.rowCount()):
+                meta = row_meta[row]
+
                 name_item = table.item(row, 0)
                 origin_item = table.item(row, 3)
-                if name_item is None:
-                    return
 
-                # unchanged row -> restore original label and origin
-                if new_text == pair.ch2:
-                    name_item.setText(pair.name)
-                    if origin_item is not None:
-                        origin_item.setText(pair.origin)
-                    return
+                if meta["ch1_combo"] is not None:
+                    ch1_value = meta["ch1_combo"].currentText().strip()
+                else:
+                    ch1_item = table.item(row, 1)
+                    ch1_value = ch1_item.text().strip() if ch1_item is not None else ""
 
-                ch1_core = extract_core_contact_label(pair.ch1) or pair.ch1
-                ch2_core = extract_core_contact_label(new_text) or new_text
-                name_item.setText(f"{ch1_core}-{ch2_core}")
+                if meta["ch2_combo"] is not None:
+                    ch2_value = meta["ch2_combo"].currentText().strip()
+                else:
+                    ch2_item = table.item(row, 2)
+                    ch2_value = ch2_item.text().strip() if ch2_item is not None else ""
 
-                if origin_item is not None:
-                    origin_item.setText("manual")
+                current_rows.append({
+                    "pair_name": name_item.text().strip() if name_item is not None else "",
+                    "ch1_value": ch1_value,
+                    "ch2_value": ch2_value,
+                    "origin_value": origin_item.text().strip() if origin_item is not None else "manual",
+                    "editable_ch1": meta["editable_ch1"],
+                    "editable_ch2": meta["editable_ch2"],
+                    "source_pair": meta["source_pair"],
+                    "is_new": meta["is_new"],
+                })
 
-            combo.currentTextChanged.connect(_update_pair_preview)
-            table.setCellWidget(row, 2, combo)
-            combos.append(combo)
+            if order_mode == "Origin: manual first":
+                current_rows.sort(key=lambda r: (0 if r["origin_value"] == "manual" else 1))
 
-        table.resizeColumnsToContents()
-        layout.addWidget(table)
+            table.setRowCount(0)
+            row_meta.clear()
+
+            for i, row_data in enumerate(current_rows):
+                ch1_choices = excluded_names if row_data["editable_ch1"] else None
+                ch2_choices = raw_names if row_data["editable_ch2"] else None
+
+                _insert_row(
+                    row_index=i,
+                    pair_name=row_data["pair_name"],
+                    ch1_value=row_data["ch1_value"],
+                    ch2_value=row_data["ch2_value"],
+                    origin_value=row_data["origin_value"],
+                    editable_ch1=row_data["editable_ch1"],
+                    editable_ch2=row_data["editable_ch2"],
+                    ch1_choices=ch1_choices,
+                    ch2_choices=ch2_choices,
+                    source_pair=row_data["source_pair"],
+                    is_new=row_data["is_new"],
+                )
+
+        # initial auto rows
+        for row, pair in enumerate(montage.pairs):
+            _insert_row(
+                row_index=row,
+                pair_name=pair.name,
+                ch1_value=pair.ch1,
+                ch2_value=pair.ch2,
+                origin_value=pair.origin,
+                editable_ch1=False,
+                editable_ch2=True,
+                ch1_choices=None,
+                ch2_choices=raw_names,
+                source_pair=pair,
+                is_new=False,
+            )
+
+        def _add_new_pair_row() -> None:
+            used_new_ch1 = set()
+
+            for row, meta in enumerate(row_meta):
+                if not meta["is_new"]:
+                    continue
+                ch1_combo = meta["ch1_combo"]
+                if ch1_combo is not None:
+                    used_new_ch1.add(ch1_combo.currentText().strip())
+
+            available_ch1 = [ch for ch in excluded_names if ch not in used_new_ch1]
+            if not available_ch1:
+                QMessageBox.information(
+                    self,
+                    "Add new pair",
+                    "No excluded channels are available to add.",
+                )
+                return
+
+            default_ch1 = available_ch1[0]
+            default_ch2 = raw_names[0] if raw_names else ""
+
+            _insert_row(
+                row_index=0,
+                pair_name=_pair_display_name(default_ch1, default_ch2) if default_ch2 else default_ch1,
+                ch1_value=default_ch1,
+                ch2_value=default_ch2,
+                origin_value="manual",
+                editable_ch1=True,
+                editable_ch2=True,
+                ch1_choices=available_ch1,
+                ch2_choices=raw_names,
+                source_pair=None,
+                is_new=True,
+            )
+
+            if filter_combo.currentText() == "Origin: manual first":
+                _rebuild_table("Origin: manual first")
+
+        add_pair_btn.clicked.connect(_add_new_pair_row)
+        filter_combo.currentTextChanged.connect(_rebuild_table)
 
         reset_btn = QToolButton(dlg)
         reset_btn.setText("Back to default")
         layout.addWidget(reset_btn)
 
         def _reset_to_default() -> None:
+            table.setRowCount(0)
+            row_meta.clear()
+
             auto_montage = build_automatic_bipolar_montage(
                 self.viewer.get_raw_channel_names(),
                 bad_channels=self.viewer.get_bad_channels(),
             )
-            auto_by_ch1 = {pair.ch1: pair for pair in auto_montage.pairs}
 
-            for row, pair in enumerate(montage.pairs):
-                auto_pair = auto_by_ch1.get(pair.ch1)
-                if auto_pair is None:
-                    continue
-
-                combo = combos[row]
-                old = combo.blockSignals(True)
-                combo.setCurrentText(auto_pair.ch2)
-                combo.blockSignals(old)
-
-                name_item = table.item(row, 0)
-                if name_item is not None:
-                    name_item.setText(auto_pair.name)
-
-                origin_item = table.item(row, 3)
-                if origin_item is not None:
-                    origin_item.setText(auto_pair.origin)
+            for row, pair in enumerate(auto_montage.pairs):
+                _insert_row(
+                    row_index=row,
+                    pair_name=pair.name,
+                    ch1_value=pair.ch1,
+                    ch2_value=pair.ch2,
+                    origin_value=pair.origin,
+                    editable_ch1=False,
+                    editable_ch2=True,
+                    ch1_choices=None,
+                    ch2_choices=raw_names,
+                    source_pair=pair,
+                    is_new=False,
+                )
 
         reset_btn.clicked.connect(_reset_to_default)
 
@@ -1094,38 +1300,40 @@ class MainWindow(QMainWindow):
         seen_names = set()
         cross_group_warnings = []
 
-        for pair, combo in zip(montage.pairs, combos):
-            new_ch2 = combo.currentText().strip()
+        for row, meta in enumerate(row_meta):
+            source_pair = meta["source_pair"]
 
-            if not new_ch2:
-                QMessageBox.warning(
-                    self,
-                    "Edit bipolar pairs",
-                    "Empty channel name is not allowed.",
-                )
-                return
-
-            if new_ch2 == pair.ch1:
-                QMessageBox.warning(
-                    self,
-                    "Edit bipolar pairs",
-                    f"Invalid pair for {pair.ch1}: ch1 and ch2 cannot be the same.",
-                )
-                return
-
-            if new_ch2 in bad_names:
-                QMessageBox.warning(
-                    self,
-                    "Edit bipolar pairs",
-                    f"{new_ch2} is marked as bad and cannot be used in bipolar mode.",
-                )
-                return
-
-            # only changed rows become manual
-            if new_ch2 == pair.ch2:
-                new_pair = pair
+            if meta["ch1_combo"] is not None:
+                new_ch1 = meta["ch1_combo"].currentText().strip()
             else:
-                new_pair = update_pair_channel2(pair, new_ch2)
+                ch1_item = table.item(row, 1)
+                new_ch1 = ch1_item.text().strip() if ch1_item is not None else ""
+
+            if meta["ch2_combo"] is not None:
+                new_ch2 = meta["ch2_combo"].currentText().strip()
+            else:
+                ch2_item = table.item(row, 2)
+                new_ch2 = ch2_item.text().strip() if ch2_item is not None else ""
+
+            if new_ch1 == new_ch2:
+                QMessageBox.warning(
+                    self,
+                    "Edit bipolar pairs",
+                    f"Invalid pair for {new_ch1}: ch1 and ch2 cannot be the same.",
+                )
+                return
+
+            if source_pair is not None and not meta["is_new"] and new_ch2 == source_pair.ch2:
+                new_pair = source_pair
+            elif source_pair is not None and not meta["is_new"]:
+                new_pair = update_pair_channel2(source_pair, new_ch2)
+            else:
+                new_pair = BipolarPair(
+                    name=_pair_display_name(new_ch1, new_ch2),
+                    ch1=new_ch1,
+                    ch2=new_ch2,
+                    origin="manual",
+                )
 
             if new_pair.name in seen_names:
                 QMessageBox.warning(
@@ -1136,7 +1344,7 @@ class MainWindow(QMainWindow):
                 return
             seen_names.add(new_pair.name)
 
-            parsed_ch1 = parse_channel_label(pair.ch1)
+            parsed_ch1 = parse_channel_label(new_pair.ch1)
             parsed_ch2 = parse_channel_label(new_pair.ch2)
             if (
                 parsed_ch1 is not None
@@ -1144,7 +1352,7 @@ class MainWindow(QMainWindow):
                 and parsed_ch1.electrode_prefix != parsed_ch2.electrode_prefix
             ):
                 cross_group_warnings.append(
-                    f"{new_pair.name} ({pair.ch1} vs {new_pair.ch2})"
+                    f"{new_pair.name} ({new_pair.ch1} vs {new_pair.ch2})"
                 )
 
             new_pairs.append(new_pair)
@@ -1156,22 +1364,16 @@ class MainWindow(QMainWindow):
             bad_channel_skips=list(montage.bad_channel_skips),
         )
 
-        has_manual_edit = any(pair.origin == "manual" for pair in new_montage.pairs)
-        self._saved_bipolar_montage = new_montage if has_manual_edit else None
-
         if cross_group_warnings:
             msg = QMessageBox(self)
             msg.setIcon(QMessageBox.Icon.Warning)
             msg.setWindowTitle("Cross-electrode bipolar pairs")
-            msg.setText(
-                "Some edited pairs use channels from different electrode groups."
-            )
+            msg.setText("Some edited pairs use channels from different electrode groups.")
             msg.setInformativeText(
                 "This may be intentional, but it is unusual clinically.\n\n"
                 "Do you want to keep these edits?"
             )
             msg.setDetailedText("\n".join(cross_group_warnings))
-
             keep_btn = msg.addButton("Keep edit", QMessageBox.ButtonRole.AcceptRole)
             cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
             msg.setDefaultButton(cancel_btn)
@@ -1179,6 +1381,9 @@ class MainWindow(QMainWindow):
 
             if msg.clickedButton() is not keep_btn:
                 return
+
+        has_manual_edit = any(pair.origin == "manual" for pair in new_montage.pairs)
+        self._saved_bipolar_montage = new_montage if has_manual_edit else None
 
         self.viewer.set_bipolar_mode(new_montage)
         self._refresh_display_name_dependent_ui()
