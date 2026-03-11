@@ -1159,20 +1159,33 @@ class MainWindow(QMainWindow):
         has_manual_edit = any(pair.origin == "manual" for pair in new_montage.pairs)
         self._saved_bipolar_montage = new_montage if has_manual_edit else None
 
+        if cross_group_warnings:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Cross-electrode bipolar pairs")
+            msg.setText(
+                "Some edited pairs use channels from different electrode groups."
+            )
+            msg.setInformativeText(
+                "This may be intentional, but it is unusual clinically.\n\n"
+                "Do you want to keep these edits?"
+            )
+            msg.setDetailedText("\n".join(cross_group_warnings))
+
+            keep_btn = msg.addButton("Keep edit", QMessageBox.ButtonRole.AcceptRole)
+            cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
+            msg.setDefaultButton(cancel_btn)
+            msg.exec()
+
+            if msg.clickedButton() is not keep_btn:
+                return
+
         self.viewer.set_bipolar_mode(new_montage)
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(bool(new_montage.pairs))
         self._mark_project_dirty()
         self._update_montage_label()
         self.console.log("Bipolar pairs updated.")
-
-        if cross_group_warnings:
-            QMessageBox.warning(
-                self,
-                "Cross-electrode bipolar pairs",
-                "Some edited pairs use channels from different electrode groups:\n\n"
-                + "\n".join(cross_group_warnings),
-            )
    
     def _on_bad_channels_changed(self) -> None:
         self._mark_project_dirty()
