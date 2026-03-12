@@ -1,25 +1,42 @@
 # I_EEG
 
-This is an EEG / iEEG viewer built with PySide6, PyQtGraph and MNE.
+A desktop application for reviewing intracranial EEG (iEEG) recordings with interactive visualization, rereferencing tools, annotation support, and project-based review workflows.
 
-It allows visualisation and interaction with multi-channel electrophysiological recordings (EDF, FIF, BDF, etc.).
+Built with PySide6, PyQtGraph and MNE.
 
-The viewer is designed for interactive exploration and review of EEG/iEEG data.
+## Overview
 
----
-# Main Features
+iEEG Tool is designed to support efficient clinical or research review of multichannel EEG/iEEG data. The viewer provides a stacked multichannel display, interactive navigation, rereferencing options, annotation tools, and a project workflow that preserves review state across sessions.
 
-Multi-channel EEG/iEEG visualization
+The application is built around an MNE-based loading pipeline and a PySide6 / PyQtGraph user interface.
 
-Fast interactive navigation
+## Main features
 
-Channel selection and scaling
+- Load EEG/iEEG recordings from common electrophysiology formats
+- Scroll through multichannel data with adjustable time window, channel count, and gain
+- Switch between multiple rereferencing modes:
+  - Monopolar
+  - Bipolar
+  - Average
+  - Median
+  - Common reference
+- Automatically generate bipolar montages from channel labels
+- Edit bipolar pairs manually
+- Mark channels as hidden or bad
+- Add and edit annotations directly in the viewer
+- Save and reopen project state
+- Use a dedicated computation panel for selected channels
 
-Manual event/segment annotation
+## Supported file formats
 
-Persistent review projects (.ieeg)
+The current loading pipeline supports:
 
-Restoration of annotations and review state
+- `.edf`
+- `.bdf`
+- `.fif`
+- `.vhdr`
+- `.set`
+- `.cnt`
 
 # 1.1 How the Program Works
 
@@ -124,6 +141,7 @@ File → Save As
 
 ---
 
+
 # 2. Installation
 
 ## 2.1 Install Python
@@ -207,3 +225,7 @@ projects save and reload correctly
 # 6. Project status
 
 ⚠️ The project is under active development.
+
+
+
+For detailed usage instructions, see [User Guide](docs/user_guide.md).

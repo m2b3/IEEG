@@ -956,27 +956,27 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             times = np.asarray(times, dtype=float)
 
 
-        elif self._reference_mode == "average":
-            raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = raw[raw_ch_picks, start_samp:end_samp]
+        elif self._reference_mode in ("average", "median"):
+            # Global reference pool: all non-bad channels, even if some are hidden
+            ref_abs = self._all_nonbad_abs_indices()
+            if not ref_abs:
+                return None, None
 
-            data_v = np.asarray(data_v, dtype=float)
+            ref_raw_picks = picks[np.asarray(ref_abs, dtype=int)]
+            ref_data, times = raw[ref_raw_picks, start_samp:end_samp]
+            ref_data = np.asarray(ref_data, dtype=float)
             times = np.asarray(times, dtype=float)
 
-            if data_v.shape[0] > 0:
-                ref = np.mean(data_v, axis=0, keepdims=True)
-                data_v = data_v - ref
-
-        elif self._reference_mode == "median":
-            raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = raw[raw_ch_picks, start_samp:end_samp]
-
+            vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
+            data_v, _ = raw[vis_raw_picks, start_samp:end_samp]
             data_v = np.asarray(data_v, dtype=float)
-            times = np.asarray(times, dtype=float)
 
-            if data_v.shape[0] > 0:
-                ref = np.median(data_v, axis=0, keepdims=True)
-                data_v = data_v - ref
+            if self._reference_mode == "average":
+                ref = np.mean(ref_data, axis=0, keepdims=True)
+            else:
+                ref = np.median(ref_data, axis=0, keepdims=True)
+
+            data_v = data_v - ref
 
         
         elif self._reference_mode == "common":
@@ -1465,6 +1465,20 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         return visible
     
+    def _all_nonbad_abs_indices(self) -> list[int]:
+        names = self.get_channel_names()
+        usable = []
+
+        for abs_idx, ch_name in enumerate(names):
+            raw_name = self._channel_names[abs_idx] if abs_idx < len(self._channel_names) else ch_name
+
+            if raw_name in self._bad_channels:
+                continue
+
+            usable.append(abs_idx)
+
+        return usable
+
     def _visible_window_abs_indices(self) -> list[int]:
         all_vis = self._all_visible_abs_indices()
         count = int(self._chan_range)

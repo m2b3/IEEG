@@ -92,14 +92,7 @@ def build_menubar(main_window):
 
     # -------- Help --------
     help_menu = menubar.addMenu("Help")
-    add_action(help_menu, "Information", lambda: print("TODO"))
-
-    ## Submenu Licence
-    lic_menu = help_menu.addMenu("Activate Licence")
-    add_action(lic_menu, "Activate 30-day trial", lambda: print("TODO"))
-    add_action(lic_menu, "Export Fingerprint File", lambda: print("TODO"))
-    add_action(lic_menu, "Import Activation Key", lambda: print("TODO"))
-    
+    add_action(help_menu, "Tips", lambda: print("TODO"))    
     add_action(help_menu, "Shortcuts", lambda: print("TODO"))
 
 
