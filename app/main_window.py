@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         self.resize(1400, 800)
 
         # ---- Menu bar ----
+        self._act_reset_zoom: QAction | None = None
         self._act_save, self._act_saveas, self._act_close = build_menubar(self)
         self._act_save.setEnabled(False)
         self._act_saveas.setEnabled(False)
@@ -171,7 +172,7 @@ class MainWindow(QMainWindow):
         self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
         self.viewer.requestOpenAnnotationsPanel.connect(self._open_annotations_panel)
-
+        self.viewer.zoomStateChanged.connect(self._on_zoom_state_changed)
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
         self.sc_left  = QShortcut(QKeySequence(Qt.Key.Key_Left),  self)
@@ -1568,3 +1569,19 @@ class MainWindow(QMainWindow):
         self._update_montage_label()
         self.console.log(f"Reference mode: Common ({ref_name})")
 
+# ---------------- Zoom window  -------------
+    def on_zoom_selection(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Zoom Selection", "Load a dataset first.")
+            return
+
+        self.viewer.start_zoom_selection_mode()
+        self.console.log("Zoom selection mode: drag with left mouse. Esc to cancel.")
+
+    def on_reset_zoom(self) -> None:
+        self.viewer.reset_zoom_to_base()
+        self.console.log("Zoom reset.")
+
+    def _on_zoom_state_changed(self, has_zoom_base: bool) -> None:
+        if self._act_reset_zoom is not None:
+            self._act_reset_zoom.setEnabled(bool(has_zoom_base))

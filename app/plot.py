@@ -74,6 +74,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     #  Saving data
     hiddenChannelsChanged = Signal()
     badChannelsChanged = Signal()
+    #  Zoom window
+    zoomStateChanged = Signal(bool)  # True when a zoom base view exists
 
     # ---------------- Init ----------------
     def __init__(self, parent=None):
@@ -194,6 +196,16 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cached_bipolar_data = None
         self._common_ref_name: str | None = None
 
+        # ---- Zoom selection ----
+        self._zoom_mode: bool = False
+        self._zoom_base_view: dict[str, float | int] | None = None
+        self._zoom_history: list[dict[str, float | int]] = []
+
+        self._zoom_drag_active: bool = False
+        self._zoom_drag_start_t: float | None = None
+        self._zoom_drag_start_y: float | None = None
+        self._zoom_preview: QtWidgets.QGraphicsRectItem | None = None
+
     def clear(self) -> None:
         """Reset viewer to an empty state."""
         self._raw = None
@@ -206,6 +218,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._display_names = []
         self._monopolar_abs_to_pick_idx = []
         self._bipolar_pairs = []
+
+        self._common_ref_name = None
+
+        self._zoom_mode = False
+        self._zoom_base_view = None
+        self._zoom_history = []
+        self._zoom_drag_active = False
+        self._zoom_drag_start_t = None
+        self._zoom_drag_start_y = None
 
         self._t_start = 0.0
         self._ch_start = 0
@@ -240,6 +261,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._clear_plots()
         self._clear_bipolar_cache()
         self._common_ref_name = None
+
+        self.zoomStateChanged.emit(False)
 
         # Keep bottom axis available so the plot comes back cleanly on next load
         self.signal_plot.showAxis("bottom")
@@ -291,6 +314,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._annotations.clear()
         self._clear_annotation_items()
         self.annotationsChanged.emit()
+
+        self._zoom_mode = False
+        self._zoom_base_view = None
+        self._zoom_history = []
+        self._zoom_drag_active = False
+        self._zoom_drag_start_t = None
+        self._zoom_drag_start_y = None
+        self.zoomStateChanged.emit(False)
 
         # Show axis + grid now that we have data
         self.signal_plot.showAxis("bottom")
@@ -591,7 +622,158 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def common_reference_name(self) -> str | None:
         return self._common_ref_name
 
-    # ---------------- Interaction ----------------
+    # ---------------- Zoom window ----------------
+    def _current_view_state(self) -> dict[str, float | int]:
+        return {
+            "t_start": float(self._t_start),
+            "time_range": float(self._time_range),
+            "ch_start": int(self._ch_start),
+            "chan_range": int(self._chan_range),
+        }
+
+    def _apply_view_state(self, state: dict[str, float | int]) -> None:
+        self._t_start = float(state["t_start"])
+        self._time_range = float(state["time_range"])
+        self._ch_start = int(state["ch_start"])
+        self._chan_range = int(state["chan_range"])
+
+        self._clamp_time_start()
+        self._clamp_ch_start()
+        self.render()
+        self.timeWindowChanged.emit(self._t_start)
+        self.channelWindowChanged.emit(self._ch_start)
+
+    def start_zoom_selection_mode(self) -> None:
+        if self._raw is None or self._picks.size == 0:
+            return
+
+        # cancel annotation mode if active
+        if self._annotation_mode:
+            self.stop_annotation_mode()
+
+        self._zoom_mode = True
+        self._zoom_drag_active = False
+        self._zoom_drag_start_t = None
+        self._zoom_drag_start_y = None
+
+        # Capture the base view only once, at the start of a zoom session
+        if self._zoom_base_view is None:
+            self._zoom_base_view = self._current_view_state()
+            self._zoom_history = []
+            self.zoomStateChanged.emit(True)
+
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+    def stop_zoom_selection_mode(self) -> None:
+        self._zoom_mode = False
+        self._zoom_drag_active = False
+        self._zoom_drag_start_t = None
+        self._zoom_drag_start_y = None
+
+        if self._zoom_preview is not None:
+            try:
+                self.signal_plot.removeItem(self._zoom_preview)
+            except Exception:
+                pass
+            self._zoom_preview = None
+
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def reset_zoom_to_base(self) -> None:
+        if self._zoom_base_view is None:
+            return
+
+        self._apply_view_state(self._zoom_base_view)
+        self._zoom_history.clear()
+        self._zoom_base_view = None
+        self.stop_zoom_selection_mode()
+        self.zoomStateChanged.emit(False)
+
+    def zoom_back_one_step(self) -> None:
+        if not self._zoom_history:
+            return
+
+        state = self._zoom_history.pop()
+        self._apply_view_state(state)
+
+        if not self._zoom_history and self._zoom_base_view is None:
+            self.zoomStateChanged.emit(False)
+
+    def _update_zoom_preview(self, *, t0: float, t1: float, y0: float, y1: float) -> None:
+        x0, x1 = (t0, t1) if t0 <= t1 else (t1, t0)
+        yy0, yy1 = (y0, y1) if y0 <= y1 else (y1, y0)
+
+        if self._zoom_preview is None:
+            rect = QtWidgets.QGraphicsRectItem()
+            rect.setPen(pg.mkPen((100, 200, 255), width=1))
+            rect.setBrush(pg.mkBrush(100, 200, 255, 40))
+            rect.setZValue(20)
+            self.signal_plot.addItem(rect)
+            self._zoom_preview = rect
+
+        self._zoom_preview.setRect(x0, yy0, max(1e-6, x1 - x0), max(1e-6, yy1 - yy0))
+
+    def _apply_zoom_selection(self, *, t0: float, t1: float, y0: float, y1: float) -> None:
+        if self._raw is None or self._picks.size == 0:
+            return
+
+        if abs(t1 - t0) < 1e-6 or abs(y1 - y0) < 1e-6:
+            return
+
+        # Time range from selection
+        t_min, t_max = (t0, t1) if t0 <= t1 else (t1, t0)
+        new_time_range = max(0.1, float(t_max - t_min))
+
+        # Channel range from selection (current visible channels only)
+        visible_abs = list(getattr(self, "_last_visible_abs", []))
+        if not visible_abs:
+            return
+
+        n_vis = len(visible_abs)
+        plot_row_a = int(min(y0, y1) // float(self._spacing))
+        plot_row_b = int(max(y0, y1) // float(self._spacing))
+
+        plot_row_a = max(0, min(plot_row_a, n_vis - 1))
+        plot_row_b = max(0, min(plot_row_b, n_vis - 1))
+
+        data_row_top = n_vis - 1 - plot_row_b
+        data_row_bottom = n_vis - 1 - plot_row_a
+
+        data_row_top = max(0, min(data_row_top, n_vis - 1))
+        data_row_bottom = max(0, min(data_row_bottom, n_vis - 1))
+
+        sel_visible_abs = visible_abs[data_row_top : data_row_bottom + 1]
+        if not sel_visible_abs:
+            return
+
+        all_vis = self._all_visible_abs_indices()
+        if not all_vis:
+            return
+
+        first_abs = sel_visible_abs[0]
+        last_abs = sel_visible_abs[-1]
+
+        if first_abs not in all_vis or last_abs not in all_vis:
+            return
+
+        new_ch_start = all_vis.index(first_abs)
+        new_chan_range = max(1, len(sel_visible_abs))
+
+        # save current view before zooming
+        self._zoom_history.append(self._current_view_state())
+
+        self._t_start = float(t_min)
+        self._time_range = float(new_time_range)
+        self._ch_start = int(new_ch_start)
+        self._chan_range = int(new_chan_range)
+
+        self._clamp_time_start()
+        self._clamp_ch_start()
+        self.render()
+        self.timeWindowChanged.emit(self._t_start)
+        self.channelWindowChanged.emit(self._ch_start)
+    
+    # ---------------- Basic Interactions ----------------
 
     def _wheel_dy(self, ev) -> int:
             ad = ev.angleDelta()
@@ -656,6 +838,60 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 ev.ignore()
                 return True
 
+            # --- Zoom selection mode ---
+            if getattr(self, "_zoom_mode", False):
+                if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Escape:
+                    self.stop_zoom_selection_mode()
+                    ev.accept()
+                    return True
+
+                if ev.type() in (
+                    QEvent.Type.MouseButtonPress,
+                    QEvent.Type.MouseMove,
+                    QEvent.Type.MouseButtonRelease,
+                ):
+                    scene_pos = self.mapToScene(ev.position().toPoint())
+                    if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                        return super().eventFilter(obj, ev)
+
+                    p = self._sig_vb.mapSceneToView(scene_pos)
+                    t = float(p.x())
+                    y = float(p.y())
+
+                    if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.LeftButton:
+                        self._zoom_drag_active = True
+                        self._zoom_drag_start_t = t
+                        self._zoom_drag_start_y = y
+                        self._update_zoom_preview(t0=t, t1=t, y0=y, y1=y)
+                        ev.accept()
+                        return True
+
+                    if ev.type() == QEvent.Type.MouseMove and self._zoom_drag_active:
+                        t0 = float(self._zoom_drag_start_t if self._zoom_drag_start_t is not None else t)
+                        y0 = float(self._zoom_drag_start_y if self._zoom_drag_start_y is not None else y)
+                        self._update_zoom_preview(t0=t0, t1=t, y0=y0, y1=y)
+                        ev.accept()
+                        return True
+
+                    if ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.LeftButton:
+                        if not self._zoom_drag_active:
+                            return True
+
+                        t0 = float(self._zoom_drag_start_t if self._zoom_drag_start_t is not None else t)
+                        y0 = float(self._zoom_drag_start_y if self._zoom_drag_start_y is not None else y)
+
+                        self._zoom_drag_active = False
+                        self._zoom_drag_start_t = None
+                        self._zoom_drag_start_y = None
+
+                        self._apply_zoom_selection(t0=t0, t1=t, y0=y0, y1=y)
+                        self.stop_zoom_selection_mode()
+                        ev.accept()
+                        return True
+
+
+
+
             # --- NEW: annotation click/drag ---
             if getattr(self, "_annotation_mode", False) and getattr(self, "_pending_kind", None) is not None:
                 if ev.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease):
@@ -713,6 +949,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._raw is None or self._visible_abs.size == 0:
             return
 
+
+        if event.double():
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.zoom_back_one_step()
+            return
+        
         pos = event.scenePos()
         in_label = self._label_vb.sceneBoundingRect().contains(pos)
         in_signal = self._sig_vb.sceneBoundingRect().contains(pos)
@@ -762,6 +1004,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 self._set_bad_channels(selected_names, bad=not all_bad)
 
             return
+
+
 
         # ---- Left click: selection ----
         if event.button() != Qt.MouseButton.LeftButton:

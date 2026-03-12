@@ -35,6 +35,14 @@ def build_menubar(main_window):
     main_window._act_saveas = act_saveas
     main_window._act_close = act_close
 
+    # -------- View --------
+    view_menu = menubar.addMenu("View")
+    add_action(view_menu, "Zoom Selection", main_window.on_zoom_selection)
+    act_reset_zoom = add_action(view_menu, "Reset Zoom", main_window.on_reset_zoom)
+    act_reset_zoom.setEnabled(False)
+
+    main_window._act_reset_zoom = act_reset_zoom
+
     # -------- Edit --------
     edit_menu = menubar.addMenu("Edit")
     add_action(edit_menu, "Implantation", lambda: print("TODO: Implantation"))
@@ -98,7 +106,7 @@ def build_menubar(main_window):
 
     # Store what should be disabled until a file is loaded
     main_window._menus_disabled_until_loaded = [
-        edit_menu, pre_menu, detect_menu, review_menu, results_menu
+        view_menu, edit_menu, pre_menu, detect_menu, review_menu, results_menu
     ]
     main_window._menus_always_enabled = [file_menu, help_menu]# ✅ store what should be disabled until a file is loaded
     
