@@ -141,7 +141,10 @@ class MainWindow(QMainWindow):
         self.anno_dock.hide()
         self._anno_items_by_id = {}
         self.anno_list.itemClicked.connect(self._on_annotation_item_clicked)
-
+        self.anno_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.anno_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.anno_list.customContextMenuRequested.connect(self._on_annotation_list_context_menu)
+       
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
@@ -167,7 +170,8 @@ class MainWindow(QMainWindow):
         self.viewer.badChannelsChanged.connect(self._on_bad_channels_changed)
         self.viewer.requestEditAnnotation.connect(self._on_request_edit_annotation)
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
-        
+        self.viewer.requestOpenAnnotationsPanel.connect(self._open_annotations_panel)
+
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
         self.sc_left  = QShortcut(QKeySequence(Qt.Key.Key_Left),  self)
@@ -229,14 +233,23 @@ class MainWindow(QMainWindow):
         self.project_path = None
         self.project_dirty = False
         self._saved_bipolar_montage = None
+        self._restoring_project = False
 
-        self.viewer.clear()
+        # Avoid viewer->MainWindow signal side effects during teardown
+        self.viewer.blockSignals(True)
+        try:
+            self.viewer.clear()
+        finally:
+            self.viewer.blockSignals(False)
 
         self.tb.setEnabled(False)
         self.timeline.hide()
+        self.time_ctl.set_range(0.0, 0.0, 0.0)
+
         self.comp_dock.hide()
         self.anno_dock.hide()
         self.anno_list.clear()
+        self._anno_items_by_id.clear()
 
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(False)
@@ -255,6 +268,7 @@ class MainWindow(QMainWindow):
     # ---------------- UI construction ----------------
 
     def _build_toolbar(self):
+
         self.tb = QToolBar("Controls")
         self.tb.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.tb)
@@ -957,6 +971,30 @@ class MainWindow(QMainWindow):
         self.anno_list.setCurrentItem(item)
         self.anno_list.scrollToItem(item)
 
+    def _open_annotations_panel(self) -> None:
+        self.anno_dock.show()
+        self.anno_dock.raise_()
+
+    def _on_annotation_list_context_menu(self, pos) -> None:
+        items = self.anno_list.selectedItems()
+        if not items:
+            return
+
+        menu = QMenu(self)
+        act_delete = menu.addAction("Delete selected annotation(s)")
+
+        chosen = menu.exec_(self.anno_list.mapToGlobal(pos))
+        if chosen != act_delete:
+            return
+
+        ids = []
+        for item in items:
+            anno_id = item.data(Qt.ItemDataRole.UserRole)
+            if anno_id:
+                ids.append(str(anno_id))
+
+        for anno_id in ids:
+            self.viewer.delete_annotation(anno_id)
 
 # ---------------- Referencing  -------------
     def _refresh_display_name_dependent_ui(self) -> None:

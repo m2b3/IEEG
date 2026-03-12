@@ -70,6 +70,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     annotationsChanged = Signal()
     requestEditAnnotation = Signal(str)  # anno_id
     annotationSelected = QtCore.Signal(str)  # emitted when user clicks an annotation in the plot
+    requestOpenAnnotationsPanel = Signal()
     #  Saving data
     hiddenChannelsChanged = Signal()
     badChannelsChanged = Signal()
@@ -238,15 +239,17 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.stop_annotation_mode()
         self._clear_plots()
         self._clear_bipolar_cache()
+        self._common_ref_name = None
 
-        for ax in ("bottom", "left", "right", "top"):
-            self.signal_plot.hideAxis(ax)
+        # Keep bottom axis available so the plot comes back cleanly on next load
+        self.signal_plot.showAxis("bottom")
+        self.signal_plot.setLabel("bottom", "")
 
         self.annotationsChanged.emit()
         self.hiddenChannelsChanged.emit()
         self.badChannelsChanged.emit()
-        self.update()
-   
+        self.repaint()
+        
     # ---------------- Public API ----------------
     def channel_start(self) -> int:
         return int(self._ch_start)
@@ -293,6 +296,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.signal_plot.showAxis("bottom")
         self.signal_plot.setLabel("bottom", "Time (s)")
         self.signal_plot.showGrid(x=True, y=True, alpha=0.15)
+        self.signal_plot.update()
 
         self.render()
         self.channelWindowChanged.emit(self._ch_start)
@@ -738,6 +742,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             menu = QtWidgets.QMenu()
             act_open_panel = menu.addAction("Open Computation Panel")
+            act_open_annos = menu.addAction("Open Annotations Panel")
             menu.addSeparator()
 
             act_hide = menu.addAction(f"Hide ({len(selected_names)})")
@@ -749,6 +754,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             chosen = menu.exec_(QtGui.QCursor.pos())
             if chosen == act_open_panel:
                 self.requestOpenComputationPanel.emit(selected_abs)
+            elif chosen == act_open_annos:
+                self.requestOpenAnnotationsPanel.emit()
             elif chosen == act_hide:
                 self._hide_channels(selected_names)
             elif chosen == act_bad:
