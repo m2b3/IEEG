@@ -45,6 +45,9 @@ class PSDIntervalDialog(QDialog):
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #ff6b6b;")
 
+        self._selected_channel: str | None = None
+        self._curve_items: dict[str, pg.PlotDataItem] = {}
+
         form = QFormLayout()
         form.addRow("Start time", self.start_spin)
         form.addRow("Stop time", self.stop_spin)
@@ -103,6 +106,10 @@ class PSDPanel(QWidget):
 
         self._psd_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
+        self._selected_channel = None
+        self._curve_items = {}
+
+
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -115,9 +122,11 @@ class PSDPanel(QWidget):
         self.displayed_list.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection
         )
+        self.displayed_list.itemSelectionChanged.connect(self._on_displayed_selection_changed)
+        self.excluded_list.itemSelectionChanged.connect(self._on_excluded_selection_changed)
 
-        self.btn_exclude = QPushButton(">>")
-        self.btn_include = QPushButton("<<")
+        self.btn_exclude = QPushButton("<<")
+        self.btn_include = QPushButton(">>")
         self.btn_exclude.clicked.connect(self._move_to_excluded)
         self.btn_include.clicked.connect(self._move_to_displayed)
 
@@ -186,6 +195,9 @@ class PSDPanel(QWidget):
 
     def _move_to_excluded(self) -> None:
         selected = [item.text() for item in self.displayed_list.selectedItems()]
+        if not selected:
+            return
+
         for ch in selected:
             if ch in self._displayed_names:
                 self._displayed_names.remove(ch)
@@ -194,11 +206,19 @@ class PSDPanel(QWidget):
 
         self._excluded_names = self._ordered(self._excluded_names)
         self._displayed_names = self._ordered(self._displayed_names)
+
+        if self._selected_channel in selected:
+            self._selected_channel = selected[0]
+
         self._refresh_lists()
+        self._sync_selection_to_lists()
         self._refresh_plot()
 
     def _move_to_displayed(self) -> None:
         selected = [item.text() for item in self.excluded_list.selectedItems()]
+        if not selected:
+            return
+
         for ch in selected:
             if ch in self._excluded_names:
                 self._excluded_names.remove(ch)
@@ -207,7 +227,12 @@ class PSDPanel(QWidget):
 
         self._excluded_names = self._ordered(self._excluded_names)
         self._displayed_names = self._ordered(self._displayed_names)
+
+        if self._selected_channel in selected:
+            self._selected_channel = selected[0]
+
         self._refresh_lists()
+        self._sync_selection_to_lists()
         self._refresh_plot()
 
     def _rebuild_psd_cache(self) -> None:
@@ -269,6 +294,8 @@ class PSDPanel(QWidget):
         self.plot.setLabel("left", "Power Spectral Density (dB/Hz)")
         self.plot.setTitle(f"PSD from {self._start_s:.3f} s to {self._stop_s:.3f} s")
 
+        self._curve_items = {}
+
         for ch_name in self._displayed_names:
             cached = self._psd_cache.get(ch_name)
             if cached is None:
@@ -279,4 +306,84 @@ class PSDPanel(QWidget):
                 continue
 
             y = 10.0 * np.log10(np.maximum(psd, 1e-20))
-            self.plot.plot(freqs, y, pen=pg.mkPen(width=1))
+
+            curve_item = pg.PlotCurveItem(freqs, y, pen=pg.mkPen(width=1))
+            curve_item.setClickable(True, width=8)
+            curve_item.sigClicked.connect(self._on_curve_clicked)
+
+            # stocker le channel associé
+            curve_item._channel_name = ch_name
+
+            self.plot.addItem(curve_item)
+            self._curve_items[ch_name] = curve_item
+
+        self._apply_selection_highlight()
+
+    def _on_curve_clicked(self, curve) -> None:
+        ch_name = getattr(curve, "_channel_name", None)
+        if ch_name is None:
+            return
+
+        self._selected_channel = ch_name
+        self._sync_selection_to_lists()
+        self._apply_selection_highlight()
+
+    def _on_displayed_selection_changed(self) -> None:
+        items = self.displayed_list.selectedItems()
+        if not items:
+            return
+
+        self._selected_channel = items[0].text()
+        self._apply_selection_highlight()
+
+    def _on_excluded_selection_changed(self) -> None:
+        items = self.excluded_list.selectedItems()
+        if not items:
+            return
+
+        self._selected_channel = items[0].text()
+        self._apply_selection_highlight()
+
+    def _sync_selection_to_lists(self) -> None:
+        if self._selected_channel is None:
+            return
+
+        self.displayed_list.blockSignals(True)
+        self.excluded_list.blockSignals(True)
+
+        try:
+            self.displayed_list.clearSelection()
+            self.excluded_list.clearSelection()
+
+            for i in range(self.displayed_list.count()):
+                item = self.displayed_list.item(i)
+                if item.text() == self._selected_channel:
+                    item.setSelected(True)
+                    self.displayed_list.scrollToItem(item)
+                    break
+
+            for i in range(self.excluded_list.count()):
+                item = self.excluded_list.item(i)
+                if item.text() == self._selected_channel:
+                    item.setSelected(True)
+                    self.excluded_list.scrollToItem(item)
+                    break
+        finally:
+            self.displayed_list.blockSignals(False)
+            self.excluded_list.blockSignals(False)
+                         
+    def _apply_selection_highlight(self) -> None:
+        selected = getattr(self, "_selected_channel", None)
+
+        for ch_name, curve in self._curve_items.items():
+            if ch_name == selected:
+                curve.setPen(pg.mkPen("y", width=3))
+            else:
+                curve.setPen(pg.mkPen(width=1))
+
+        for widget in (self.displayed_list, self.excluded_list):
+            for i in range(widget.count()):
+                item = widget.item(i)
+                font = item.font()
+                font.setBold(item.text() == selected)
+                item.setFont(font)

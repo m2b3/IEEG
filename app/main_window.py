@@ -1633,6 +1633,22 @@ class MainWindow(QMainWindow):
         self.psd_panel.raise_()
         self.psd_panel.activateWindow()
 
+        try:
+            self.psd_panel.set_psd_context(
+                raw=self.current_raw,
+                picks=self.current_picks,
+                display_names=display_names,
+                bad_names=bad_names,
+                start_s=start_s,
+                stop_s=stop_s,
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "PSD Panel", str(e))
+            self.psd_panel = None
+            return
+
     
     def _on_psd_panel_destroyed(self, *args) -> None:
         self.psd_panel = None
