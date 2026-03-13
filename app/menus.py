@@ -50,7 +50,7 @@ def build_menubar(main_window):
 
     # -------- Preprocessing --------
     pre_menu = menubar.addMenu("Preprocessing")
-    add_action(pre_menu, "Power Spectrum", lambda: print("TODO: Power Spectrum"))
+    add_action(pre_menu, "Power Spectrum", main_window.open_psd_panel)
     add_action(pre_menu, "Permanent Filters", lambda: print("TODO: Permanent Filters"))
     
     ## Submenu Re-Referencing

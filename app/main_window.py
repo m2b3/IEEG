@@ -35,6 +35,7 @@ from app.referencing import (
     extract_core_contact_label,
     parse_channel_label,
 )
+from app.psd_panel import PSDIntervalDialog, PSDPanel
 
 
 class MainWindow(QMainWindow):
@@ -113,6 +114,8 @@ class MainWindow(QMainWindow):
         self.project_path: Path | None = None
         self.project_dirty: bool = False
         self._saved_bipolar_montage: BipolarMontage | None = None
+
+        self.psd_panel: PSDPanel | None = None
 
         self._update_window_title()
         self._restoring_project = False
@@ -263,8 +266,11 @@ class MainWindow(QMainWindow):
         self.montage_label.setText("Montage: Monopolar")
         self._update_window_title()
 
-        self.console.log("File closed.")
+        if self.psd_panel is not None:
+            self.psd_panel.close()
+            self.psd_panel = None
 
+        self.console.log("File closed.")
 
     # ---------------- UI construction ----------------
 
@@ -1585,3 +1591,48 @@ class MainWindow(QMainWindow):
     def _on_zoom_state_changed(self, has_zoom_base: bool) -> None:
         if self._act_reset_zoom is not None:
             self._act_reset_zoom.setEnabled(bool(has_zoom_base))
+
+# ---------------- PSD pannel  -------------
+
+    def open_psd_panel(self) -> None:
+        if self.current_raw is None or self.current_picks is None:
+            QMessageBox.information(self, "PSD Panel", "Load a dataset first.")
+            return
+
+        # only one PSD window:
+        # if already open, just bring it to front
+        if self.psd_panel is not None and self.psd_panel.isVisible():
+            self.psd_panel.raise_()
+            self.psd_panel.activateWindow()
+            return
+
+        duration_s = float(self.current_raw.times[-1]) if self.current_raw.n_times > 1 else 0.0
+
+        dlg = PSDIntervalDialog(duration_s, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        start_s, stop_s = dlg.values()
+
+        self.psd_panel = PSDPanel(parent=None)
+        self.psd_panel.destroyed.connect(self._on_psd_panel_destroyed)
+
+        display_names = self.viewer.get_channel_names()
+        bad_names = self.viewer.get_bad_channels()
+
+        self.psd_panel.set_psd_context(
+            raw=self.current_raw,
+            picks=self.current_picks,
+            display_names=display_names,
+            bad_names=bad_names,
+            start_s=start_s,
+            stop_s=stop_s,
+        )
+
+        self.psd_panel.show()
+        self.psd_panel.raise_()
+        self.psd_panel.activateWindow()
+
+    
+    def _on_psd_panel_destroyed(self, *args) -> None:
+        self.psd_panel = None
