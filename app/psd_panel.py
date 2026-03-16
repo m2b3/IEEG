@@ -111,7 +111,9 @@ class PSDPanel(QWidget):
         self._psd_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
         self._selected_channel = None
-        self._curve_items = {}
+
+        self._curve_items: dict[str, pg.PlotCurveItem] = {}
+        self._curve_to_channel: dict[int, str] = {}
 
         self._build_ui()
 
@@ -194,7 +196,7 @@ class PSDPanel(QWidget):
 
         self._start_s = float(start_s)
         self._stop_s = float(stop_s)
-        
+
         # Show all channels in the PSD, including bad ones.
         # Bad channels are distinguished visually in red instead of being excluded.
         self._displayed_names = list(self._display_names)          
@@ -316,6 +318,7 @@ class PSDPanel(QWidget):
         self.plot.setTitle(f"PSD from {self._start_s:.3f} s to {self._stop_s:.3f} s")
 
         self._curve_items = {}
+        self._curve_to_channel = {}
 
         for ch_name in self._displayed_names:
             cached = self._psd_cache.get(ch_name)
@@ -332,16 +335,15 @@ class PSDPanel(QWidget):
             curve_item.setClickable(True, width=8)
             curve_item.sigClicked.connect(self._on_curve_clicked)
 
-            # stocker le channel associé
-            curve_item._channel_name = ch_name
+
 
             self.plot.addItem(curve_item)
             self._curve_items[ch_name] = curve_item
-
-        self._apply_selection_highlight()
+            self._apply_selection_highlight()
+            self._curve_to_channel[id(curve_item)] = ch_name
 
     def _on_curve_clicked(self, curve) -> None:
-        ch_name = getattr(curve, "_channel_name", None)
+        ch_name = self._curve_to_channel.get(id(curve))
         if ch_name is None:
             return
 

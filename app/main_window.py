@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
     QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
     QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QHeaderView
+    QHeaderView, QTextBrowser
 )
 
 from PySide6.QtCore import Qt
@@ -307,7 +307,7 @@ class MainWindow(QMainWindow):
         # Amplitiude (µV)
         tb.addWidget(QLabel("Amplitude (μV): ±"))
         self.gain = QDoubleSpinBox()
-        self.gain.setRange(1.0, 1000.0)
+        self.gain.setRange(1.0, 20000.0)
         self.gain.setSingleStep(10.0)
         self.gain.setValue(100.0)
         self.gain.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
@@ -1715,3 +1715,51 @@ class MainWindow(QMainWindow):
             self.psd_panel._refresh_plot()
 
         self.console.log(f"Unmarked as bad: {', '.join(removed)}")
+
+# ---------------- User guide  -------------
+
+    def on_open_user_guide(self) -> None:
+        """
+        Open the bundled markdown user guide in a simple dialog.
+        For now, this is intentionally lightweight.
+        """
+        guide_path = Path(__file__).resolve().parent / "docs" / "user_guide.md"
+
+        if not guide_path.exists():
+            QMessageBox.information(
+                self,
+                "User Guide",
+                f"Guide file not found:\n{guide_path}"
+            )
+            return
+
+        try:
+            markdown_text = guide_path.read_text(encoding="utf-8")
+        except Exception as e:
+            QMessageBox.critical(self, "User Guide", f"Could not read guide:\n{e}")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("User Guide")
+        dlg.resize(900, 700)
+
+        layout = QVBoxLayout(dlg)
+
+        viewer = QTextBrowser(dlg)
+        viewer.setOpenExternalLinks(True)
+
+        # Simple option 1: show raw markdown
+        # viewer.setPlainText(markdown_text)
+
+        # Simple option 2: let Qt display it as preformatted text
+        viewer.setPlainText(markdown_text)
+
+        layout.addWidget(viewer)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dlg)
+        buttons.rejected.connect(dlg.reject)
+        buttons.accepted.connect(dlg.accept)
+        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.close)
+        layout.addWidget(buttons)
+
+        dlg.exec()

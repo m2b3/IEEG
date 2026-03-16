@@ -100,7 +100,7 @@ def build_menubar(main_window):
 
     # -------- Help --------
     help_menu = menubar.addMenu("Help")
-    add_action(help_menu, "Tips", lambda: print("TODO"))    
+    add_action(help_menu, "User Guide", main_window.on_open_user_guide)    
     add_action(help_menu, "Shortcuts", lambda: print("TODO"))
 
 
