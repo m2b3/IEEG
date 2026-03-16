@@ -1614,7 +1614,11 @@ class MainWindow(QMainWindow):
 
         start_s, stop_s = dlg.values()
 
-        self.psd_panel = PSDPanel(parent=None)
+        self.psd_panel = PSDPanel(
+            parent=None,
+            mark_bad_callback=self._mark_channels_bad_from_psd,
+            mark_good_callback=self._mark_channels_good_from_psd,
+        )
         self.psd_panel.destroyed.connect(self._on_psd_panel_destroyed)
 
         display_names = self.viewer.get_channel_names()
@@ -1649,6 +1653,56 @@ class MainWindow(QMainWindow):
             self.psd_panel = None
             return
 
-    
     def _on_psd_panel_destroyed(self, *args) -> None:
         self.psd_panel = None
+
+    def _mark_channels_bad_from_psd(self, channel_names: list[str]) -> None:
+        if self.current_raw is None or not channel_names:
+            return
+
+        current_bad = set(self.viewer.get_bad_channels())
+        added: list[str] = []
+
+        for name in channel_names:
+            ch = str(name).strip()
+            if not ch:
+                continue
+            if ch not in current_bad:
+                current_bad.add(ch)
+                added.append(ch)
+
+        if not added:
+            return
+
+        self.viewer.set_bad_channels(current_bad)
+
+        # keep PSD panel visual state in sync if it is open
+        if self.psd_panel is not None:
+            self.psd_panel._bad_names = set(current_bad)
+            self.psd_panel._refresh_plot()
+
+        self.console.log(f"Marked as bad: {', '.join(added)}")
+
+    def _mark_channels_good_from_psd(self, channel_names: list[str]) -> None:
+        if self.current_raw is None or not channel_names:
+            return
+
+        current_bad = set(self.viewer.get_bad_channels())
+        removed: list[str] = []
+
+        for name in channel_names:
+            ch = str(name).strip()
+            if ch in current_bad:
+                current_bad.remove(ch)
+                removed.append(ch)
+
+        if not removed:
+            return
+
+        self.viewer.set_bad_channels(current_bad)
+
+        if self.psd_panel is not None:
+            self.psd_panel._bad_names = set(current_bad)
+            self.psd_panel._refresh_plot()
+
+        self.console.log(f"Unmarked as bad: {', '.join(removed)}")

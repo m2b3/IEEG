@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from PySide6.QtGui import QColor
 
 
 class PSDIntervalDialog(QDialog):
@@ -88,10 +89,13 @@ class PSDIntervalDialog(QDialog):
 
 
 class PSDPanel(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, mark_bad_callback=None, mark_good_callback=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("PSD Panel")
         self.resize(1100, 700)
+
+        self._mark_bad_callback = mark_bad_callback
+        self._mark_good_callback = mark_good_callback
 
         self._raw = None
         self._picks = np.asarray([], dtype=int)
@@ -108,7 +112,6 @@ class PSDPanel(QWidget):
 
         self._selected_channel = None
         self._curve_items = {}
-
 
         self._build_ui()
 
@@ -130,6 +133,16 @@ class PSDPanel(QWidget):
         self.btn_exclude.clicked.connect(self._move_to_excluded)
         self.btn_include.clicked.connect(self._move_to_displayed)
 
+        self.btn_exclude_all = QPushButton("Exclude all")
+        self.btn_include_all = QPushButton("Include all")
+        self.btn_exclude_all.clicked.connect(self._move_all_to_excluded)
+        self.btn_include_all.clicked.connect(self._move_all_to_displayed)
+
+        self.btn_mark_bad = QPushButton("Mark selected as bad")
+        self.btn_mark_bad.clicked.connect(self._mark_selected_as_bad)
+        self.btn_unmark_bad = QPushButton("Unmark selected as bad")
+        self.btn_unmark_bad.clicked.connect(self._unmark_selected_as_bad)
+        
         left_box = QGroupBox("Excluded channels")
         left_layout = QVBoxLayout(left_box)
         left_layout.addWidget(self.excluded_list)
@@ -142,6 +155,12 @@ class PSDPanel(QWidget):
         mid_btns.addStretch(1)
         mid_btns.addWidget(self.btn_exclude)
         mid_btns.addWidget(self.btn_include)
+        mid_btns.addSpacing(12)
+        mid_btns.addWidget(self.btn_exclude_all)
+        mid_btns.addWidget(self.btn_include_all)
+        mid_btns.addSpacing(12)
+        mid_btns.addWidget(self.btn_mark_bad)
+        mid_btns.addWidget(self.btn_unmark_bad)
         mid_btns.addStretch(1)
 
         top = QHBoxLayout()
@@ -376,14 +395,117 @@ class PSDPanel(QWidget):
         selected = getattr(self, "_selected_channel", None)
 
         for ch_name, curve in self._curve_items.items():
-            if ch_name == selected:
+            is_selected = (ch_name == selected)
+            is_bad = (ch_name in self._bad_names)
+
+            if is_selected and is_bad:
+                curve.setPen(pg.mkPen("r", width=3))
+            elif is_selected:
                 curve.setPen(pg.mkPen("y", width=3))
+            elif is_bad:
+                curve.setPen(pg.mkPen("r", width=1))
             else:
                 curve.setPen(pg.mkPen(width=1))
 
         for widget in (self.displayed_list, self.excluded_list):
             for i in range(widget.count()):
                 item = widget.item(i)
+                ch_name = item.text()
+
                 font = item.font()
-                font.setBold(item.text() == selected)
+                font.setBold(ch_name == selected)
                 item.setFont(font)
+
+                if ch_name in self._bad_names:
+                    item.setForeground(QColor("red"))
+                else:
+                    item.setForeground(QColor("white"))
+
+    def _move_all_to_excluded(self) -> None:
+        if not self._displayed_names:
+            return
+
+        moved = list(self._displayed_names)
+
+        for ch in moved:
+            if ch not in self._excluded_names:
+                self._excluded_names.append(ch)
+
+        self._displayed_names = []
+        self._excluded_names = self._ordered(self._excluded_names)
+
+        if self._selected_channel not in self._excluded_names:
+            self._selected_channel = self._excluded_names[0] if self._excluded_names else None
+
+        self._refresh_lists()
+        self._sync_selection_to_lists()
+        self._refresh_plot()
+
+    def _move_all_to_displayed(self) -> None:
+        if not self._excluded_names:
+            return
+
+        moved = list(self._excluded_names)
+
+        for ch in moved:
+            if ch not in self._displayed_names:
+                self._displayed_names.append(ch)
+
+        self._excluded_names = []
+        self._displayed_names = self._ordered(self._displayed_names)
+
+        if self._selected_channel not in self._displayed_names:
+            self._selected_channel = self._displayed_names[0] if self._displayed_names else None
+
+        self._refresh_lists()
+        self._sync_selection_to_lists()
+        self._refresh_plot()
+
+    def _get_selected_channel_names(self) -> list[str]:
+        names: list[str] = []
+
+        for item in self.displayed_list.selectedItems():
+            names.append(item.text())
+
+        for item in self.excluded_list.selectedItems():
+            names.append(item.text())
+
+        # remove duplicates while preserving order
+        seen = set()
+        out = []
+        for name in names:
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
+        return out
+
+    def _mark_selected_as_bad(self) -> None:
+        selected = self._get_selected_channel_names()
+        if not selected:
+            return
+
+        if self._mark_bad_callback is not None:
+            self._mark_bad_callback(selected)
+
+        for ch in selected:
+            self._bad_names.add(ch)
+
+        self._refresh_lists()
+        self._sync_selection_to_lists()
+        self._refresh_plot()
+
+    def _unmark_selected_as_bad(self) -> None:
+        selected = self._get_selected_channel_names()
+        if not selected:
+            return
+
+        if self._mark_good_callback is not None:
+            self._mark_good_callback(selected)
+
+        for ch in selected:
+            if ch in self._bad_names:
+                self._bad_names.remove(ch)
+
+        self._refresh_lists()
+        self._sync_selection_to_lists()
+        self._refresh_plot()
