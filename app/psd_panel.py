@@ -194,8 +194,10 @@ class PSDPanel(QWidget):
 
         self._start_s = float(start_s)
         self._stop_s = float(stop_s)
-
-        self._displayed_names = [ch for ch in self._display_names if ch not in self._bad_names]
+        
+        # Show all channels in the PSD, including bad ones.
+        # Bad channels are distinguished visually in red instead of being excluded.
+        self._displayed_names = list(self._display_names)          
         self._excluded_names = []
 
         self._rebuild_psd_cache()

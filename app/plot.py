@@ -1709,8 +1709,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             if raw_name in self._hidden_channels:
                 continue
-            if raw_name in self._bad_channels:
-                continue
 
             visible.append(abs_idx)
 

@@ -1486,6 +1486,15 @@ class MainWindow(QMainWindow):
         # Saved edited montage may no longer be valid if bad channels changed.
         self._saved_bipolar_montage = None
 
+        # Always keep PSD state in sync if the panel is open
+        if self.psd_panel is not None and self.psd_panel.isVisible():
+            current_bad = set(self.viewer.get_bad_channels())
+            self.psd_panel._bad_names = current_bad
+            self.psd_panel._refresh_lists()
+            self.psd_panel._sync_selection_to_lists()
+            self.psd_panel._refresh_plot()
+
+        # Rebuild automatic bipolar montage only when relevant
         if self.viewer.reference_mode() != "bipolar":
             return
 
@@ -1504,7 +1513,7 @@ class MainWindow(QMainWindow):
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
         self._update_montage_label()
-
+ 
     def on_reference_average(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
