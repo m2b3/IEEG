@@ -32,7 +32,6 @@ def _serialize_bipolar_montage_if_edited(montage) -> dict[str, Any] | None:
         "bad_channel_skips": list(getattr(montage, "bad_channel_skips", [])),
     }
 
-
 def build_project_dict(main_window) -> dict[str, Any]:
     viewer = main_window.viewer
 
@@ -61,14 +60,12 @@ def build_project_dict(main_window) -> dict[str, Any]:
         },
     }
 
-
 def save_project(path: Path, main_window) -> None:
     payload = build_project_dict(main_window)
     path = Path(path)
 
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
-
 
 def load_project(path: Path) -> dict[str, Any]:
     path = Path(path)
