@@ -177,7 +177,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._annotations: list[Annotation] = []
         self._anno_rois: dict[str, pg.RectROI] = {}
         self._anno_labels: dict[str, pg.TextItem] = {}
-        self._annotation_items: list[object] = []
 
         # Annotation mode (armed by MainWindow)
         self._annotation_mode: bool = False
@@ -241,7 +240,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._bad_channels.clear()
 
         self._annotations.clear()
-        self._clear_annotation_items()
 
         for roi in self._anno_rois.values():
             try:
@@ -312,7 +310,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._last_visible_abs = []
 
         self._annotations.clear()
-        self._clear_annotation_items()
+
+        for roi in self._anno_rois.values():
+            try:
+                self.signal_plot.removeItem(roi)
+            except Exception:
+                pass
+        self._anno_rois.clear()
+
+        for txt in self._anno_labels.values():
+            try:
+                self.signal_plot.removeItem(txt)
+            except Exception:
+                pass
+        self._anno_labels.clear()
+
         self.annotationsChanged.emit()
 
         self._zoom_mode = False
@@ -935,7 +947,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                             t0 = t0 - dt / 2.0
                             t1 = t0 + dt
 
-                        self._create_annotation(t0=t0, t1=t1, y=y0)
+                        self._create_annotation_from_drag(t0=t0, t1=t1, y=y0)
                         self.stop_annotation_mode()
                         self.render()
 
@@ -1065,91 +1077,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         # Repaint highlight
         self.highlight_selected_channels()
-   
-    def _create_annotation(self, *, t0: float, t1: float, y: float) -> None:
-        """Create a new annotation from a mouse drag."""
-        kind = self._pending_kind or "Other"
-        note = self._pending_note
-        scope = self._pending_scope
-
-        clicked_abs = self._abs_channel_from_y(y)
-
-        # Decide which channels the annotation applies to
-        if scope == "Global (all channels)":
-            targets: list[int | None] = [None]
-
-        elif scope == "Selected channels" and self._selected_abs_set:
-            targets = [int(x) for x in sorted(self._selected_abs_set)]
-
-        else:  # clicked channel
-            if clicked_abs is None:
-                return
-            targets = [int(clicked_abs)]
-
-        for ch in targets:
-            self._annotations.append(
-                Annotation(
-                    id=new_id(),
-                    kind=kind,
-                    t_start=float(t0),
-                    t_end=float(t1),
-                    abs_channel=ch,   # None means global
-                    note=str(note or ""),
-                )
-            )
-        self.annotationsChanged.emit()
-   
-    def _draw_annotations(self, n_vis: int) -> None:
-        """Draw annotation overlays on the signal plot."""
-        self._clear_annotation_items()
-
-        if not self._annotations:
-            return
-
-        h = 0.9 * float(self._spacing)
-        visible_abs = list(self._last_visible_abs)
-        abs_to_row = {a: i for i, a in enumerate(visible_abs)}
-
-        for a in self._annotations:
-            kind = a.kind
-            t0 = float(a.t_start)
-            t1 = float(a.t_end)
-            abs_ch = a.abs_channel
-            note = a.note
-
-            rgb = ANNOTATION_STYLES.get(kind, (0, 200, 0))
-            brush = pg.mkBrush(rgb[0], rgb[1], rgb[2], 60)
-
-            # Global annotation
-            if abs_ch is None:
-                y0 = -0.5 * self._spacing
-                height = (n_vis - 1) * self._spacing + self._spacing
-
-            else:
-                if abs_ch not in abs_to_row:
-                    continue
-                data_row = abs_to_row[int(abs_ch)]
-                plot_row = (n_vis - 1 - data_row)
-                yc = plot_row * float(self._spacing)
-                y0 = yc - h / 2.0
-                height = h
-
-            rect = AnnotationRect(
-                self,
-                a.id,
-                t0,
-                y0,
-                max(1e-6, t1 - t0),
-                height,
-            )
-            # keep your styling
-            rect.setBrush(brush)
-            rect.setPen(pg.mkPen(None))
-            rect.setZValue(-5)
-
-            self.signal_plot.addItem(rect)
-            self._annotation_items.append(rect)
-                            
+            
     # ---------------- Rendering ----------------
     def render(self):
         """Redraw the viewer for the current raw + view parameters."""
@@ -1175,7 +1103,26 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._clear_plots()
         self._draw_traces(seg_ds_uv, t_ds, visible_abs)
         self._draw_labels(n_vis)
-        self._draw_annotations(n_vis)
+
+        # Rebuild annotation items after plot redraw
+        for anno_id in list(self._anno_rois.keys()):
+            roi = self._anno_rois.pop(anno_id, None)
+            if roi is not None:
+                try:
+                    self.signal_plot.removeItem(roi)
+                except Exception:
+                    pass
+
+        for anno_id in list(self._anno_labels.keys()):
+            txt = self._anno_labels.pop(anno_id, None)
+            if txt is not None:
+                try:
+                    self.signal_plot.removeItem(txt)
+                except Exception:
+                    pass
+
+        for a in self._annotations:
+            self._add_annotation_items(a)
 
         self._set_ranges(t_ds, n_vis)
         self._draw_time_lines(t_ds)
@@ -1635,14 +1582,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             except Exception:
                 pass
 
-    def _clear_annotation_items(self) -> None:
-        """Remove currently drawn annotation graphics (rectangles + text)."""
-        for it in getattr(self, "_annotation_items", []):
-            try:
-                self.signal_plot.removeItem(it)
-            except Exception:
-                pass
-        self._annotation_items = []
  # ---------------- Hide / Bad ----------------
     def _hide_channel(self, ch_name: str) -> None:
         self._hidden_channels.add(ch_name)

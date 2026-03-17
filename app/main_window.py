@@ -161,13 +161,16 @@ class MainWindow(QMainWindow):
 
         # keep panel time updated when main time moves
         self.viewer.timeWindowChanged.connect(self._push_time_to_comp_panel)
+        
         # keep panel time updated when main window length changes
         self.time_range.valueChanged.connect(lambda v: self._push_time_to_comp_panel(self.viewer.time_start()))
+        
         #Channel selection updated 
         self.comp_panel.panelSelectionChanged.connect(self._on_comp_panel_selection_changed)
+        
         # Make computation panel follow the viewer cursor (instead of window start)
-        self.viewer.cursorMoved.connect(self._push_time_to_comp_panel)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
+
         self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
         self.viewer.annotationsChanged.connect(self._mark_project_dirty)
         self.viewer.hiddenChannelsChanged.connect(self._mark_project_dirty)
@@ -176,6 +179,7 @@ class MainWindow(QMainWindow):
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
         self.viewer.requestOpenAnnotationsPanel.connect(self._open_annotations_panel)
         self.viewer.zoomStateChanged.connect(self._on_zoom_state_changed)
+
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
         self.sc_left  = QShortcut(QKeySequence(Qt.Key.Key_Left),  self)
@@ -617,6 +621,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save project error", str(e))
 
+# ---------------- Project state helpers ----------------
+
     def _mark_project_dirty(self) -> None:
         if self.current_raw is None:
             return
@@ -684,97 +690,29 @@ class MainWindow(QMainWindow):
             bad_channel_skips=list(data.get("bad_channel_skips", [])),
         )
 
-    # ---------------- UI ↔ viewer syncing ----------------
-
-    def _on_time_range_changed(self, v: float):
-        """Toolbar time_range changed -> update viewer + slider range."""
-        self.viewer.set_view_params(time_range=v)
-        self._update_time_slider_range()
-
-    # ---------------- Viewer interaction callbacks ----------------
-
-    def _on_channel_clicked(self, abs_idx: int):
-        if self.current_raw is None or self.current_picks is None:
-            self.console.log(f"Selected channel: {abs_idx}")
-            return
-
-        raw_idx = int(self.current_picks[abs_idx])
-        ch_name = self.current_raw.ch_names[raw_idx]
-        ch_type = self.current_raw.get_channel_types(picks=[raw_idx])[0]
-        self.console.log(
-            f"Selected: {ch_name} (shown idx {abs_idx}, raw idx {raw_idx}, type: {ch_type})"
+    # ---------------- Sync helpers  ----------------
+    def _sync_comp_panel_context(self) -> None:
+        """Push the current dataset/channel mapping into the computation panel."""
+        displayed_names = self.viewer.get_channel_names()
+        self.comp_panel.set_data_context(
+            self.current_raw,
+            self.current_picks,
+            displayed_names,
         )
 
-    def _zoom_time_range(self, direction: int):
-        """direction: -1 zoom in (smaller), +1 zoom out (bigger)"""
-        step = self.time_range.singleStep()
-        new_v = self.time_range.value() + direction * step
-        new_v = max(self.time_range.minimum(), min(self.time_range.maximum(), new_v))
-        self.time_range.setValue(new_v)
+    def _sync_comp_panel_view_state(self, t0: float | None = None) -> None:
+        """Push current main-view time/gain into the computation panel."""
+        if t0 is None:
+            t0 = float(self.viewer.time_start())
 
-    def _zoom_chan_range(self, direction: int):
-        """direction: -1 zoom in (fewer channels), +1 zoom out (more channels)"""
-        step = self.chan_range.singleStep() if self.chan_range.singleStep() else 1
-        new_v = self.chan_range.value() + direction * step
-        new_v = max(self.chan_range.minimum(), min(self.chan_range.maximum(), new_v))
-        self.chan_range.setValue(new_v)
-
-    def _show_hidden_channels_menu(self):
-    
-        hidden = self.viewer.get_hidden_channels()
-        menu = QMenu()
-
-        if not hidden:
-            act = menu.addAction("(No hidden channels)")
-            act.setEnabled(False)
-        else:
-            act_unhide_all = menu.addAction("Unhide all")
-            menu.addSeparator()
-            act_unhide_all.triggered.connect(self.viewer.unhide_all_channels)
-
-            for ch in hidden:
-                act = menu.addAction(f"Show {ch}")
-                act.triggered.connect(lambda checked=False, name=ch: self.viewer.unhide_channel(name))
-
-        menu.exec_(QCursor.pos())
-
-    def _push_time_to_comp_panel(self, t0: float):
-        main_win = float(self.time_range.value())  # toolbar value
-        self.comp_panel.set_main_time(float(t0), main_win_s=main_win)
+        self.comp_panel.set_main_time(
+            float(t0),
+            main_win_s=float(self.time_range.value()),
+        )
         self.comp_panel.set_main_gain_uv(float(self.gain.value()))
 
-    def _open_computation_panel(self, selected_abs: list[int]):
-        # give the panel access to the current dataset mapping
-        displayed_names = self.viewer.get_channel_names()
-        self.comp_panel.set_data_context(self.current_raw, self.current_picks, displayed_names)
-
-        # default channels = selection at creation/open
-        self.comp_panel.set_selected_channels_abs(selected_abs, replace=True)
-
-        # default time = linked to main view (panel will clamp win to 1..10)
-        self._push_time_to_comp_panel(self.viewer.time_start())
-
-        self.comp_dock.show()
-        self.comp_dock.raise_()
-
-    def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
-        # Highlight the same channels in main viewer (and treat it as selection)
-        self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
-
-    def _on_viewer_cursor_moved(self, x: float):
-        if not hasattr(self, "comp_panel") or self.comp_panel is None:
-            return
-
-        # Center cursor in the computation window
-        win = float(self.comp_panel.state.win)  # panel's own fixed window length
-        t0 = max(0.0, float(x) - 0.5 * win)
-
-        # push t0 only (panel keeps its own window length)
-        self.comp_panel.set_main_time(t0, main_win_s=win)
-
-    def _on_time_ctl_t0_changed(self, t0: float):
-        # user moved the timeline in main window
-        self.viewer.set_time_start(float(t0))
+    def _push_time_to_comp_panel(self, t0: float) -> None:
+        self._sync_comp_panel_view_state(t0=float(t0))
 
     def _sync_time_from_viewer(self, t0: float):
         # viewer scrolled/updated time -> update main timeline control
@@ -806,7 +744,76 @@ class MainWindow(QMainWindow):
 
         self.montage_label.setText(f"Montage: {pretty}")
 
-# ---------------- Keyboard shortcuts / cursor nudging -------------
+# ---------------- Viewer interaction callbacks ----------------
+   
+    def _on_time_range_changed(self, v: float):
+        """Toolbar time_range changed -> update viewer + slider range."""
+        self.viewer.set_view_params(time_range=v)
+        self._update_time_slider_range()
+
+    def _on_channel_clicked(self, abs_idx: int):
+        if self.current_raw is None or self.current_picks is None:
+            self.console.log(f"Selected channel: {abs_idx}")
+            return
+
+        raw_idx = int(self.current_picks[abs_idx])
+        ch_name = self.current_raw.ch_names[raw_idx]
+        ch_type = self.current_raw.get_channel_types(picks=[raw_idx])[0]
+        self.console.log(
+            f"Selected: {ch_name} (shown idx {abs_idx}, raw idx {raw_idx}, type: {ch_type})"
+        )
+
+    def _show_hidden_channels_menu(self):
+    
+        hidden = self.viewer.get_hidden_channels()
+        menu = QMenu()
+
+        if not hidden:
+            act = menu.addAction("(No hidden channels)")
+            act.setEnabled(False)
+        else:
+            act_unhide_all = menu.addAction("Unhide all")
+            menu.addSeparator()
+            act_unhide_all.triggered.connect(self.viewer.unhide_all_channels)
+
+            for ch in hidden:
+                act = menu.addAction(f"Show {ch}")
+                act.triggered.connect(lambda checked=False, name=ch: self.viewer.unhide_channel(name))
+
+        menu.exec_(QCursor.pos())
+
+    def _on_time_ctl_t0_changed(self, t0: float):
+        # user moved the timeline in main window
+        self.viewer.set_time_start(float(t0))
+
+    def _refresh_display_name_dependent_ui(self) -> None:
+        self._sync_comp_panel_context()
+        self._refresh_annotation_list()   
+
+   
+    # ---------------- Time navigation ----------------
+
+    def _zoom_time_range(self, direction: int):
+        """direction: -1 zoom in (smaller), +1 zoom out (bigger)"""
+        step = self.time_range.singleStep()
+        new_v = self.time_range.value() + direction * step
+        new_v = max(self.time_range.minimum(), min(self.time_range.maximum(), new_v))
+        self.time_range.setValue(new_v)
+
+    def _zoom_chan_range(self, direction: int):
+        """direction: -1 zoom in (fewer channels), +1 zoom out (more channels)"""
+        step = self.chan_range.singleStep() if self.chan_range.singleStep() else 1
+        new_v = self.chan_range.value() + direction * step
+        new_v = max(self.chan_range.minimum(), min(self.chan_range.maximum(), new_v))
+        self.chan_range.setValue(new_v)
+
+    def _on_viewer_cursor_moved(self, x: float) -> None:
+        if self.comp_panel is None:
+            return
+
+        win = float(self.comp_panel.state.win)
+        t0 = max(0.0, float(x) - 0.5 * win)
+        self._sync_comp_panel_view_state(t0=t0)
 
     def _scroll_time(self, direction: int, mult: float = 1.0) -> None:
         """direction: -1 left, +1 right"""
@@ -834,181 +841,22 @@ class MainWindow(QMainWindow):
             step = int(direction * int(mult))
             self.viewer.set_channel_start(self.viewer.channel_start() + step)
 
-# ---------------- Annotations -------------
+# ---------------- Computation panel ----------------
 
-    def on_annotate(self):
-        if self.current_raw is None:
-            QMessageBox.information(self, "Annotate", "Load a file before annotating.")
-            return
+    def _open_computation_panel(self, selected_abs: list[int]) -> None:
+        self._sync_comp_panel_context()
+        self.comp_panel.set_selected_channels_abs(selected_abs, replace=True)
+        self._sync_comp_panel_view_state()
+        self.comp_dock.show()
+        self.comp_dock.raise_()
 
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Add annotation")
+    def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
+        # Highlight the same channels in main viewer (and treat it as selection)
+        self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
 
-        layout = QFormLayout(dlg)
-
-        combo = QComboBox(dlg)
-        for t in ANNOTATION_TYPES:
-            combo.addItem(self._color_icon(ANNOTATION_STYLES[t]), t)
-
-        scope = QComboBox(dlg)
-        scope.addItems(ANNOTATION_SCOPES)
-        scope.setCurrentText(SCOPE_SELECTED)
-
-        note = QLineEdit(dlg)
-        note.setPlaceholderText("Optional note…")
-
-        layout.addRow("Type:", combo)
-        layout.addRow("Scope:", scope)
-        layout.addRow("Note:", note)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=dlg
-        )
-        layout.addRow(buttons)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        kind = combo.currentText()
-        scope_txt = scope.currentText()
-        note_txt = note.text().strip()
-
-        self.viewer.start_annotation_mode(kind=kind, note=note_txt, scope=scope_txt)
-        self.console.log(f"Annotation mode: {kind} ({scope_txt}). Drag on signal. Esc to cancel.")
-
-    def _color_icon(self, rgb: tuple[int, int, int]) -> QIcon:
-        pm = QPixmap(12, 12)
-        pm.fill(QColor(*rgb))
-        return QIcon(pm)  
-    
-    def _refresh_annotation_list(self):
-        """Rebuild the dock list from viewer annotations."""
-        annos = self.viewer.get_annotations()
-
-        self.anno_list.blockSignals(True)
-        self.anno_list.clear()
-        self._anno_items_by_id.clear()  # IMPORTANT: clear BEFORE rebuilding
-
-        channel_names = self.viewer.get_channel_names()
-
-        for a in annos:
-            if a.abs_channel is None:
-                ch_txt = "GLOBAL"
-            else:
-                if 0 <= a.abs_channel < len(channel_names):
-                    ch_txt = channel_names[a.abs_channel]
-                else:
-                    ch_txt = str(a.abs_channel)
-
-            txt = f"[{a.kind}] {ch_txt}  {a.t_start:.3f}–{a.t_end:.3f}"
-            if a.note:
-                txt += f"  |  {a.note}"
-
-            item = QListWidgetItem(txt)
-            item.setData(Qt.ItemDataRole.UserRole, a.id)
-            self.anno_list.addItem(item)
-
-            # Link id -> list item so plot-click can select it
-            self._anno_items_by_id[str(a.id)] = item
-
-        self.anno_list.blockSignals(False)
-
-        # Show dock if there is at least one annotation
-        if self.anno_list.count() > 0:
-            self.anno_dock.show()
-            self.anno_dock.raise_()
-
-    def _on_annotation_item_clicked(self, item: QListWidgetItem):
-        anno_id = item.data(Qt.ItemDataRole.UserRole)
-        if not anno_id:
-            return
-        self.viewer.jump_to_annotation(str(anno_id))
-
-    def _on_request_edit_annotation(self, anno_id: str):
-
-        a = self.viewer.get_annotation_by_id(anno_id)
-        if a is None:
-            return
-
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Edit annotation")
-        layout = QFormLayout(dlg)
-
-        combo = QComboBox(dlg)
-        for t in ANNOTATION_TYPES:
-            combo.addItem(self._color_icon(ANNOTATION_STYLES[t]), t)
-        combo.setCurrentText(a.kind)
-
-        note = QLineEdit(dlg)
-        note.setText(a.note)
-
-        layout.addRow("Type:", combo)
-        layout.addRow("Note:", note)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=dlg
-        )
-        layout.addRow(buttons)
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        self.viewer.update_annotation(anno_id, kind=combo.currentText(), note=note.text().strip())
-
-    def _on_plot_annotation_selected(self, anno_id: str):
-        # Ensure dock is visible when user clicks an annotation
-        if self.anno_dock.isHidden():
-            self.anno_dock.show()
-
-        item = self._anno_items_by_id.get(str(anno_id))
-        if item is None:
-            # list may be stale; refresh and retry once
-            self._refresh_annotation_list()
-            item = self._anno_items_by_id.get(str(anno_id))
-            if item is None:
-                return
-
-        # Select + scroll into view
-        self.anno_list.setCurrentItem(item)
-        self.anno_list.scrollToItem(item)
-
-    def _open_annotations_panel(self) -> None:
-        self.anno_dock.show()
-        self.anno_dock.raise_()
-
-    def _on_annotation_list_context_menu(self, pos) -> None:
-        items = self.anno_list.selectedItems()
-        if not items:
-            return
-
-        menu = QMenu(self)
-        act_delete = menu.addAction("Delete selected annotation(s)")
-
-        chosen = menu.exec_(self.anno_list.mapToGlobal(pos))
-        if chosen != act_delete:
-            return
-
-        ids = []
-        for item in items:
-            anno_id = item.data(Qt.ItemDataRole.UserRole)
-            if anno_id:
-                ids.append(str(anno_id))
-
-        for anno_id in ids:
-            self.viewer.delete_annotation(anno_id)
 
 # ---------------- Referencing  -------------
-    def _refresh_display_name_dependent_ui(self) -> None:
-        displayed_names = self.viewer.get_channel_names()
-        self.comp_panel.set_data_context(self.current_raw, self.current_picks, displayed_names)
-        self._refresh_annotation_list()      
-
+ 
     def on_reference_monopolar(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
@@ -1019,6 +867,30 @@ class MainWindow(QMainWindow):
         self.btn_edit_bipolar.setEnabled(False)
         self._update_montage_label()
         self.console.log("Reference mode: Monopolar")
+ 
+    def on_reference_average(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        self.viewer.set_average_mode()
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(False)
+        self._mark_project_dirty()
+        self._update_montage_label()
+        self.console.log("Reference mode: Average")
+
+    def on_reference_median(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
+            return
+
+        self.viewer.set_median_mode()
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(False)
+        self._mark_project_dirty()
+        self._update_montage_label()
+        self.console.log("Reference mode: Median")
 
     def on_reference_bipolar(self) -> None:
         if self.current_raw is None:
@@ -1479,65 +1351,7 @@ class MainWindow(QMainWindow):
         self._mark_project_dirty()
         self._update_montage_label()
         self.console.log("Bipolar pairs updated.")
-   
-    def _on_bad_channels_changed(self) -> None:
-        self._mark_project_dirty()
-
-        # Saved edited montage may no longer be valid if bad channels changed.
-        self._saved_bipolar_montage = None
-
-        # Always keep PSD state in sync if the panel is open
-        if self.psd_panel is not None and self.psd_panel.isVisible():
-            current_bad = set(self.viewer.get_bad_channels())
-            self.psd_panel._bad_names = current_bad
-            self.psd_panel._refresh_lists()
-            self.psd_panel._sync_selection_to_lists()
-            self.psd_panel._refresh_plot()
-
-        # Rebuild automatic bipolar montage only when relevant
-        if self.viewer.reference_mode() != "bipolar":
-            return
-
-        if self.current_raw is None:
-            return
-
-        channel_names = self.viewer.get_raw_channel_names()
-        bad_channels = self.viewer.get_bad_channels()
-
-        montage = build_automatic_bipolar_montage(
-            channel_names,
-            bad_channels=bad_channels,
-        )
-
-        self.viewer.set_bipolar_mode(montage)
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
-        self._update_montage_label()
  
-    def on_reference_average(self) -> None:
-        if self.current_raw is None:
-            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
-            return
-
-        self.viewer.set_average_mode()
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(False)
-        self._mark_project_dirty()
-        self._update_montage_label()
-        self.console.log("Reference mode: Average")
-
-    def on_reference_median(self) -> None:
-        if self.current_raw is None:
-            QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
-            return
-
-        self.viewer.set_median_mode()
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(False)
-        self._mark_project_dirty()
-        self._update_montage_label()
-        self.console.log("Reference mode: Median")
-
     def on_reference_common(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
@@ -1583,6 +1397,175 @@ class MainWindow(QMainWindow):
         self._mark_project_dirty()
         self._update_montage_label()
         self.console.log(f"Reference mode: Common ({ref_name})")
+
+# ---------------- Annotations -------------
+
+    def _color_icon(self, rgb: tuple[int, int, int]) -> QIcon:
+        pm = QPixmap(12, 12)
+        pm.fill(QColor(*rgb))
+        return QIcon(pm)  
+
+    def on_annotate(self):
+        if self.current_raw is None:
+            QMessageBox.information(self, "Annotate", "Load a file before annotating.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add annotation")
+
+        layout = QFormLayout(dlg)
+
+        combo = QComboBox(dlg)
+        for t in ANNOTATION_TYPES:
+            combo.addItem(self._color_icon(ANNOTATION_STYLES[t]), t)
+
+        scope = QComboBox(dlg)
+        scope.addItems(ANNOTATION_SCOPES)
+        scope.setCurrentText(SCOPE_SELECTED)
+
+        note = QLineEdit(dlg)
+        note.setPlaceholderText("Optional note…")
+
+        layout.addRow("Type:", combo)
+        layout.addRow("Scope:", scope)
+        layout.addRow("Note:", note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg
+        )
+        layout.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        kind = combo.currentText()
+        scope_txt = scope.currentText()
+        note_txt = note.text().strip()
+
+        self.viewer.start_annotation_mode(kind=kind, note=note_txt, scope=scope_txt)
+        self.console.log(f"Annotation mode: {kind} ({scope_txt}). Drag on signal. Esc to cancel.")
+
+    def _open_annotations_panel(self) -> None:
+        self.anno_dock.show()
+        self.anno_dock.raise_()
+    
+    def _refresh_annotation_list(self):
+        """Rebuild the dock list from viewer annotations."""
+        annos = self.viewer.get_annotations()
+
+        self.anno_list.blockSignals(True)
+        self.anno_list.clear()
+        self._anno_items_by_id.clear()  # IMPORTANT: clear BEFORE rebuilding
+
+        channel_names = self.viewer.get_channel_names()
+
+        for a in annos:
+            if a.abs_channel is None:
+                ch_txt = "GLOBAL"
+            else:
+                if 0 <= a.abs_channel < len(channel_names):
+                    ch_txt = channel_names[a.abs_channel]
+                else:
+                    ch_txt = str(a.abs_channel)
+
+            txt = f"[{a.kind}] {ch_txt}  {a.t_start:.3f}–{a.t_end:.3f}"
+            if a.note:
+                txt += f"  |  {a.note}"
+
+            item = QListWidgetItem(txt)
+            item.setData(Qt.ItemDataRole.UserRole, a.id)
+            self.anno_list.addItem(item)
+
+            # Link id -> list item so plot-click can select it
+            self._anno_items_by_id[str(a.id)] = item
+
+        self.anno_list.blockSignals(False)
+
+        # Show dock if there is at least one annotation
+        if self.anno_list.count() > 0:
+            self.anno_dock.show()
+            self.anno_dock.raise_()
+
+    def _on_annotation_item_clicked(self, item: QListWidgetItem):
+        anno_id = item.data(Qt.ItemDataRole.UserRole)
+        if not anno_id:
+            return
+        self.viewer.jump_to_annotation(str(anno_id))
+
+    def _on_annotation_list_context_menu(self, pos) -> None:
+        items = self.anno_list.selectedItems()
+        if not items:
+            return
+
+        menu = QMenu(self)
+        act_delete = menu.addAction("Delete selected annotation(s)")
+
+        chosen = menu.exec_(self.anno_list.mapToGlobal(pos))
+        if chosen != act_delete:
+            return
+
+        ids = []
+        for item in items:
+            anno_id = item.data(Qt.ItemDataRole.UserRole)
+            if anno_id:
+                ids.append(str(anno_id))
+
+        for anno_id in ids:
+            self.viewer.delete_annotation(anno_id)
+
+    def _on_request_edit_annotation(self, anno_id: str):
+
+        a = self.viewer.get_annotation_by_id(anno_id)
+        if a is None:
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit annotation")
+        layout = QFormLayout(dlg)
+
+        combo = QComboBox(dlg)
+        for t in ANNOTATION_TYPES:
+            combo.addItem(self._color_icon(ANNOTATION_STYLES[t]), t)
+        combo.setCurrentText(a.kind)
+
+        note = QLineEdit(dlg)
+        note.setText(a.note)
+
+        layout.addRow("Type:", combo)
+        layout.addRow("Note:", note)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg
+        )
+        layout.addRow(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self.viewer.update_annotation(anno_id, kind=combo.currentText(), note=note.text().strip())
+
+    def _on_plot_annotation_selected(self, anno_id: str):
+        # Ensure dock is visible when user clicks an annotation
+        if self.anno_dock.isHidden():
+            self.anno_dock.show()
+
+        item = self._anno_items_by_id.get(str(anno_id))
+        if item is None:
+            # list may be stale; refresh and retry once
+            self._refresh_annotation_list()
+            item = self._anno_items_by_id.get(str(anno_id))
+            if item is None:
+                return
+
+        # Select + scroll into view
+        self.anno_list.setCurrentItem(item)
+        self.anno_list.scrollToItem(item)
 
 # ---------------- Zoom window  -------------
     def on_zoom_selection(self) -> None:
@@ -1664,6 +1647,39 @@ class MainWindow(QMainWindow):
 
     def _on_psd_panel_destroyed(self, *args) -> None:
         self.psd_panel = None
+
+    def _on_bad_channels_changed(self) -> None:
+        self._mark_project_dirty()
+
+        # Saved edited montage may no longer be valid if bad channels changed.
+        self._saved_bipolar_montage = None
+
+        # Always keep PSD state in sync if the panel is open
+        if self.psd_panel is not None and self.psd_panel.isVisible():
+            current_bad = set(self.viewer.get_bad_channels())
+            self.psd_panel._bad_names = current_bad
+            self.psd_panel._refresh_lists()
+            self.psd_panel._sync_selection_to_lists()
+            self.psd_panel._refresh_plot()
+
+        # Rebuild automatic bipolar montage only when relevant
+        if self.viewer.reference_mode() != "bipolar":
+            return
+
+        if self.current_raw is None:
+            return
+
+        channel_names = self.viewer.get_raw_channel_names()
+        bad_channels = self.viewer.get_bad_channels()
+
+        montage = build_automatic_bipolar_montage(
+            channel_names,
+            bad_channels=bad_channels,
+        )
+
+        self.viewer.set_bipolar_mode(montage)
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
 
     def _mark_channels_bad_from_psd(self, channel_names: list[str]) -> None:
         if self.current_raw is None or not channel_names:
@@ -1763,3 +1779,5 @@ class MainWindow(QMainWindow):
         layout.addWidget(buttons)
 
         dlg.exec()
+
+ 
