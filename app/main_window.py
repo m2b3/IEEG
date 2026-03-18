@@ -36,6 +36,15 @@ from app.referencing import (
     parse_channel_label,
 )
 from app.psd_panel import PSDIntervalDialog, PSDPanel
+from app.filtering import (
+    FilterSettings,
+    NOTCH_OFF,
+    NOTCH_50_HARM,
+    NOTCH_60_HARM,
+    validate_filter_settings,
+    build_filtered_raw,
+    is_filter_active,
+)
 
 
 class MainWindow(QMainWindow):
@@ -71,18 +80,107 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
 
-        self.montage_label = QLabel("Montage: Monopolar")
-        self.montage_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.montage_label.setStyleSheet("""
-            QLabel {
-                font-weight: 600;
-                padding: 4px 8px;
-                color: #dddddd;
+        self.top_controls = QFrame()
+        self.top_controls.setStyleSheet("""
+            QFrame {
                 background-color: #2b2b2b;
                 border-bottom: 1px solid #444444;
             }
+            QLabel {
+                color: #dddddd;
+            }
         """)
-        layout.addWidget(self.montage_label, 0)
+
+        top = QHBoxLayout(self.top_controls)
+        top.setContentsMargins(8, 4, 8, 4)
+        top.setSpacing(8)
+
+        # ---- Montage / reference display ----
+        self.top_controls = QFrame()
+        self.top_controls.setStyleSheet("""
+            QFrame {
+                background-color: #2b2b2b;
+                border-bottom: 1px solid #444444;
+            }
+            QLabel {
+                color: #dddddd;
+            }
+        """)
+
+        top = QHBoxLayout(self.top_controls)
+        top.setContentsMargins(8, 4, 8, 4)
+        top.setSpacing(8)
+
+        # ---- Montage label ----
+        self.montage_label = QLabel("Montage: Monopolar")
+        self.montage_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.montage_label.setStyleSheet("font-weight: 600; padding: 4px 8px;")
+        top.addWidget(self.montage_label)
+
+        top.addSpacing(16)
+
+        # ---- Filter controls container ----
+        self.filter_controls_widget = QWidget()
+        filter_row = QHBoxLayout(self.filter_controls_widget)
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(8)
+
+        filter_row.addWidget(QLabel("Scope:"))
+        self.filter_scope = QComboBox()
+        self.filter_scope.addItems(["All"])
+        self.filter_scope.setEnabled(False)   # future-ready
+        filter_row.addWidget(self.filter_scope)
+
+        filter_row.addWidget(QLabel("HP (Hz):"))
+        self.filter_hp = QDoubleSpinBox()
+        self.filter_hp.setDecimals(2)
+        self.filter_hp.setRange(0.0, 10000.0)
+        self.filter_hp.setSingleStep(0.5)
+        self.filter_hp.setValue(0.0)
+        self.filter_hp.setSpecialValueText("Off")
+        self.filter_hp.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.filter_hp.setFixedWidth(90)
+        filter_row.addWidget(self.filter_hp)
+
+        filter_row.addWidget(QLabel("LP (Hz):"))
+        self.filter_lp = QDoubleSpinBox()
+        self.filter_lp.setDecimals(2)
+        self.filter_lp.setRange(0.0, 10000.0)
+        self.filter_lp.setSingleStep(1.0)
+        self.filter_lp.setValue(0.0)
+        self.filter_lp.setSpecialValueText("Off")
+        self.filter_lp.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.filter_lp.setFixedWidth(90)
+        filter_row.addWidget(self.filter_lp)
+
+        filter_row.addWidget(QLabel("Notch:"))
+        self.filter_notch = QComboBox()
+        self.filter_notch.addItems([
+            NOTCH_OFF,
+            NOTCH_50_HARM,
+            NOTCH_60_HARM,
+        ])
+        filter_row.addWidget(self.filter_notch)
+
+        self.btn_apply_filters = QToolButton()
+        self.btn_apply_filters.setText("Apply filters")
+        self.btn_apply_filters.clicked.connect(self.on_apply_filters)
+        filter_row.addWidget(self.btn_apply_filters)
+
+        self.btn_reset_filters = QToolButton()
+        self.btn_reset_filters.setText("Back to default")
+        self.btn_reset_filters.clicked.connect(self.on_reset_filters)
+        filter_row.addWidget(self.btn_reset_filters)
+
+        self.filter_controls_widget.hide()
+        top.addWidget(self.filter_controls_widget)
+
+        top.addStretch(1)
+
+        layout.addWidget(self.top_controls, 0)
+
+
+        
 
         self.viewer = MultiChannelViewer()
         layout.addWidget(self.viewer, 1)
@@ -117,6 +215,14 @@ class MainWindow(QMainWindow):
 
         self.psd_panel: PSDPanel | None = None
 
+        self.source_raw: BaseRaw | None = None   # original, never modified
+        self.current_raw: BaseRaw | None = None  # active signal used everywhere
+        self.current_picks: np.ndarray | None = None
+        self.loaded_file: Path | None = None
+
+        self.filter_settings = FilterSettings()
+        self._psd_interval: tuple[float, float] | None = None
+
         self._update_window_title()
         self._restoring_project = False
 
@@ -148,7 +254,8 @@ class MainWindow(QMainWindow):
         self.anno_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.anno_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.anno_list.customContextMenuRequested.connect(self._on_annotation_list_context_menu)
-       
+
+
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
@@ -242,6 +349,10 @@ class MainWindow(QMainWindow):
         self.project_dirty = False
         self._saved_bipolar_montage = None
         self._restoring_project = False
+        
+        self.source_raw = None
+        self.filter_settings = FilterSettings()
+        self._psd_interval = None
 
         # Avoid viewer->MainWindow signal side effects during teardown
         self.viewer.blockSignals(True)
@@ -269,6 +380,11 @@ class MainWindow(QMainWindow):
         self.btn_edit_bipolar.setEnabled(False)
         self.montage_label.setText("Montage: Monopolar")
         self._update_window_title()
+
+        if hasattr(self, "filter_controls_widget"):
+            self.filter_controls_widget.hide()
+        
+        self._push_filter_state_to_ui()
 
         if self.psd_panel is not None:
             self.psd_panel.close()
@@ -369,20 +485,29 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open EEG error", str(e))
             return False
 
-        self.current_raw = raw
+        self.source_raw = raw
         self.current_picks = picks
         self.loaded_file = raw_path
 
-        self.viewer.set_raw(raw, picks)
+        self.filter_settings = FilterSettings()
+        self._push_filter_state_to_ui()
+        self._rebuild_active_raw_from_source()
+
+        self._rebuild_active_raw_from_source()
+
+        if self.current_raw is None:
+            QMessageBox.critical(self, "Open EEG error", "Could not build active raw.")
+            return False
+
+        self.viewer.set_raw(self.current_raw, self.current_picks)
         self._saved_bipolar_montage = None
         self._update_montage_label()
 
-        ## Opening a raw file alone is not the same as opening a project
         self.project_path = None
         self.project_dirty = False
 
         self._enable_loaded_ui()
-        self._act_save.setEnabled(False)  # no bound project yet
+        self._act_save.setEnabled(False)
         self._update_window_title()
 
         return True
@@ -743,6 +868,165 @@ class MainWindow(QMainWindow):
             pretty = "Monopolar"
 
         self.montage_label.setText(f"Montage: {pretty}")
+
+    def _filter_settings_from_ui(self) -> FilterSettings:
+        hp = float(self.filter_hp.value())
+        lp = float(self.filter_lp.value())
+
+        return FilterSettings(
+            highpass_hz=(None if hp <= 0.0 else hp),
+            lowpass_hz=(None if lp <= 0.0 else lp),
+            notch_mode=str(self.filter_notch.currentText()),
+            scope=str(self.filter_scope.currentText()),
+        )
+
+    def _push_filter_state_to_ui(self) -> None:
+        hp = 0.0 if self.filter_settings.highpass_hz is None else float(self.filter_settings.highpass_hz)
+        lp = 0.0 if self.filter_settings.lowpass_hz is None else float(self.filter_settings.lowpass_hz)
+
+        self.filter_hp.setValue(hp)
+        self.filter_lp.setValue(lp)
+        self.filter_notch.setCurrentText(self.filter_settings.notch_mode)
+        self.filter_scope.setCurrentText(self.filter_settings.scope)
+
+    def _capture_reference_state(self) -> dict:
+        mode = self.viewer.reference_mode()
+        return {
+            "mode": mode,
+            "common_ref_name": self.viewer.common_reference_name(),
+            "bipolar_montage": self.viewer.get_bipolar_montage() if mode == "bipolar" else None,
+        }
+
+    def _restore_reference_state(self, ref_state: dict) -> None:
+        mode = ref_state.get("mode", "monopolar")
+
+        if mode == "average":
+            self.viewer.set_average_mode()
+            self.btn_edit_bipolar.setEnabled(False)
+        elif mode == "median":
+            self.viewer.set_median_mode()
+            self.btn_edit_bipolar.setEnabled(False)
+        elif mode == "common":
+            ref_name = ref_state.get("common_ref_name")
+            if ref_name:
+                self.viewer.set_common_reference_mode(ref_name)
+            self.btn_edit_bipolar.setEnabled(False)
+        elif mode == "bipolar":
+            montage = ref_state.get("bipolar_montage")
+            if montage is not None:
+                self.viewer.set_bipolar_mode(montage)
+                self.btn_edit_bipolar.setEnabled(True)
+            else:
+                self.viewer.set_monopolar_mode()
+                self.btn_edit_bipolar.setEnabled(False)
+        else:
+            self.viewer.set_monopolar_mode()
+            self.btn_edit_bipolar.setEnabled(False)
+
+        self._update_montage_label()
+
+    def _refresh_psd_panel_context(self) -> None:
+        if self.psd_panel is None:
+            return
+        if self.current_raw is None or self.current_picks is None:
+            return
+        if self._psd_interval is None:
+            return
+
+        start_s, stop_s = self._psd_interval
+        self.psd_panel.set_psd_context(
+            raw=self.current_raw,
+            picks=self.current_picks,
+            display_names=self.viewer.get_channel_names(),
+            bad_names=self.viewer.get_bad_channels(),
+            start_s=float(start_s),
+            stop_s=float(stop_s),
+        )
+
+    def _refresh_active_signal_everywhere(self) -> None:
+        if self.current_raw is None or self.current_picks is None:
+            return
+
+        ref_mode = self.viewer.reference_mode()
+        bipolar_montage = self.viewer.get_bipolar_montage() if ref_mode == "bipolar" else None
+        common_ref_name = self.viewer.common_reference_name() if ref_mode == "common" else None
+
+        t0 = float(self.viewer.time_start())
+        ch0 = int(self.viewer.channel_start())
+
+        self.viewer.set_raw(self.current_raw, self.current_picks)
+        self.viewer.set_view_params(
+            time_range=float(self.time_range.value()),
+            chan_range=int(self.chan_range.value()),
+            gain=float(self.gain.value()),
+        )
+        self.viewer.set_time_start(t0)
+        self.viewer.set_channel_start(ch0)
+
+        if ref_mode == "average":
+            self.viewer.set_average_mode()
+            self.btn_edit_bipolar.setEnabled(False)
+        elif ref_mode == "median":
+            self.viewer.set_median_mode()
+            self.btn_edit_bipolar.setEnabled(False)
+        elif ref_mode == "bipolar" and bipolar_montage is not None:
+            self.viewer.set_bipolar_mode(bipolar_montage)
+            self.btn_edit_bipolar.setEnabled(True)
+        elif ref_mode == "common" and common_ref_name:
+            self.viewer.set_common_reference_mode(common_ref_name)
+            self.btn_edit_bipolar.setEnabled(False)
+        else:
+            self.viewer.set_monopolar_mode()
+            self.btn_edit_bipolar.setEnabled(False)
+
+        self._update_montage_label()
+        self._sync_comp_panel_context()
+        self._sync_comp_panel_view_state()
+        self._refresh_psd_panel_context()
+        self._update_time_slider_range()
+
+    def _rebuild_active_raw_from_source(self) -> None:
+        if self.source_raw is None:
+            return
+
+        if is_filter_active(self.filter_settings):
+            self.current_raw = build_filtered_raw(self.source_raw, self.filter_settings)
+        else:
+            self.current_raw = self.source_raw
+
+    def on_apply_filters(self) -> None:
+        if self.source_raw is None:
+            QMessageBox.information(self, "Filters", "Load a dataset first.")
+            return
+
+        new_settings = self._filter_settings_from_ui()
+        ok, msg = validate_filter_settings(new_settings, sfreq=float(self.source_raw.info["sfreq"]))
+        if not ok:
+            QMessageBox.warning(self, "Filters", msg)
+            return
+
+        self.filter_settings = new_settings
+        self._rebuild_active_raw_from_source()
+        self._refresh_active_signal_everywhere()
+        self._mark_project_dirty()
+
+        hp_txt = "Off" if self.filter_settings.highpass_hz is None else f"{self.filter_settings.highpass_hz:g} Hz"
+        lp_txt = "Off" if self.filter_settings.lowpass_hz is None else f"{self.filter_settings.lowpass_hz:g} Hz"
+        self.console.log(
+            f"Filters applied | HP: {hp_txt} | LP: {lp_txt} | Notch: {self.filter_settings.notch_mode}"
+        )
+
+    def on_reset_filters(self) -> None:
+        if self.source_raw is None:
+            QMessageBox.information(self, "Filters", "Load a dataset first.")
+            return
+
+        self.filter_settings = FilterSettings()
+        self._push_filter_state_to_ui()
+        self._rebuild_active_raw_from_source()
+        self._refresh_active_signal_everywhere()
+        self._mark_project_dirty()
+        self.console.log("Filters reset to default.")
 
 # ---------------- Viewer interaction callbacks ----------------
    
@@ -1732,6 +2016,14 @@ class MainWindow(QMainWindow):
 
         self.console.log(f"Unmarked as bad: {', '.join(removed)}")
 
+# ---------------- Filters  -------------
+    def on_toggle_permanent_filters(self) -> None:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Permanent Filters", "Load a dataset first.")
+            return
+
+        visible = self.filter_controls_widget.isVisible()
+        self.filter_controls_widget.setVisible(not visible)
 # ---------------- User guide  -------------
 
     def on_open_user_guide(self) -> None:
