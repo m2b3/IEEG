@@ -501,8 +501,69 @@ From the list, you can:
 - delete it from the plot context menu
 
 ---
+## 12. Permanent filters
 
-## 12. Computation panel
+Permanent filters are applied at the application level and affect the active signal used throughout the interface.
+
+Signal flow: raw data → reference choice → filters → viewer + PSD + computation panel
+
+This means the viewer, PSD panel, and computation panel all use the same filtered signal.
+
+### Available filters
+
+High-pass filter, entered manually in Hz
+
+Low-pass filter, entered manually in Hz
+
+Notch filter:
+
+- Off
+
+- 50 Hz + harmonics
+
+- 60 Hz + harmonics
+
+The notch filter uses an FIR notch filtering approach.
+
+### How to use
+
+Enter the desired high-pass and/or low-pass values.
+
+Select the notch mode.
+
+Click Apply filters.
+
+The filters remain active for the current session/project until changed or reset.
+
+Click Reset to default to return to the unfiltered signal.
+
+### Validation rules
+
+Values must be positive
+
+High-pass must be lower than low-pass
+
+Low-pass must be below Nyquist
+
+Empty input means the corresponding filter is off
+
+### Important behavior
+
+Filters are non-destructive
+
+The original recording is never modified
+
+Applying new filters replaces the previously active filter state for the current session/project
+
+Saving a project also saves the current permanent filter settings
+
+### Project persistence
+
+Permanent filter settings are included in the project save system. When a project is reopened, the saved filter state is restored with the rest of the session state.
+
+---
+
+## 13. Computation panel
 
 The application provides a computation panel linked to selected channels.
 
@@ -524,7 +585,7 @@ The panel follows the main viewer time and cursor behavior when “linked” box
 
 ---
 
-## 13. Power Spectral Density (PSD) panel
+## 14. Power Spectral Density (PSD) panel
 
 The PSD panel lets you inspect the power spectral density of multiple channels over a chosen time interval.
 
@@ -620,7 +681,7 @@ Behavior:
 
 ---
 
-## 14. Closing files and exiting
+## 15. Closing files and exiting
 
 ### Close the current file or project
 
@@ -636,7 +697,7 @@ To quit completely:
 
 ---
 
-## 15. Saving behavior
+## 16. Saving behavior
 
 Saved projects preserve review state such as:
 
@@ -658,7 +719,7 @@ depending on your previous review context.
 
 ---
 
-## 16. Practical review workflow
+## 17. Practical review workflow
 
 A common workflow is:
 
