@@ -5,7 +5,7 @@ from pathlib import Path
 from dataclasses import asdict
 from typing import Any
 
-PROJECT_VERSION = 2
+PROJECT_VERSION = 3
 PROJECT_FORMAT = "ieeg-review-project"
 
 
@@ -37,6 +37,7 @@ def build_project_dict(main_window) -> dict[str, Any]:
 
     annotations = [asdict(a) for a in viewer.get_annotations()]
     bipolar_montage = getattr(main_window, "_saved_bipolar_montage", None)
+    filter_settings = getattr(main_window, "filter_settings", None)
 
     if getattr(main_window, "project_path", None) is not None:
         project_name = Path(main_window.project_path).stem
@@ -57,6 +58,9 @@ def build_project_dict(main_window) -> dict[str, Any]:
             "hidden_channels": viewer.get_hidden_channels(),
             "bad_channels": viewer.get_bad_channels(),
             "bipolar_montage": _serialize_bipolar_montage_if_edited(bipolar_montage),
+        },
+        "preprocessing": {
+            "filters": _serialize_filter_settings(filter_settings),
         },
     }
 
@@ -89,7 +93,7 @@ def load_project(path: Path) -> dict[str, Any]:
     version_raw = payload.get("version")
     if not isinstance(version_raw, int):
         raise ValueError(f"Invalid project version: {version_raw!r}")
-    if version_raw not in (1, 2):
+    if version_raw not in (1, 2, 3):
         raise ValueError(f"Unsupported project version: {version_raw!r}")
 
     source = payload.get("source")
@@ -101,3 +105,12 @@ def load_project(path: Path) -> dict[str, Any]:
         raise ValueError("Project does not contain a valid source.raw_file")
 
     return payload
+
+
+def _serialize_filter_settings(filters) -> dict[str, Any]:
+        return {
+            "highpass_hz": filters.highpass_hz,
+            "lowpass_hz": filters.lowpass_hz,
+            "notch_mode": filters.notch_mode,
+            "scope": filters.scope,
+        }

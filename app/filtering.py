@@ -26,7 +26,6 @@ def _clean_cutoff(value: float | None) -> float | None:
         return None
     return v
 
-
 def validate_filter_settings(settings: FilterSettings, sfreq: float) -> tuple[bool, str]:
     hp = _clean_cutoff(settings.highpass_hz)
     lp = _clean_cutoff(settings.lowpass_hz)
@@ -47,7 +46,6 @@ def validate_filter_settings(settings: FilterSettings, sfreq: float) -> tuple[bo
 
     return True, ""
 
-
 def is_filter_active(settings: FilterSettings) -> bool:
     return (
         _clean_cutoff(settings.highpass_hz) is not None
@@ -55,12 +53,10 @@ def is_filter_active(settings: FilterSettings) -> bool:
         or settings.notch_mode != NOTCH_OFF
     )
 
-
 def _harmonic_freqs(base_hz: float, sfreq: float) -> np.ndarray:
     nyquist = 0.5 * float(sfreq)
     freqs = np.arange(base_hz, nyquist, base_hz, dtype=float)
     return freqs[freqs > 0.0]
-
 
 def build_filtered_raw(source_raw: BaseRaw, settings: FilterSettings) -> BaseRaw:
     """

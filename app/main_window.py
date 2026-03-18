@@ -131,24 +131,24 @@ class MainWindow(QMainWindow):
         self.filter_scope.setEnabled(False)   # future-ready
         filter_row.addWidget(self.filter_scope)
 
-        filter_row.addWidget(QLabel("HP (Hz):"))
+        filter_row.addWidget(QLabel("High Pass (Hz):"))
         self.filter_hp = QDoubleSpinBox()
         self.filter_hp.setDecimals(2)
         self.filter_hp.setRange(0.0, 10000.0)
         self.filter_hp.setSingleStep(0.5)
         self.filter_hp.setValue(0.0)
-        self.filter_hp.setSpecialValueText("Off")
+        self.filter_hp.setSpecialValueText("0")
         self.filter_hp.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.filter_hp.setFixedWidth(90)
         filter_row.addWidget(self.filter_hp)
 
-        filter_row.addWidget(QLabel("LP (Hz):"))
+        filter_row.addWidget(QLabel("Low Pass (Hz):"))
         self.filter_lp = QDoubleSpinBox()
         self.filter_lp.setDecimals(2)
         self.filter_lp.setRange(0.0, 10000.0)
         self.filter_lp.setSingleStep(1.0)
         self.filter_lp.setValue(0.0)
-        self.filter_lp.setSpecialValueText("Off")
+        self.filter_lp.setSpecialValueText("0")
         self.filter_lp.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.filter_lp.setFixedWidth(90)
         filter_row.addWidget(self.filter_lp)
@@ -499,7 +499,24 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open EEG error", "Could not build active raw.")
             return False
 
+        t0 = float(self.viewer.time_start())
+        ch0 = int(self.viewer.channel_start())
+
+        time_range = float(self.viewer._time_range)
+        chan_range = int(self.viewer._chan_range)
+        gain = float(self.viewer._gain_uv)
+
         self.viewer.set_raw(self.current_raw, self.current_picks)
+
+        self.viewer.set_view_params(
+            time_range=time_range,
+            chan_range=chan_range,
+            gain=gain,
+        )
+
+        self.viewer.set_time_start(t0)
+        self.viewer.set_channel_start(ch0)
+
         self._saved_bipolar_montage = None
         self._update_montage_label()
 
@@ -657,6 +674,24 @@ class MainWindow(QMainWindow):
         if not self._open_raw_file(raw_path):
             return
 
+        preprocessing = payload.get("preprocessing", {})
+        if not isinstance(preprocessing, dict):
+            preprocessing = {}
+
+        filters_raw = preprocessing.get("filters", {})
+        if not isinstance(filters_raw, dict):
+            filters_raw = {}
+
+        self.filter_settings = FilterSettings(
+            highpass_hz=filters_raw.get("highpass_hz"),
+            lowpass_hz=filters_raw.get("lowpass_hz"),
+            notch_mode=str(filters_raw.get("notch_mode", NOTCH_OFF)),
+            scope=str(filters_raw.get("scope", "All")),
+        )
+        self._push_filter_state_to_ui()
+        self._rebuild_active_raw_from_source()
+        self._refresh_active_signal_everywhere()
+        
         review = payload.get("review")
         if not isinstance(review, dict):
             review = {}
@@ -942,42 +977,12 @@ class MainWindow(QMainWindow):
             start_s=float(start_s),
             stop_s=float(stop_s),
         )
-
+        
     def _refresh_active_signal_everywhere(self) -> None:
         if self.current_raw is None or self.current_picks is None:
             return
 
-        ref_mode = self.viewer.reference_mode()
-        bipolar_montage = self.viewer.get_bipolar_montage() if ref_mode == "bipolar" else None
-        common_ref_name = self.viewer.common_reference_name() if ref_mode == "common" else None
-
-        t0 = float(self.viewer.time_start())
-        ch0 = int(self.viewer.channel_start())
-
-        self.viewer.set_raw(self.current_raw, self.current_picks)
-        self.viewer.set_view_params(
-            time_range=float(self.time_range.value()),
-            chan_range=int(self.chan_range.value()),
-            gain=float(self.gain.value()),
-        )
-        self.viewer.set_time_start(t0)
-        self.viewer.set_channel_start(ch0)
-
-        if ref_mode == "average":
-            self.viewer.set_average_mode()
-            self.btn_edit_bipolar.setEnabled(False)
-        elif ref_mode == "median":
-            self.viewer.set_median_mode()
-            self.btn_edit_bipolar.setEnabled(False)
-        elif ref_mode == "bipolar" and bipolar_montage is not None:
-            self.viewer.set_bipolar_mode(bipolar_montage)
-            self.btn_edit_bipolar.setEnabled(True)
-        elif ref_mode == "common" and common_ref_name:
-            self.viewer.set_common_reference_mode(common_ref_name)
-            self.btn_edit_bipolar.setEnabled(False)
-        else:
-            self.viewer.set_monopolar_mode()
-            self.btn_edit_bipolar.setEnabled(False)
+        self.viewer.replace_raw_preserve_view(self.current_raw, self.current_picks)
 
         self._update_montage_label()
         self._sync_comp_panel_context()
@@ -1072,9 +1077,42 @@ class MainWindow(QMainWindow):
 
     def _refresh_display_name_dependent_ui(self) -> None:
         self._sync_comp_panel_context()
-        self._refresh_annotation_list()   
+        self._refresh_annotation_list()
 
-   
+    def _capture_viewer_state(self) -> dict:
+        return {
+            "t0": float(self.viewer.time_start()),
+            "ch0": int(self.viewer.channel_start()),
+            "time_range": float(self.time_range.value()),
+            "chan_range": int(self.chan_range.value()),
+            "gain": float(self.gain.value()),
+            "hidden": set(self.viewer.get_hidden_channels()),
+            "bad": set(self.viewer.get_bad_channels()),
+            "selected_abs": list(getattr(self.viewer, "_selected_abs_set", set())),
+            "cursor_x": float(self.viewer.cursor_x()),
+            "ref": self._capture_reference_state(),
+        }
+
+    def _restore_viewer_state(self, state: dict) -> None:
+        self.viewer.set_view_params(
+            time_range=float(state["time_range"]),
+            chan_range=int(state["chan_range"]),
+            gain=float(state["gain"]),
+        )
+        self.viewer.set_hidden_channels(set(state["hidden"]))
+        self.viewer.set_bad_channels(set(state["bad"]))
+        self.viewer.set_time_start(float(state["t0"]))
+        self.viewer.set_channel_start(int(state["ch0"]))
+
+        if state["selected_abs"]:
+            self.viewer.set_selected_abs(list(state["selected_abs"]), emit=False)
+
+        # optional, only if you want cursor restored too
+        if hasattr(self.viewer, "_cursor_x"):
+            self.viewer._cursor_x = float(state["cursor_x"])
+
+        self._restore_reference_state(state["ref"])
+
     # ---------------- Time navigation ----------------
 
     def _zoom_time_range(self, direction: int):

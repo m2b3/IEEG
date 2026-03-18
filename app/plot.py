@@ -715,6 +715,36 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         max_start = max(0, len(all_vis) - count)
         self._ch_start = max(0, min(int(self._ch_start), max_start))
 
+    def replace_raw_preserve_view(self, raw: BaseRaw, picks: Optional[np.ndarray] = None):
+        """
+        Replace the backing raw object while preserving current viewer state.
+        Use this when the logical dataset is the same (e.g. filters applied),
+        not when loading a completely new file.
+        """
+        self._raw = raw
+        self._fs = float(raw.info["sfreq"])
+
+        if picks is None:
+            self._picks = np.arange(raw.info["nchan"], dtype=int)
+        else:
+            self._picks = np.asarray(picks, dtype=int)
+
+        self._channel_names = [raw.ch_names[i] for i in self._picks.tolist()]
+
+        # keep reference mode / montage / selections / zoom / hidden / bad / annotations
+        # but make display names consistent with current reference mode
+        if self._reference_mode in ("monopolar", "average", "median", "common"):
+            self._display_names = list(self._channel_names)
+            self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
+
+        self._clamp_time_start()
+        self._clamp_ch_start()
+        self._clear_bipolar_cache()
+        self.render()
+        self.channelWindowChanged.emit(self._ch_start)
+        self.timeWindowChanged.emit(self._t_start)
+
+
     @staticmethod
     def _nice_time_step(window_s: float, target_lines: int = 10) -> float:
         # Keep your existing implementation below this in your file.
@@ -1265,7 +1295,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._anno_preview.setPos([x0, y0])
         self._anno_preview.setSize([max(1e-6, x1 - x0), h])
-        self._anno_preview.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60))
+        self._anno_preview.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60)) # type: ignore
 
     def _add_annotation_items(self, a: Annotation) -> None:
         rgb = ANNOTATION_STYLES.get(a.kind, (0, 200, 0))
@@ -1382,7 +1412,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         rgb = ANNOTATION_STYLES.get(a.kind, (0, 200, 0))
         if roi is not None:
-            roi.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60))
+            roi.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60)) # type: ignore
 
         if txt is not None:
             txt.setText(a.note or "")
@@ -1863,7 +1893,7 @@ class _AnnotationROI(pg.RectROI):
         super().__init__(pos, size, pen=None, movable=True)
         self._viewer = viewer
         self._anno_id = anno_id
-        self.setBrush(brush)
+        self.setBrush(brush) # type: ignore
 
     def contextMenuEvent(self, ev):
         menu = QtWidgets.QMenu()
