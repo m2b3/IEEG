@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -493,8 +496,6 @@ class MainWindow(QMainWindow):
         self._push_filter_state_to_ui()
         self._rebuild_active_raw_from_source()
 
-        self._rebuild_active_raw_from_source()
-
         if self.current_raw is None:
             QMessageBox.critical(self, "Open EEG error", "Could not build active raw.")
             return False
@@ -507,6 +508,10 @@ class MainWindow(QMainWindow):
         gain = float(self.viewer._gain_uv)
 
         self.viewer.set_raw(self.current_raw, self.current_picks)
+        self.viewer.show()
+        self.viewer.update()
+        self.viewer.repaint()
+        self.filter_controls_widget.show()
 
         self.viewer.set_view_params(
             time_range=time_range,
@@ -529,6 +534,107 @@ class MainWindow(QMainWindow):
 
         return True
 
+    def _extract_fdt_candidates_from_error(self, error: Exception) -> list[str]:
+        """
+        Extract .fdt filenames mentioned in an MNE EEGLAB error message.
+        Returns basenames only.
+        """
+        text = str(error)
+        matches = re.findall(r'([^\\/:*?"<>|\r\n]+\.fdt)', text, flags=re.IGNORECASE)
+        out = []
+        seen = set()
+        for m in matches:
+            name = Path(m).name
+            low = name.lower()
+            if low not in seen:
+                seen.add(low)
+                out.append(name)
+        return out
+
+    def _find_matching_fdt_for_set(self, set_path: Path, expected_names: list[str] | None = None) -> Path | None:
+        """
+        Find the most likely companion .fdt for a .set file.
+
+        Priority:
+        1) any expected name from the MNE error if present in the same folder
+        2) same stem as the .set
+        3) if there is exactly one .fdt in the folder, use it
+        4) otherwise return None
+        """
+        set_path = Path(set_path)
+        folder = set_path.parent
+
+        if expected_names:
+            for name in expected_names:
+                candidate = folder / name
+                if candidate.exists():
+                    return candidate
+
+        same_stem = folder / f"{set_path.stem}.fdt"
+        if same_stem.exists():
+            return same_stem
+
+        candidates = sorted(folder.glob("*.fdt"))
+        if len(candidates) == 1:
+            return candidates[0]
+
+        return None
+
+    def _load_eeglab_with_local_fdt_fallback(self, set_path: Path):
+        """
+        Load an EEGLAB .set file, falling back to a local .fdt in the same folder.
+
+        If MNE complains about missing .fdt files, this function:
+        - extracts the filenames MNE tried
+        - finds a likely local .fdt
+        - copies that .fdt into a temp folder under the expected names
+        - retries the load from the temp folder
+        """
+        set_path = Path(set_path)
+
+        try:
+            return mne.io.read_raw_eeglab(set_path, preload=False)
+        except Exception as e:
+            first_error = e
+
+        expected_fdt_names = self._extract_fdt_candidates_from_error(first_error)
+
+        fdt_path = self._find_matching_fdt_for_set(set_path, expected_names=expected_fdt_names)
+        if fdt_path is None:
+            folder_fdt = sorted(p.name for p in set_path.parent.glob("*.fdt"))
+            raise RuntimeError(
+                "Could not open EEGLAB .set file because no matching .fdt could be resolved.\n\n"
+                f"SET: {set_path}\n"
+                f"MNE expected: {expected_fdt_names or '[none detected]'}\n"
+                f"Available .fdt files in folder: {folder_fdt or '[none]'}\n\n"
+                "Make sure the correct companion .fdt is in the same folder as the .set."
+            ) from first_error
+
+        with tempfile.TemporaryDirectory(prefix="ieeg_eeglab_") as tmpdir:
+            tmpdir = Path(tmpdir)
+            tmp_set = tmpdir / set_path.name
+            shutil.copy2(set_path, tmp_set)
+
+            # Names MNE commonly tries:
+            alias_names = set(expected_fdt_names)
+            alias_names.add(f"{set_path.stem}.fdt")
+            alias_names.add(fdt_path.name)
+
+            for alias in alias_names:
+                shutil.copy2(fdt_path, tmpdir / alias)
+
+            try:
+                return mne.io.read_raw_eeglab(tmp_set, preload=True)
+            except Exception as e:
+                raise RuntimeError(
+                    "Could not open EEGLAB .set/.fdt pair.\n"
+                    f"SET: {set_path}\n"
+                    f"FDT source used: {fdt_path}\n"
+                    f"Expected aliases: {sorted(alias_names)}\n\n"
+                    f"Original error: {first_error}\n"
+                    f"Fallback error: {e}"
+                ) from e
+
     def _load_eeg_file(self, file_path: Path):
         """Load EEG file via MNE and return (raw, eeg_picks)."""
         file_path = Path(file_path)
@@ -542,7 +648,7 @@ class MainWindow(QMainWindow):
         elif suf == ".vhdr":
             raw = mne.io.read_raw_brainvision(file_path, preload=False)
         elif suf == ".set":
-            raw = mne.io.read_raw_eeglab(file_path, preload=False)
+            raw = self._load_eeglab_with_local_fdt_fallback(file_path)
         elif suf == ".cnt":
             raw = mne.io.read_raw_cnt(file_path, preload=False)
         else:
@@ -691,7 +797,7 @@ class MainWindow(QMainWindow):
         self._push_filter_state_to_ui()
         self._rebuild_active_raw_from_source()
         self._refresh_active_signal_everywhere()
-        
+
         review = payload.get("review")
         if not isinstance(review, dict):
             review = {}
@@ -800,6 +906,12 @@ class MainWindow(QMainWindow):
     def _enable_loaded_ui(self) -> None:
         self.tb.setEnabled(True)
         self.timeline.show()
+
+        if hasattr(self, "filter_controls_widget"):
+            self.filter_controls_widget.show()
+
+        self.viewer.show()
+        self.viewer.update()
         self._update_time_slider_range()
         self._sync_time_from_viewer(0.0)
 
