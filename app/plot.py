@@ -170,6 +170,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hidden_channels: set[str] = set()
         self._bad_channels: set[str] = set()
 
+        # colors of micro channel
+        self._channel_groups: dict[str, str] = {}
+        self._micro_trace_color = (79, 195, 247)   # cyan / light blue
+        self._micro_label_color = (79, 195, 247)
+        self._macro_trace_color = (255, 255, 255)
+        self._macro_label_color = (180, 180, 180)
+
         # row->channel mapping for the last render (needed for right-click)
         self._last_visible_ch_indices: list[int] = []
 
@@ -240,6 +247,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hidden_channels.clear()
         self._bad_channels.clear()
 
+        self._channel_groups.clear()
+
         self._annotations.clear()
         self._clear_annotation_items()
 
@@ -287,7 +296,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._picks = np.asarray(picks, dtype=int)
 
         self._channel_names = [raw.ch_names[i] for i in self._picks.tolist()]
-
+        self._channel_groups = {str(ch): "macro" for ch in self._channel_names}
+        
         self._reference_mode = "monopolar"
         self._bipolar_montage = None
         self._display_names = list(self._channel_names)
@@ -416,7 +426,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for row in range(n_vis):
             abs_idx = visible_abs[row]
             ch_name = self._channel_names[abs_idx]
-            pen = pg.mkPen("r", width=1.5) if (ch_name in self._bad_channels) else pg.mkPen("w", width=1)
+            group = self.get_channel_group(ch_name)
+
+            if ch_name in self._bad_channels:
+                pen = pg.mkPen("r", width=1.5)
+            elif group == "micro":
+                pen = pg.mkPen(self._micro_trace_color, width=1)
+            else:
+                pen = pg.mkPen(self._macro_trace_color, width=1)
 
             plot_row = (n_vis - 1 - row)
             y = (seg_ds_uv[row] * gain_factor) + plot_row * self._spacing
@@ -434,11 +451,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             plot_row = (n_vis - 1 - row)
             y = plot_row * float(self._spacing)
 
+            group = self.get_channel_group(ch_name)
+            label_color = self._micro_label_color if group == "micro" else self._macro_label_color
+
             txt = pg.TextItem(
                 text=ch_name,
                 anchor=(1.0, 0.5),
-                color=(180, 180, 180),
+                color=label_color,
             )
+            
             txt.setPos(98.0, y)
             self.label_plot.addItem(txt)
             self._labels.append(txt)
@@ -554,7 +575,18 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(txt)
             self._minmax_items.append(txt)
 
+    def set_channel_groups(self, groups: dict[str, str] | None) -> None:
+        self._channel_groups = {}
+        if isinstance(groups, dict):
+            for ch_name, group in groups.items():
+                g = str(group).lower()
+                if g in {"macro", "micro"}:
+                    self._channel_groups[str(ch_name)] = g
+        self.render()
 
+    def get_channel_group(self, ch_name: str) -> str:
+        return self._channel_groups.get(str(ch_name), "macro")
+    
     # ---------------- Visible data & window helpers ---------------
    
     def _visible_window_abs_indices(self) -> list[int]:
@@ -803,18 +835,37 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             c = self._curves[row]
             abs_idx = int(self._visible_abs[row])
             raw_name = self._channel_names[abs_idx]
-            
+
             is_bad = raw_name in self._bad_channels
             is_selected = abs_idx in self._selected_abs_set
 
+            group = self.get_channel_group(raw_name)
             width = 3 if is_selected else 1
-            color = "r" if is_bad else "w"
+
+            if is_bad:
+                color = "r"
+            elif group == "micro":
+                color = self._micro_trace_color
+            else:
+                color = self._macro_trace_color
+
             c.setPen(pg.mkPen(color, width=width))
 
         n_lbl = int(min(len(self._labels), int(self._visible_abs.size)))
         for row in range(n_lbl):
             abs_idx = int(self._visible_abs[row])
-            self._labels[row].setColor((255, 255, 0) if abs_idx in self._selected_abs_set else (180, 180, 180))
+            ch_name = self._channel_names[abs_idx]
+            group = self.get_channel_group(ch_name)
+
+            if abs_idx in self._selected_abs_set:
+                self._labels[row].setColor((255, 255, 0))
+            else:
+                base_color = (
+                    self._micro_label_color
+                    if group == "micro"
+                    else self._macro_label_color
+                )
+                self._labels[row].setColor(base_color)
 
     def set_channel_start(self, ch_start: int):
         """Move the visible channel window start (index in displayed channel list)."""

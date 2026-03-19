@@ -990,6 +990,7 @@ class MainWindow(QMainWindow):
             return
 
         self.channel_groups = working_groups
+        self.viewer.set_channel_groups(self.channel_groups)
         self._mark_project_dirty()
 
         n_micro = sum(1 for g in self.channel_groups.values() if g == "micro")
@@ -1259,20 +1260,25 @@ class MainWindow(QMainWindow):
             raw = self.source_raw
         if raw is None:
             self.channel_groups = {}
+            self.viewer.set_channel_groups(self.channel_groups)
             return
 
         self.channel_groups = {str(ch): "macro" for ch in raw.ch_names}
+        self.viewer.set_channel_groups(self.channel_groups)
+
 
     def _restore_channel_groups(self, saved_groups) -> None:
         raw = self.source_raw
         if raw is None:
             self.channel_groups = {}
+            self.viewer.set_channel_groups(self.channel_groups)
             return
 
         defaults = {str(ch): "macro" for ch in raw.ch_names}
 
         if not isinstance(saved_groups, dict):
             self.channel_groups = defaults
+            self.viewer.set_channel_groups(self.channel_groups)
             return
 
         for ch_name, group in saved_groups.items():
@@ -1280,6 +1286,7 @@ class MainWindow(QMainWindow):
                 defaults[ch_name] = str(group).lower()
 
         self.channel_groups = defaults
+        self.viewer.set_channel_groups(self.channel_groups)
 
     def get_channel_group(self, ch_name: str) -> str:
         return self.channel_groups.get(ch_name, "macro")
