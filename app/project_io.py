@@ -5,7 +5,7 @@ from pathlib import Path
 from dataclasses import asdict
 from typing import Any
 
-PROJECT_VERSION = 3
+PROJECT_VERSION = 4
 PROJECT_FORMAT = "ieeg-review-project"
 
 
@@ -38,6 +38,7 @@ def build_project_dict(main_window) -> dict[str, Any]:
     annotations = [asdict(a) for a in viewer.get_annotations()]
     bipolar_montage = getattr(main_window, "_saved_bipolar_montage", None)
     filter_settings = getattr(main_window, "filter_settings", None)
+    channel_groups = getattr(main_window, "channel_groups", {})
 
     if getattr(main_window, "project_path", None) is not None:
         project_name = Path(main_window.project_path).stem
@@ -58,6 +59,7 @@ def build_project_dict(main_window) -> dict[str, Any]:
             "hidden_channels": viewer.get_hidden_channels(),
             "bad_channels": viewer.get_bad_channels(),
             "bipolar_montage": _serialize_bipolar_montage_if_edited(bipolar_montage),
+            "channel_groups": channel_groups,
         },
         "preprocessing": {
             "filters": _serialize_filter_settings(filter_settings),
@@ -93,7 +95,7 @@ def load_project(path: Path) -> dict[str, Any]:
     version_raw = payload.get("version")
     if not isinstance(version_raw, int):
         raise ValueError(f"Invalid project version: {version_raw!r}")
-    if version_raw not in (1, 2, 3):
+    if version_raw not in (1, 2, 3, 4):
         raise ValueError(f"Unsupported project version: {version_raw!r}")
 
     source = payload.get("source")

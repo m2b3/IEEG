@@ -226,6 +226,8 @@ class MainWindow(QMainWindow):
         self.filter_settings = FilterSettings()
         self._psd_interval: tuple[float, float] | None = None
 
+        self.channel_groups: dict[str, str] = {}
+
         self._update_window_title()
         self._restoring_project = False
 
@@ -356,6 +358,7 @@ class MainWindow(QMainWindow):
         self.source_raw = None
         self.filter_settings = FilterSettings()
         self._psd_interval = None
+        self.channel_groups = {}
 
         # Avoid viewer->MainWindow signal side effects during teardown
         self.viewer.blockSignals(True)
@@ -491,6 +494,8 @@ class MainWindow(QMainWindow):
         self.source_raw = raw
         self.current_picks = picks
         self.loaded_file = raw_path
+
+        self._initialize_default_channel_groups(raw)
 
         self.filter_settings = FilterSettings()
         self._push_filter_state_to_ui()
@@ -806,6 +811,7 @@ class MainWindow(QMainWindow):
         hidden_raw = review.get("hidden_channels", [])
         bad_raw = review.get("bad_channels", [])
         saved_montage_raw = review.get("bipolar_montage")
+        saved_channel_groups = review.get("channel_groups", {})
 
         hidden = set(hidden_raw) if isinstance(hidden_raw, list) else set()
         bad = set(bad_raw) if isinstance(bad_raw, list) else set()
@@ -820,6 +826,7 @@ class MainWindow(QMainWindow):
                 if isinstance(saved_montage_raw, dict)
                 else None
             )
+            self._restore_channel_groups(saved_channel_groups)
         finally:
             self._restoring_project = False
 
@@ -886,6 +893,108 @@ class MainWindow(QMainWindow):
             self._act_save.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, "Save project error", str(e))
+
+    def on_edit_channel_groups(self) -> None:
+        if self.source_raw is None:
+            QMessageBox.information(self, "Channel Groups", "Load a dataset first.")
+            return
+
+        if not self.channel_groups:
+            self._initialize_default_channel_groups(self.source_raw)
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Channel Groups")
+        dlg.resize(700, 560)
+
+        layout = QVBoxLayout(dlg)
+
+        search = QLineEdit(dlg)
+        search.setPlaceholderText("Search channel name...")
+        layout.addWidget(search)
+
+        table = QTableWidget(0, 2, dlg)
+        table.setHorizontalHeaderLabels(["Channel", "Group"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        layout.addWidget(table)
+
+        button_row = QHBoxLayout()
+
+        btn_set_micro = QToolButton(dlg)
+        btn_set_micro.setText("Set selected to Micro")
+        button_row.addWidget(btn_set_micro)
+
+        btn_set_macro = QToolButton(dlg)
+        btn_set_macro.setText("Set selected to Macro")
+        button_row.addWidget(btn_set_macro)
+
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dlg,
+        )
+        layout.addWidget(buttons)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+
+        channel_names = list(self.source_raw.ch_names)
+        working_groups = dict(self.channel_groups)
+
+        def _populate(filter_text: str = "") -> None:
+            text = filter_text.strip().lower()
+            table.setRowCount(0)
+
+            for ch in channel_names:
+                if text and text not in ch.lower():
+                    continue
+
+                row = table.rowCount()
+                table.insertRow(row)
+
+                item_name = QTableWidgetItem(ch)
+                item_name.setFlags(item_name.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 0, item_name)
+
+                item_group = QTableWidgetItem(working_groups.get(ch, "macro").capitalize())
+                item_group.setFlags(item_group.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                table.setItem(row, 1, item_group)
+
+        def _set_selected_group(group: str) -> None:
+            selected_rows = sorted({idx.row() for idx in table.selectionModel().selectedRows()})
+            if not selected_rows:
+                return
+
+            for row in selected_rows:
+                name_item = table.item(row, 0)
+                group_item = table.item(row, 1)
+                if name_item is None or group_item is None:
+                    continue
+
+                ch_name = name_item.text().strip()
+                working_groups[ch_name] = group
+                group_item.setText(group.capitalize())
+
+        search.textChanged.connect(_populate)
+        btn_set_micro.clicked.connect(lambda: _set_selected_group("micro"))
+        btn_set_macro.clicked.connect(lambda: _set_selected_group("macro"))
+
+        _populate()
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self.channel_groups = working_groups
+        self._mark_project_dirty()
+
+        n_micro = sum(1 for g in self.channel_groups.values() if g == "micro")
+        n_macro = sum(1 for g in self.channel_groups.values() if g == "macro")
+        self.console.log(f"Channel groups updated | Macro: {n_macro} | Micro: {n_micro}")
 
 # ---------------- Project state helpers ----------------
 
@@ -1144,6 +1253,40 @@ class MainWindow(QMainWindow):
         self._refresh_active_signal_everywhere()
         self._mark_project_dirty()
         self.console.log("Filters reset to default.")
+
+    def _initialize_default_channel_groups(self, raw: BaseRaw | None = None) -> None:
+        if raw is None:
+            raw = self.source_raw
+        if raw is None:
+            self.channel_groups = {}
+            return
+
+        self.channel_groups = {str(ch): "macro" for ch in raw.ch_names}
+
+    def _restore_channel_groups(self, saved_groups) -> None:
+        raw = self.source_raw
+        if raw is None:
+            self.channel_groups = {}
+            return
+
+        defaults = {str(ch): "macro" for ch in raw.ch_names}
+
+        if not isinstance(saved_groups, dict):
+            self.channel_groups = defaults
+            return
+
+        for ch_name, group in saved_groups.items():
+            if ch_name in defaults and str(group).lower() in {"macro", "micro"}:
+                defaults[ch_name] = str(group).lower()
+
+        self.channel_groups = defaults
+
+    def get_channel_group(self, ch_name: str) -> str:
+        return self.channel_groups.get(ch_name, "macro")
+
+    def get_channels_in_group(self, group: str) -> list[str]:
+        group = str(group).lower()
+        return [ch for ch, g in self.channel_groups.items() if g == group]
 
 # ---------------- Viewer interaction callbacks ----------------
    
@@ -2174,6 +2317,7 @@ class MainWindow(QMainWindow):
 
         visible = self.filter_controls_widget.isVisible()
         self.filter_controls_widget.setVisible(not visible)
+
 # ---------------- User guide  -------------
 
     def on_open_user_guide(self) -> None:

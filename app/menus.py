@@ -47,6 +47,7 @@ def build_menubar(main_window):
     edit_menu = menubar.addMenu("Edit")
     add_action(edit_menu, "Implantation", lambda: print("TODO: Implantation"))
     add_action(edit_menu, "Annotate", main_window.on_annotate)
+    add_action(edit_menu, "Channel Groups", main_window.on_edit_channel_groups)
 
     # -------- Preprocessing --------
     pre_menu = menubar.addMenu("Preprocessing")
