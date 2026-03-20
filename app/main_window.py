@@ -41,11 +41,12 @@ from app.referencing import (
 from app.psd_panel import PSDIntervalDialog, PSDPanel
 from app.filtering import (
     FilterSettings,
+    FilterProfiles,
     NOTCH_OFF,
     NOTCH_50_HARM,
     NOTCH_60_HARM,
     validate_filter_settings,
-    build_filtered_raw,
+    build_filtered_raw_by_group,
     is_filter_active,
 )
 
@@ -130,8 +131,8 @@ class MainWindow(QMainWindow):
 
         filter_row.addWidget(QLabel("Scope:"))
         self.filter_scope = QComboBox()
-        self.filter_scope.addItems(["All"])
-        self.filter_scope.setEnabled(False)   # future-ready
+        self.filter_scope.addItems(["All", "Macro", "Micro"])
+        self.filter_scope.currentTextChanged.connect(self._on_filter_scope_changed)
         filter_row.addWidget(self.filter_scope)
 
         filter_row.addWidget(QLabel("High Pass (Hz):"))
@@ -174,6 +175,12 @@ class MainWindow(QMainWindow):
         self.btn_reset_filters.setText("Back to default")
         self.btn_reset_filters.clicked.connect(self.on_reset_filters)
         filter_row.addWidget(self.btn_reset_filters)
+
+        self.filter_summary = QLabel("")
+        self.filter_summary.setStyleSheet("color: #bbbbbb; padding-left: 8px;")
+        self.filter_summary.setMinimumWidth(260)
+        self.filter_summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        filter_row.addWidget(self.filter_summary, 1)
 
         self.filter_controls_widget.hide()
         top.addWidget(self.filter_controls_widget)
@@ -223,7 +230,7 @@ class MainWindow(QMainWindow):
         self.current_picks: np.ndarray | None = None
         self.loaded_file: Path | None = None
 
-        self.filter_settings = FilterSettings()
+        self.filter_profiles = FilterProfiles()
         self._psd_interval: tuple[float, float] | None = None
 
         self.channel_groups: dict[str, str] = {}
@@ -356,7 +363,7 @@ class MainWindow(QMainWindow):
         self._restoring_project = False
         
         self.source_raw = None
-        self.filter_settings = FilterSettings()
+        self.filter_profiles = FilterProfiles()
         self._psd_interval = None
         self.channel_groups = {}
 
@@ -390,7 +397,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "filter_controls_widget"):
             self.filter_controls_widget.hide()
         
-        self._push_filter_state_to_ui()
+        self.filter_scope.setCurrentText("All")
+        self._push_scope_profile_to_ui()
+        self._update_filter_summary_label()
 
         if self.psd_panel is not None:
             self.psd_panel.close()
@@ -497,9 +506,11 @@ class MainWindow(QMainWindow):
 
         self._initialize_default_channel_groups(raw)
 
-        self.filter_settings = FilterSettings()
-        self._push_filter_state_to_ui()
+        self.filter_profiles = FilterProfiles()
+        self.filter_scope.setCurrentText("All")
         self._rebuild_active_raw_from_source()
+        self._push_scope_profile_to_ui()
+        self._update_filter_summary_label()
 
         if self.current_raw is None:
             QMessageBox.critical(self, "Open EEG error", "Could not build active raw.")
@@ -794,15 +805,46 @@ class MainWindow(QMainWindow):
         if not isinstance(filters_raw, dict):
             filters_raw = {}
 
-        self.filter_settings = FilterSettings(
-            highpass_hz=filters_raw.get("highpass_hz"),
-            lowpass_hz=filters_raw.get("lowpass_hz"),
-            notch_mode=str(filters_raw.get("notch_mode", NOTCH_OFF)),
-            scope=str(filters_raw.get("scope", "All")),
-        )
-        self._push_filter_state_to_ui()
+        if "macro" in filters_raw or "micro" in filters_raw:
+            macro_raw = filters_raw.get("macro", {})
+            micro_raw = filters_raw.get("micro", {})
+
+            if not isinstance(macro_raw, dict):
+                macro_raw = {}
+            if not isinstance(micro_raw, dict):
+                micro_raw = {}
+
+            self.filter_profiles = FilterProfiles(
+                macro=FilterSettings(
+                    highpass_hz=macro_raw.get("highpass_hz"),
+                    lowpass_hz=macro_raw.get("lowpass_hz"),
+                    notch_mode=str(macro_raw.get("notch_mode", NOTCH_OFF)),
+                ),
+                micro=FilterSettings(
+                    highpass_hz=micro_raw.get("highpass_hz"),
+                    lowpass_hz=micro_raw.get("lowpass_hz"),
+                    notch_mode=str(micro_raw.get("notch_mode", NOTCH_OFF)),
+                ),
+            )
+        else:
+            legacy = FilterSettings(
+                highpass_hz=filters_raw.get("highpass_hz"),
+                lowpass_hz=filters_raw.get("lowpass_hz"),
+                notch_mode=str(filters_raw.get("notch_mode", NOTCH_OFF)),
+            )
+            self.filter_profiles = FilterProfiles(
+                macro=legacy,
+                micro=FilterSettings(
+                    highpass_hz=legacy.highpass_hz,
+                    lowpass_hz=legacy.lowpass_hz,
+                    notch_mode=legacy.notch_mode,
+                ),
+            )
+
+        self._push_scope_profile_to_ui()
         self._rebuild_active_raw_from_source()
         self._refresh_active_signal_everywhere()
+        self._update_filter_summary_label()
 
         review = payload.get("review")
         if not isinstance(review, dict):
@@ -1130,26 +1172,6 @@ class MainWindow(QMainWindow):
 
         self.montage_label.setText(f"Montage: {pretty}")
 
-    def _filter_settings_from_ui(self) -> FilterSettings:
-        hp = float(self.filter_hp.value())
-        lp = float(self.filter_lp.value())
-
-        return FilterSettings(
-            highpass_hz=(None if hp <= 0.0 else hp),
-            lowpass_hz=(None if lp <= 0.0 else lp),
-            notch_mode=str(self.filter_notch.currentText()),
-            scope=str(self.filter_scope.currentText()),
-        )
-
-    def _push_filter_state_to_ui(self) -> None:
-        hp = 0.0 if self.filter_settings.highpass_hz is None else float(self.filter_settings.highpass_hz)
-        lp = 0.0 if self.filter_settings.lowpass_hz is None else float(self.filter_settings.lowpass_hz)
-
-        self.filter_hp.setValue(hp)
-        self.filter_lp.setValue(lp)
-        self.filter_notch.setCurrentText(self.filter_settings.notch_mode)
-        self.filter_scope.setCurrentText(self.filter_settings.scope)
-
     def _capture_reference_state(self) -> dict:
         mode = self.viewer.reference_mode()
         return {
@@ -1234,11 +1256,18 @@ class MainWindow(QMainWindow):
         if self.source_raw is None:
             return
 
-        if is_filter_active(self.filter_settings):
-            self.current_raw = build_filtered_raw(self.source_raw, self.filter_settings)
+        if (
+            is_filter_active(self.filter_profiles.macro)
+            or is_filter_active(self.filter_profiles.micro)
+        ):
+            self.current_raw = build_filtered_raw_by_group(
+                self.source_raw,
+                self.filter_profiles,
+                self.channel_groups,
+            )
         else:
             self.current_raw = self.source_raw
-
+            
     def on_apply_filters(self) -> None:
         if self.source_raw is None:
             QMessageBox.information(self, "Filters", "Load a dataset first.")
@@ -1250,29 +1279,57 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Filters", msg)
             return
 
-        self.filter_settings = new_settings
+        scope_key = self._scope_key_from_ui()
+
+        if scope_key == "all":
+            self.filter_profiles.macro = FilterSettings(
+                highpass_hz=new_settings.highpass_hz,
+                lowpass_hz=new_settings.lowpass_hz,
+                notch_mode=new_settings.notch_mode,
+            )
+            self.filter_profiles.micro = FilterSettings(
+                highpass_hz=new_settings.highpass_hz,
+                lowpass_hz=new_settings.lowpass_hz,
+                notch_mode=new_settings.notch_mode,
+            )
+        elif scope_key == "micro":
+            self.filter_profiles.micro = new_settings
+        else:
+            self.filter_profiles.macro = new_settings
+
         self._rebuild_active_raw_from_source()
         self._refresh_active_signal_everywhere()
+        self._update_filter_summary_label()
         self._mark_project_dirty()
 
-        hp_txt = "Off" if self.filter_settings.highpass_hz is None else f"{self.filter_settings.highpass_hz:g} Hz"
-        lp_txt = "Off" if self.filter_settings.lowpass_hz is None else f"{self.filter_settings.lowpass_hz:g} Hz"
         self.console.log(
-            f"Filters applied | HP: {hp_txt} | LP: {lp_txt} | Notch: {self.filter_settings.notch_mode}"
+            "Filters applied | "
+            f"Scope: {self.filter_scope.currentText()} | "
+            f"Macro: {self._fmt_filter_short(self.filter_profiles.macro)} | "
+            f"Micro: {self._fmt_filter_short(self.filter_profiles.micro)}"
         )
-
+        
     def on_reset_filters(self) -> None:
         if self.source_raw is None:
             QMessageBox.information(self, "Filters", "Load a dataset first.")
             return
 
-        self.filter_settings = FilterSettings()
-        self._push_filter_state_to_ui()
+        scope_key = self._scope_key_from_ui()
+
+        if scope_key == "all":
+            self.filter_profiles = FilterProfiles()
+        elif scope_key == "micro":
+            self.filter_profiles.micro = FilterSettings()
+        else:
+            self.filter_profiles.macro = FilterSettings()
+
+        self._push_scope_profile_to_ui()
         self._rebuild_active_raw_from_source()
         self._refresh_active_signal_everywhere()
+        self._update_filter_summary_label()
         self._mark_project_dirty()
-        self.console.log("Filters reset to default.")
-
+        self.console.log(f"Filters reset | Scope: {self.filter_scope.currentText()}")
+        
     def _initialize_default_channel_groups(self, raw: BaseRaw | None = None) -> None:
         if raw is None:
             raw = self.source_raw
@@ -2319,6 +2376,76 @@ class MainWindow(QMainWindow):
 
         visible = self.filter_controls_widget.isVisible()
         self.filter_controls_widget.setVisible(not visible)
+
+    def _scope_key_from_ui(self) -> str:
+        txt = str(self.filter_scope.currentText()).strip().lower()
+        if txt == "macro":
+            return "macro"
+        if txt == "micro":
+            return "micro"
+        return "all"
+
+    def _get_profile(self, scope_key: str) -> FilterSettings:
+        if scope_key == "micro":
+            return self.filter_profiles.micro
+        return self.filter_profiles.macro
+
+    def _filter_settings_from_ui(self) -> FilterSettings:
+        hp = float(self.filter_hp.value())
+        lp = float(self.filter_lp.value())
+
+        return FilterSettings(
+            highpass_hz=(None if hp <= 0.0 else hp),
+            lowpass_hz=(None if lp <= 0.0 else lp),
+            notch_mode=str(self.filter_notch.currentText()),
+        )
+
+    def _push_scope_profile_to_ui(self, scope_key: str | None = None) -> None:
+        if scope_key is None:
+            scope_key = self._scope_key_from_ui()
+
+        # For "All", show macro if macro==micro; otherwise keep current values untouched
+        if scope_key == "all":
+            macro = self.filter_profiles.macro
+            micro = self.filter_profiles.micro
+            same = (
+                macro.highpass_hz == micro.highpass_hz
+                and macro.lowpass_hz == micro.lowpass_hz
+                and macro.notch_mode == micro.notch_mode
+            )
+            if not same:
+                return
+            settings = macro
+        elif scope_key == "micro":
+            settings = self.filter_profiles.micro
+        else:
+            settings = self.filter_profiles.macro
+
+        hp = 0.0 if settings.highpass_hz is None else float(settings.highpass_hz)
+        lp = 0.0 if settings.lowpass_hz is None else float(settings.lowpass_hz)
+
+        self.filter_hp.setValue(hp)
+        self.filter_lp.setValue(lp)
+        self.filter_notch.setCurrentText(settings.notch_mode)
+
+    def _fmt_filter_short(self, settings: FilterSettings) -> str:
+        hp = "Off" if settings.highpass_hz is None else f"HP {settings.highpass_hz:g}"
+        lp = "Off" if settings.lowpass_hz is None else f"LP {settings.lowpass_hz:g}"
+        if settings.notch_mode == NOTCH_50_HARM:
+            notch = "N50"
+        elif settings.notch_mode == NOTCH_60_HARM:
+            notch = "N60"
+        else:
+            notch = "NOff"
+        return f"{hp} | {lp} | {notch}"
+
+    def _update_filter_summary_label(self) -> None:
+        macro_txt = self._fmt_filter_short(self.filter_profiles.macro)
+        micro_txt = self._fmt_filter_short(self.filter_profiles.micro)
+        self.filter_summary.setText(f"Macro: {macro_txt}   ·   Micro: {micro_txt}")
+
+    def _on_filter_scope_changed(self, _text: str) -> None:
+        self._push_scope_profile_to_ui()
 
 # ---------------- User guide  -------------
 

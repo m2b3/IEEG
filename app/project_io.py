@@ -37,7 +37,7 @@ def build_project_dict(main_window) -> dict[str, Any]:
 
     annotations = [asdict(a) for a in viewer.get_annotations()]
     bipolar_montage = getattr(main_window, "_saved_bipolar_montage", None)
-    filter_settings = getattr(main_window, "filter_settings", None)
+    filter_profiles = getattr(main_window, "filter_profiles", None)
     channel_groups = getattr(main_window, "channel_groups", {})
 
     if getattr(main_window, "project_path", None) is not None:
@@ -62,7 +62,7 @@ def build_project_dict(main_window) -> dict[str, Any]:
             "channel_groups": channel_groups,
         },
         "preprocessing": {
-            "filters": _serialize_filter_settings(filter_settings),
+            "filters": _serialize_filter_profiles(filter_profiles),
         },
     }
 
@@ -108,11 +108,15 @@ def load_project(path: Path) -> dict[str, Any]:
 
     return payload
 
-
 def _serialize_filter_settings(filters) -> dict[str, Any]:
-        return {
-            "highpass_hz": filters.highpass_hz,
-            "lowpass_hz": filters.lowpass_hz,
-            "notch_mode": filters.notch_mode,
-            "scope": filters.scope,
-        }
+    return {
+        "highpass_hz": filters.highpass_hz,
+        "lowpass_hz": filters.lowpass_hz,
+        "notch_mode": filters.notch_mode,
+    }
+
+def _serialize_filter_profiles(profiles) -> dict[str, Any]:
+    return {
+        "macro": _serialize_filter_settings(profiles.macro),
+        "micro": _serialize_filter_settings(profiles.micro),
+    }
