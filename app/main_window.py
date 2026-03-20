@@ -513,6 +513,7 @@ class MainWindow(QMainWindow):
         gain = float(self.viewer._gain_uv)
 
         self.viewer.set_raw(self.current_raw, self.current_picks)
+        self.viewer.set_channel_groups(self.channel_groups)
         self.viewer.show()
         self.viewer.update()
         self.viewer.repaint()
@@ -992,7 +993,9 @@ class MainWindow(QMainWindow):
         self.channel_groups = working_groups
         self.viewer.set_channel_groups(self.channel_groups)
         self._mark_project_dirty()
-        self._refresh_psd_panel_context()
+        
+        if self.psd_panel is not None:
+            self._refresh_psd_panel_context()
 
         n_micro = sum(1 for g in self.channel_groups.values() if g == "micro")
         n_macro = sum(1 for g in self.channel_groups.values() if g == "macro")
@@ -1182,7 +1185,7 @@ class MainWindow(QMainWindow):
             self.btn_edit_bipolar.setEnabled(False)
 
         self._update_montage_label()
-
+   
     def _refresh_psd_panel_context(self) -> None:
         if self.psd_panel is None:
             return
@@ -1193,13 +1196,14 @@ class MainWindow(QMainWindow):
 
         display_names = self.viewer.get_channel_names()
 
-        macro_names = self.get_channels_in_group("macro")
-        micro_names = self.get_channels_in_group("micro")
-
-        print("DISPLAY NAMES:", display_names[:10])
-        print("MACRO NAMES:", macro_names[:10])
-        print("MICRO NAMES:", micro_names[:10])
-        print("N display:", len(display_names), "N macro:", len(macro_names), "N micro:", len(micro_names))
+        macro_names = [
+            ch for ch in display_names
+            if self.channel_groups.get(str(ch), "macro") == "macro"
+        ]
+        micro_names = [
+            ch for ch in display_names
+            if self.channel_groups.get(str(ch), "macro") == "micro"
+        ]
 
         start_s, stop_s = self._psd_interval
         self.psd_panel.set_psd_context(
@@ -1212,7 +1216,7 @@ class MainWindow(QMainWindow):
             macro_names=macro_names,
             micro_names=micro_names,
         )
-
+        
     def _refresh_active_signal_everywhere(self) -> None:
         if self.current_raw is None or self.current_picks is None:
             return

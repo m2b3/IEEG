@@ -229,7 +229,6 @@ class PSDPanel(QWidget):
         macro_names=None,
         micro_names=None,
     ) -> None:
-        
         self._raw = raw
         self._picks = np.asarray([] if picks is None else picks, dtype=int)
         self._display_names = list(display_names or [])
@@ -238,22 +237,26 @@ class PSDPanel(QWidget):
         self._stop_s = float(stop_s)
 
         ordered_all = list(self._display_names)
-
         macro_set = set(macro_names or [])
         micro_set = set(micro_names or [])
 
         self._group_channels["macro"] = [ch for ch in ordered_all if ch in macro_set]
         self._group_channels["micro"] = [ch for ch in ordered_all if ch in micro_set]
 
-        if not self._group_channels["macro"] and not self._group_channels["micro"]:
-            self._group_channels["macro"] = list(ordered_all)
-            self._group_channels["micro"] = []
+        self._group_state["macro"]["displayed"] = list(self._group_channels["macro"])
+        self._group_state["macro"]["excluded"] = []
 
-        for group in self.GROUPS:
-            self._group_state[group]["displayed"] = list(self._group_channels[group])
-            self._group_state[group]["excluded"] = []
-            displayed = self._group_state[group]["displayed"]
-            self._selected_channel[group] = displayed[0] if displayed else None
+        self._group_state["micro"]["displayed"] = list(self._group_channels["micro"])
+        self._group_state["micro"]["excluded"] = []
+
+        self._selected_channel["macro"] = (
+            self._group_state["macro"]["displayed"][0]
+            if self._group_state["macro"]["displayed"] else None
+        )
+        self._selected_channel["micro"] = (
+            self._group_state["micro"]["displayed"][0]
+            if self._group_state["micro"]["displayed"] else None
+        )
 
         self._rebuild_psd_cache()
         self._refresh_lists()
