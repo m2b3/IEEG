@@ -673,7 +673,21 @@ class MainWindow(QMainWindow):
 
         picks = np.arange(raw.info["nchan"], dtype=int)
         return raw, picks
-    
+        
+    def _format_title_freq_value(self, settings: FilterSettings) -> str:
+        if self.source_raw is None:
+            return "—"
+
+        nyquist = 0.5 * float(self.source_raw.info["sfreq"])
+        high = nyquist if settings.lowpass_hz is None else float(settings.lowpass_hz)
+        high = max(0.0, min(high, nyquist))
+        return f"{high:g} Hz"
+
+    def _build_title_freq_text(self) -> str:
+        macro_txt = self._format_title_freq_value(self.filter_profiles.macro)
+        micro_txt = self._format_title_freq_value(self.filter_profiles.micro)
+        return f"Macro: {macro_txt} | Micro: {micro_txt}"
+
     def _update_window_title(self):
         base = getattr(self, "_base_title", "iEEG tool")
         if getattr(self, "project_dirty", False):
@@ -698,10 +712,10 @@ class MainWindow(QMainWindow):
         dur_s = float(raw.times[-1]) if raw.n_times > 1 else 0.0
 
         # Sampling freq (global for a single Raw)
-        sfreq = float(raw.info["sfreq"])
+        freq_txt = self._build_title_freq_text()
 
         self.setWindowTitle(
-            f"{base} | Folder: {file_txt} | Ch: {n_sel}/{n_total} | Dur: {dur_s:.1f}s | Fs: {sfreq:.1f}Hz"
+            f"{base} | Folder: {file_txt} | Ch: {n_sel}/{n_total} | Dur: {dur_s:.1f}s | {freq_txt}"
         )
     
     def on_new_project(self) -> None:
@@ -1340,7 +1354,6 @@ class MainWindow(QMainWindow):
 
         self.channel_groups = {str(ch): "macro" for ch in raw.ch_names}
         self.viewer.set_channel_groups(self.channel_groups)
-
 
     def _restore_channel_groups(self, saved_groups) -> None:
         raw = self.source_raw
