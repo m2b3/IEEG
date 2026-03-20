@@ -992,6 +992,7 @@ class MainWindow(QMainWindow):
         self.channel_groups = working_groups
         self.viewer.set_channel_groups(self.channel_groups)
         self._mark_project_dirty()
+        self._refresh_psd_panel_context()
 
         n_micro = sum(1 for g in self.channel_groups.values() if g == "micro")
         n_macro = sum(1 for g in self.channel_groups.values() if g == "macro")
@@ -1190,16 +1191,28 @@ class MainWindow(QMainWindow):
         if self._psd_interval is None:
             return
 
+        display_names = self.viewer.get_channel_names()
+
+        macro_names = self.get_channels_in_group("macro")
+        micro_names = self.get_channels_in_group("micro")
+
+        print("DISPLAY NAMES:", display_names[:10])
+        print("MACRO NAMES:", macro_names[:10])
+        print("MICRO NAMES:", micro_names[:10])
+        print("N display:", len(display_names), "N macro:", len(macro_names), "N micro:", len(micro_names))
+
         start_s, stop_s = self._psd_interval
         self.psd_panel.set_psd_context(
             raw=self.current_raw,
             picks=self.current_picks,
-            display_names=self.viewer.get_channel_names(),
+            display_names=display_names,
             bad_names=self.viewer.get_bad_channels(),
             start_s=float(start_s),
             stop_s=float(stop_s),
+            macro_names=macro_names,
+            micro_names=micro_names,
         )
-        
+
     def _refresh_active_signal_everywhere(self) -> None:
         if self.current_raw is None or self.current_picks is None:
             return
@@ -2244,8 +2257,8 @@ class MainWindow(QMainWindow):
             self.psd_panel._bad_names = current_bad
             self.psd_panel._refresh_lists()
             self.psd_panel._sync_selection_to_lists()
-            self.psd_panel._refresh_plot()
-
+            for group in ("macro", "micro"):
+                self.psd_panel._refresh_plot(group)
         # Rebuild automatic bipolar montage only when relevant
         if self.viewer.reference_mode() != "bipolar":
             return
@@ -2288,8 +2301,8 @@ class MainWindow(QMainWindow):
         # keep PSD panel visual state in sync if it is open
         if self.psd_panel is not None:
             self.psd_panel._bad_names = set(current_bad)
-            self.psd_panel._refresh_plot()
-
+            for group in ("macro", "micro"):
+                self.psd_panel._refresh_plot(group)
         self.console.log(f"Marked as bad: {', '.join(added)}")
 
     def _mark_channels_good_from_psd(self, channel_names: list[str]) -> None:
@@ -2312,7 +2325,8 @@ class MainWindow(QMainWindow):
 
         if self.psd_panel is not None:
             self.psd_panel._bad_names = set(current_bad)
-            self.psd_panel._refresh_plot()
+            for group in ("macro", "micro"):
+                self.psd_panel._refresh_plot(group)
 
         self.console.log(f"Unmarked as bad: {', '.join(removed)}")
 

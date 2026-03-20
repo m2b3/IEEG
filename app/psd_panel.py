@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -45,9 +46,6 @@ class PSDIntervalDialog(QDialog):
 
         self.error_label = QLabel("")
         self.error_label.setStyleSheet("color: #ff6b6b;")
-
-        self._selected_channel: str | None = None
-        self._curve_items: dict[str, pg.PlotDataItem] = {}
 
         form = QFormLayout()
         form.addRow("Start time", self.start_spin)
@@ -89,10 +87,12 @@ class PSDIntervalDialog(QDialog):
 
 
 class PSDPanel(QWidget):
+    GROUPS = ("macro", "micro")
+
     def __init__(self, parent=None, mark_bad_callback=None, mark_good_callback=None):
         super().__init__(parent, Qt.WindowType.Window)
         self.setWindowTitle("PSD Panel")
-        self.resize(1100, 700)
+        self.resize(1400, 850)
 
         self._mark_bad_callback = mark_bad_callback
         self._mark_good_callback = mark_good_callback
@@ -105,79 +105,117 @@ class PSDPanel(QWidget):
         self._start_s = 0.0
         self._stop_s = 0.0
 
-        self._displayed_names: list[str] = []
-        self._excluded_names: list[str] = []
+        self._group_channels: dict[str, list[str]] = {
+            "macro": [],
+            "micro": [],
+        }
+        self._group_state: dict[str, dict[str, list[str]]] = {
+            "macro": {"displayed": [], "excluded": []},
+            "micro": {"displayed": [], "excluded": []},
+        }
 
         self._psd_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
-        self._selected_channel = None
+        self._selected_channel: dict[str, str | None] = {
+            "macro": None,
+            "micro": None,
+        }
 
-        self._curve_items: dict[str, pg.PlotCurveItem] = {}
-        self._curve_to_channel: dict[int, str] = {}
+        self._curve_items: dict[str, dict[str, pg.PlotCurveItem]] = {
+            "macro": {},
+            "micro": {},
+        }
+        self._curve_to_channel: dict[str, dict[int, str]] = {
+            "macro": {},
+            "micro": {},
+        }
+
+        self._lists: dict[str, dict[str, QListWidget]] = {}
+        self._plots: dict[str, pg.PlotWidget] = {}
 
         self._build_ui()
 
     def _build_ui(self) -> None:
-        self.excluded_list = QListWidget()
-        self.excluded_list.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
+        root = QVBoxLayout(self)
 
-        self.displayed_list = QListWidget()
-        self.displayed_list.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
-        self.displayed_list.itemSelectionChanged.connect(self._on_displayed_selection_changed)
-        self.excluded_list.itemSelectionChanged.connect(self._on_excluded_selection_changed)
+        grid = QGridLayout()
+        root.addLayout(grid)
 
-        self.btn_exclude = QPushButton("<<")
-        self.btn_include = QPushButton(">>")
-        self.btn_exclude.clicked.connect(self._move_to_excluded)
-        self.btn_include.clicked.connect(self._move_to_displayed)
+        for col, group in enumerate(self.GROUPS):
+            box = QGroupBox(group.capitalize())
+            box_layout = QVBoxLayout(box)
 
-        self.btn_exclude_all = QPushButton("Exclude all")
-        self.btn_include_all = QPushButton("Include all")
-        self.btn_exclude_all.clicked.connect(self._move_all_to_excluded)
-        self.btn_include_all.clicked.connect(self._move_all_to_displayed)
+            excluded_list = QListWidget()
+            excluded_list.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection
+            )
+            excluded_list.itemSelectionChanged.connect(
+                lambda g=group: self._on_excluded_selection_changed(g)
+            )
 
-        self.btn_mark_bad = QPushButton("Mark selected as bad")
-        self.btn_mark_bad.clicked.connect(self._mark_selected_as_bad)
-        self.btn_unmark_bad = QPushButton("Unmark selected as bad")
-        self.btn_unmark_bad.clicked.connect(self._unmark_selected_as_bad)
-        
-        left_box = QGroupBox("Excluded channels")
-        left_layout = QVBoxLayout(left_box)
-        left_layout.addWidget(self.excluded_list)
+            displayed_list = QListWidget()
+            displayed_list.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection
+            )
+            displayed_list.itemSelectionChanged.connect(
+                lambda g=group: self._on_displayed_selection_changed(g)
+            )
 
-        right_box = QGroupBox("Displayed channels")
-        right_layout = QVBoxLayout(right_box)
-        right_layout.addWidget(self.displayed_list)
+            btn_exclude = QPushButton("<<")
+            btn_include = QPushButton(">>")
+            btn_exclude.clicked.connect(lambda checked=False, g=group: self._move_to_excluded(g))
+            btn_include.clicked.connect(lambda checked=False, g=group: self._move_to_displayed(g))
 
-        mid_btns = QVBoxLayout()
-        mid_btns.addStretch(1)
-        mid_btns.addWidget(self.btn_exclude)
-        mid_btns.addWidget(self.btn_include)
-        mid_btns.addSpacing(12)
-        mid_btns.addWidget(self.btn_exclude_all)
-        mid_btns.addWidget(self.btn_include_all)
-        mid_btns.addSpacing(12)
-        mid_btns.addWidget(self.btn_mark_bad)
-        mid_btns.addWidget(self.btn_unmark_bad)
-        mid_btns.addStretch(1)
+            btn_exclude_all = QPushButton("Exclude all")
+            btn_include_all = QPushButton("Include all")
+            btn_exclude_all.clicked.connect(lambda checked=False, g=group: self._move_all_to_excluded(g))
+            btn_include_all.clicked.connect(lambda checked=False, g=group: self._move_all_to_displayed(g))
 
-        top = QHBoxLayout()
-        top.addWidget(left_box, 1)
-        top.addLayout(mid_btns)
-        top.addWidget(right_box, 1)
+            btn_mark_bad = QPushButton("Mark selected as bad")
+            btn_unmark_bad = QPushButton("Unmark selected as bad")
+            btn_mark_bad.clicked.connect(lambda checked=False, g=group: self._mark_selected_as_bad(g))
+            btn_unmark_bad.clicked.connect(lambda checked=False, g=group: self._unmark_selected_as_bad(g))
 
-        self.plot = pg.PlotWidget()
-        self.plot.showGrid(x=True, y=True, alpha=0.2)
-        self.plot.setLabel("bottom", "Frequency (Hz)")
-        self.plot.setLabel("left", "Power Spectral Density")
+            left_box = QGroupBox("Excluded channels")
+            left_layout = QVBoxLayout(left_box)
+            left_layout.addWidget(excluded_list)
 
-        layout = QVBoxLayout(self)
-        layout.addLayout(top, 1)
-        layout.addWidget(self.plot, 2)
+            right_box = QGroupBox("Displayed channels")
+            right_layout = QVBoxLayout(right_box)
+            right_layout.addWidget(displayed_list)
+
+            mid_btns = QVBoxLayout()
+            mid_btns.addStretch(1)
+            mid_btns.addWidget(btn_exclude)
+            mid_btns.addWidget(btn_include)
+            mid_btns.addSpacing(12)
+            mid_btns.addWidget(btn_exclude_all)
+            mid_btns.addWidget(btn_include_all)
+            mid_btns.addSpacing(12)
+            mid_btns.addWidget(btn_mark_bad)
+            mid_btns.addWidget(btn_unmark_bad)
+            mid_btns.addStretch(1)
+
+            top = QHBoxLayout()
+            top.addWidget(left_box, 1)
+            top.addLayout(mid_btns)
+            top.addWidget(right_box, 1)
+
+            plot = pg.PlotWidget()
+            plot.showGrid(x=True, y=True, alpha=0.2)
+            plot.setLabel("bottom", "Frequency (Hz)")
+            plot.setLabel("left", "Power Spectral Density (dB/Hz)")
+
+            box_layout.addLayout(top, 1)
+            box_layout.addWidget(plot, 2)
+
+            self._lists[group] = {
+                "excluded": excluded_list,
+                "displayed": displayed_list,
+            }
+            self._plots[group] = plot
+
+            grid.addWidget(box, 0, col)
 
     def set_psd_context(
         self,
@@ -188,40 +226,56 @@ class PSDPanel(QWidget):
         bad_names,
         start_s: float,
         stop_s: float,
+        macro_names=None,
+        micro_names=None,
     ) -> None:
+        
         self._raw = raw
         self._picks = np.asarray([] if picks is None else picks, dtype=int)
         self._display_names = list(display_names or [])
         self._bad_names = set(bad_names or [])
-
         self._start_s = float(start_s)
         self._stop_s = float(stop_s)
 
-        # Show all channels in the PSD, including bad ones.
-        # Bad channels are distinguished visually in red instead of being excluded.
-        self._displayed_names = list(self._display_names)          
-        self._excluded_names = []
+        ordered_all = list(self._display_names)
+
+        macro_set = set(macro_names or [])
+        micro_set = set(micro_names or [])
+
+        self._group_channels["macro"] = [ch for ch in ordered_all if ch in macro_set]
+        self._group_channels["micro"] = [ch for ch in ordered_all if ch in micro_set]
+
+        if not self._group_channels["macro"] and not self._group_channels["micro"]:
+            self._group_channels["macro"] = list(ordered_all)
+            self._group_channels["micro"] = []
+
+        for group in self.GROUPS:
+            self._group_state[group]["displayed"] = list(self._group_channels[group])
+            self._group_state[group]["excluded"] = []
+            displayed = self._group_state[group]["displayed"]
+            self._selected_channel[group] = displayed[0] if displayed else None
 
         self._rebuild_psd_cache()
         self._refresh_lists()
-        self._refresh_plot()
-
- # State helpers
+        self._refresh_all_plots()
+        self._sync_selection_to_lists()
 
     def _ordered(self, names: list[str]) -> list[str]:
         order = {name: i for i, name in enumerate(self._display_names)}
         return sorted(names, key=lambda x: order.get(x, 10**9))
 
-    def _get_selected_channel_names(self) -> list[str]:
+    def _current_lists(self, group: str):
+        return self._lists[group]["displayed"], self._lists[group]["excluded"]
+
+    def _get_selected_channel_names(self, group: str) -> list[str]:
+        displayed_list, excluded_list = self._current_lists(group)
         names: list[str] = []
 
-        for item in self.displayed_list.selectedItems():
+        for item in displayed_list.selectedItems():
+            names.append(item.text())
+        for item in excluded_list.selectedItems():
             names.append(item.text())
 
-        for item in self.excluded_list.selectedItems():
-            names.append(item.text())
-
-        # remove duplicates while preserving order
         seen = set()
         out = []
         for name in names:
@@ -230,94 +284,101 @@ class PSDPanel(QWidget):
                 out.append(name)
         return out
 
-# List transfer actions
-
-    def _move_to_excluded(self) -> None:
-        selected = [item.text() for item in self.displayed_list.selectedItems()]
+    def _move_to_excluded(self, group: str) -> None:
+        displayed_list, _ = self._current_lists(group)
+        selected = [item.text() for item in displayed_list.selectedItems()]
         if not selected:
             return
 
+        displayed = self._group_state[group]["displayed"]
+        excluded = self._group_state[group]["excluded"]
+
         for ch in selected:
-            if ch in self._displayed_names:
-                self._displayed_names.remove(ch)
-            if ch not in self._excluded_names:
-                self._excluded_names.append(ch)
+            if ch in displayed:
+                displayed.remove(ch)
+            if ch not in excluded:
+                excluded.append(ch)
 
-        self._excluded_names = self._ordered(self._excluded_names)
-        self._displayed_names = self._ordered(self._displayed_names)
+        self._group_state[group]["displayed"] = self._ordered(displayed)
+        self._group_state[group]["excluded"] = self._ordered(excluded)
 
-        if self._selected_channel in selected:
-            self._selected_channel = selected[0]
+        if self._selected_channel[group] in selected:
+            remaining = self._group_state[group]["displayed"] or self._group_state[group]["excluded"]
+            self._selected_channel[group] = remaining[0] if remaining else None
 
         self._refresh_lists()
         self._sync_selection_to_lists()
-        self._refresh_plot()
+        self._refresh_plot(group)
 
-    def _move_to_displayed(self) -> None:
-        selected = [item.text() for item in self.excluded_list.selectedItems()]
+    def _move_to_displayed(self, group: str) -> None:
+        _, excluded_list = self._current_lists(group)
+        selected = [item.text() for item in excluded_list.selectedItems()]
         if not selected:
             return
 
+        displayed = self._group_state[group]["displayed"]
+        excluded = self._group_state[group]["excluded"]
+
         for ch in selected:
-            if ch in self._excluded_names:
-                self._excluded_names.remove(ch)
-            if ch not in self._displayed_names:
-                self._displayed_names.append(ch)
+            if ch in excluded:
+                excluded.remove(ch)
+            if ch not in displayed:
+                displayed.append(ch)
 
-        self._excluded_names = self._ordered(self._excluded_names)
-        self._displayed_names = self._ordered(self._displayed_names)
+        self._group_state[group]["displayed"] = self._ordered(displayed)
+        self._group_state[group]["excluded"] = self._ordered(excluded)
 
-        if self._selected_channel in selected:
-            self._selected_channel = selected[0]
+        if selected:
+            self._selected_channel[group] = selected[0]
 
         self._refresh_lists()
         self._sync_selection_to_lists()
-        self._refresh_plot()
+        self._refresh_plot(group)
 
-    def _move_all_to_excluded(self) -> None:
-        if not self._displayed_names:
+    def _move_all_to_excluded(self, group: str) -> None:
+        displayed = self._group_state[group]["displayed"]
+        excluded = self._group_state[group]["excluded"]
+
+        if not displayed:
             return
 
-        moved = list(self._displayed_names)
+        for ch in list(displayed):
+            if ch not in excluded:
+                excluded.append(ch)
 
-        for ch in moved:
-            if ch not in self._excluded_names:
-                self._excluded_names.append(ch)
+        self._group_state[group]["displayed"] = []
+        self._group_state[group]["excluded"] = self._ordered(excluded)
 
-        self._displayed_names = []
-        self._excluded_names = self._ordered(self._excluded_names)
-
-        if self._selected_channel not in self._excluded_names:
-            self._selected_channel = self._excluded_names[0] if self._excluded_names else None
+        items = self._group_state[group]["excluded"]
+        self._selected_channel[group] = items[0] if items else None
 
         self._refresh_lists()
         self._sync_selection_to_lists()
-        self._refresh_plot()
+        self._refresh_plot(group)
 
-    def _move_all_to_displayed(self) -> None:
-        if not self._excluded_names:
+    def _move_all_to_displayed(self, group: str) -> None:
+        displayed = self._group_state[group]["displayed"]
+        excluded = self._group_state[group]["excluded"]
+
+        if not excluded:
             return
 
-        moved = list(self._excluded_names)
+        for ch in list(excluded):
+            if ch not in displayed:
+                displayed.append(ch)
 
-        for ch in moved:
-            if ch not in self._displayed_names:
-                self._displayed_names.append(ch)
+        self._group_state[group]["excluded"] = []
+        self._group_state[group]["displayed"] = self._ordered(displayed)
 
-        self._excluded_names = []
-        self._displayed_names = self._ordered(self._displayed_names)
-
-        if self._selected_channel not in self._displayed_names:
-            self._selected_channel = self._displayed_names[0] if self._displayed_names else None
+        items = self._group_state[group]["displayed"]
+        self._selected_channel[group] = items[0] if items else None
 
         self._refresh_lists()
         self._sync_selection_to_lists()
-        self._refresh_plot()
+        self._refresh_plot(group)
 
-# Bad-channel actions
-
-    def _mark_selected_as_bad(self) -> None:
-        selected = self._get_selected_channel_names()
+    def _mark_selected_as_bad(self, group: str) -> None:
+        selected = self._get_selected_channel_names(group)
         if not selected:
             return
 
@@ -329,10 +390,10 @@ class PSDPanel(QWidget):
 
         self._refresh_lists()
         self._sync_selection_to_lists()
-        self._refresh_plot()
+        self._refresh_plot(group)
 
-    def _unmark_selected_as_bad(self) -> None:
-        selected = self._get_selected_channel_names()
+    def _unmark_selected_as_bad(self, group: str) -> None:
+        selected = self._get_selected_channel_names(group)
         if not selected:
             return
 
@@ -340,14 +401,11 @@ class PSDPanel(QWidget):
             self._mark_good_callback(selected)
 
         for ch in selected:
-            if ch in self._bad_names:
-                self._bad_names.remove(ch)
+            self._bad_names.discard(ch)
 
         self._refresh_lists()
         self._sync_selection_to_lists()
-        self._refresh_plot()
-
- # PSD computation
+        self._refresh_plot(group)
 
     def _rebuild_psd_cache(self) -> None:
         self._psd_cache.clear()
@@ -402,18 +460,23 @@ class PSDPanel(QWidget):
         freqs = np.fft.rfftfreq(nperseg, d=1.0 / sfreq)
         return freqs, psd
 
- # Rendering / refresh
+    def _refresh_all_plots(self) -> None:
+        for group in self.GROUPS:
+            self._refresh_plot(group)
 
-    def _refresh_plot(self) -> None:
-        self.plot.clear()
-        self.plot.setLabel("bottom", "Frequency (Hz)")
-        self.plot.setLabel("left", "Power Spectral Density (dB/Hz)")
-        self.plot.setTitle(f"PSD from {self._start_s:.3f} s to {self._stop_s:.3f} s")
+    def _refresh_plot(self, group: str) -> None:
+        plot = self._plots[group]
+        plot.clear()
+        plot.setLabel("bottom", "Frequency (Hz)")
+        plot.setLabel("left", "Power Spectral Density (dB/Hz)")
+        plot.setTitle(
+            f"{group.capitalize()} PSD from {self._start_s:.3f} s to {self._stop_s:.3f} s"
+        )
 
-        self._curve_items = {}
-        self._curve_to_channel = {}
+        self._curve_items[group] = {}
+        self._curve_to_channel[group] = {}
 
-        for ch_name in self._displayed_names:
+        for ch_name in self._group_state[group]["displayed"]:
             cached = self._psd_cache.get(ch_name)
             if cached is None:
                 continue
@@ -423,28 +486,29 @@ class PSDPanel(QWidget):
                 continue
 
             y = 10.0 * np.log10(np.maximum(psd, 1e-20))
-
             curve_item = pg.PlotCurveItem(freqs, y, pen=pg.mkPen(width=1))
             curve_item.setClickable(True, width=8)
-            curve_item.sigClicked.connect(self._on_curve_clicked)
+            curve_item.sigClicked.connect(lambda curve, g=group: self._on_curve_clicked(g, curve))
 
+            plot.addItem(curve_item)
+            self._curve_items[group][ch_name] = curve_item
+            self._curve_to_channel[group][id(curve_item)] = ch_name
 
-
-            self.plot.addItem(curve_item)
-            self._curve_items[ch_name] = curve_item
-            self._apply_selection_highlight()
-            self._curve_to_channel[id(curve_item)] = ch_name
+        self._apply_selection_highlight(group)
 
     def _refresh_lists(self) -> None:
-        self.excluded_list.clear()
-        self.displayed_list.clear()
-        self.excluded_list.addItems(self._excluded_names)
-        self.displayed_list.addItems(self._displayed_names)
-                    
-    def _apply_selection_highlight(self) -> None:
-        selected = getattr(self, "_selected_channel", None)
+        for group in self.GROUPS:
+            displayed_list, excluded_list = self._current_lists(group)
+            displayed_list.clear()
+            excluded_list.clear()
+            excluded_list.addItems(self._group_state[group]["excluded"])
+            displayed_list.addItems(self._group_state[group]["displayed"])
+            self._apply_selection_highlight(group)
 
-        for ch_name, curve in self._curve_items.items():
+    def _apply_selection_highlight(self, group: str) -> None:
+        selected = self._selected_channel[group]
+
+        for ch_name, curve in self._curve_items[group].items():
             is_selected = (ch_name == selected)
             is_bad = (ch_name in self._bad_names)
 
@@ -457,7 +521,7 @@ class PSDPanel(QWidget):
             else:
                 curve.setPen(pg.mkPen(width=1))
 
-        for widget in (self.displayed_list, self.excluded_list):
+        for widget in self._current_lists(group):
             for i in range(widget.count()):
                 item = widget.item(i)
                 ch_name = item.text()
@@ -472,56 +536,59 @@ class PSDPanel(QWidget):
                     item.setForeground(QColor("white"))
 
     def _sync_selection_to_lists(self) -> None:
-        if self._selected_channel is None:
-            return
+        for group in self.GROUPS:
+            selected = self._selected_channel[group]
+            if selected is None:
+                continue
 
-        self.displayed_list.blockSignals(True)
-        self.excluded_list.blockSignals(True)
+            displayed_list, excluded_list = self._current_lists(group)
+            displayed_list.blockSignals(True)
+            excluded_list.blockSignals(True)
 
-        try:
-            self.displayed_list.clearSelection()
-            self.excluded_list.clearSelection()
+            try:
+                displayed_list.clearSelection()
+                excluded_list.clearSelection()
 
-            for i in range(self.displayed_list.count()):
-                item = self.displayed_list.item(i)
-                if item.text() == self._selected_channel:
-                    item.setSelected(True)
-                    self.displayed_list.scrollToItem(item)
-                    break
+                for i in range(displayed_list.count()):
+                    item = displayed_list.item(i)
+                    if item.text() == selected:
+                        item.setSelected(True)
+                        displayed_list.scrollToItem(item)
+                        break
 
-            for i in range(self.excluded_list.count()):
-                item = self.excluded_list.item(i)
-                if item.text() == self._selected_channel:
-                    item.setSelected(True)
-                    self.excluded_list.scrollToItem(item)
-                    break
-        finally:
-            self.displayed_list.blockSignals(False)
-            self.excluded_list.blockSignals(False)
+                for i in range(excluded_list.count()):
+                    item = excluded_list.item(i)
+                    if item.text() == selected:
+                        item.setSelected(True)
+                        excluded_list.scrollToItem(item)
+                        break
+            finally:
+                displayed_list.blockSignals(False)
+                excluded_list.blockSignals(False)
 
- # UI event handlers
-
-    def _on_curve_clicked(self, curve) -> None:
-        ch_name = self._curve_to_channel.get(id(curve))
+    def _on_curve_clicked(self, group: str, curve) -> None:
+        ch_name = self._curve_to_channel[group].get(id(curve))
         if ch_name is None:
             return
 
-        self._selected_channel = ch_name
+        self._selected_channel[group] = ch_name
         self._sync_selection_to_lists()
-        self._apply_selection_highlight()
+        self._apply_selection_highlight(group)
 
-    def _on_displayed_selection_changed(self) -> None:
-        items = self.displayed_list.selectedItems()
+    def _on_displayed_selection_changed(self, group: str) -> None:
+        displayed_list, _ = self._current_lists(group)
+        items = displayed_list.selectedItems()
         if not items:
             return
 
-        self._selected_channel = items[0].text()
-        self._apply_selection_highlight()
+        self._selected_channel[group] = items[0].text()
+        self._apply_selection_highlight(group)
 
-    def _on_excluded_selection_changed(self) -> None:
-        items = self.excluded_list.selectedItems()
+    def _on_excluded_selection_changed(self, group: str) -> None:
+        _, excluded_list = self._current_lists(group)
+        items = excluded_list.selectedItems()
         if not items:
             return
 
-        self._selected_channel = items[0].text()
-        self._apply_selection_highlight()
+        self._selected_channel[group] = items[0].text()
+        self._apply_selection_highlight(group)
