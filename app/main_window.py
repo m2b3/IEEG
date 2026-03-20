@@ -993,7 +993,7 @@ class MainWindow(QMainWindow):
         self.channel_groups = working_groups
         self.viewer.set_channel_groups(self.channel_groups)
         self._mark_project_dirty()
-        
+
         if self.psd_panel is not None:
             self._refresh_psd_panel_context()
 
@@ -1196,14 +1196,15 @@ class MainWindow(QMainWindow):
 
         display_names = self.viewer.get_channel_names()
 
-        macro_names = [
-            ch for ch in display_names
-            if self.channel_groups.get(str(ch), "macro") == "macro"
-        ]
-        micro_names = [
-            ch for ch in display_names
-            if self.channel_groups.get(str(ch), "macro") == "micro"
-        ]
+        macro_names: list[str] = []
+        micro_names: list[str] = []
+
+        for ch_name in display_names:
+            group = self.channel_groups.get(str(ch_name), "macro")
+            if group == "micro":
+                micro_names.append(ch_name)
+            else:
+                macro_names.append(ch_name)
 
         start_s, stop_s = self._psd_interval
         self.psd_panel.set_psd_context(
@@ -2192,8 +2193,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "PSD Panel", "Load a dataset first.")
             return
 
-        # only one PSD window:
-        # if already open, just bring it to front
         if self.psd_panel is not None and self.psd_panel.isVisible():
             self.psd_panel.raise_()
             self.psd_panel.activateWindow()
@@ -2207,6 +2206,9 @@ class MainWindow(QMainWindow):
 
         start_s, stop_s = dlg.values()
 
+        # CRITICAL: store interval so _refresh_psd_panel_context() can work
+        self._psd_interval = (float(start_s), float(stop_s))
+
         self.psd_panel = PSDPanel(
             parent=None,
             mark_bad_callback=self._mark_channels_bad_from_psd,
@@ -2214,37 +2216,12 @@ class MainWindow(QMainWindow):
         )
         self.psd_panel.destroyed.connect(self._on_psd_panel_destroyed)
 
-        display_names = self.viewer.get_channel_names()
-        bad_names = self.viewer.get_bad_channels()
-
-        self.psd_panel.set_psd_context(
-            raw=self.current_raw,
-            picks=self.current_picks,
-            display_names=display_names,
-            bad_names=bad_names,
-            start_s=start_s,
-            stop_s=stop_s,
-        )
+        # CRITICAL: do not call set_psd_context directly here with incomplete args
+        self._refresh_psd_panel_context()
 
         self.psd_panel.show()
         self.psd_panel.raise_()
         self.psd_panel.activateWindow()
-
-        try:
-            self.psd_panel.set_psd_context(
-                raw=self.current_raw,
-                picks=self.current_picks,
-                display_names=display_names,
-                bad_names=bad_names,
-                start_s=start_s,
-                stop_s=stop_s,
-            )
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            QMessageBox.critical(self, "PSD Panel", str(e))
-            self.psd_panel = None
-            return
 
     def _on_psd_panel_destroyed(self, *args) -> None:
         self.psd_panel = None

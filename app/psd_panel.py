@@ -237,31 +237,31 @@ class PSDPanel(QWidget):
         self._stop_s = float(stop_s)
 
         ordered_all = list(self._display_names)
+
         macro_set = set(macro_names or [])
         micro_set = set(micro_names or [])
 
-        self._group_channels["macro"] = [ch for ch in ordered_all if ch in macro_set]
-        self._group_channels["micro"] = [ch for ch in ordered_all if ch in micro_set]
+        macro_displayed = [ch for ch in ordered_all if ch in macro_set]
+        micro_displayed = [ch for ch in ordered_all if ch in micro_set]
 
-        self._group_state["macro"]["displayed"] = list(self._group_channels["macro"])
+
+
+        self._group_channels["macro"] = macro_displayed
+        self._group_channels["micro"] = micro_displayed
+
+        self._group_state["macro"]["displayed"] = list(macro_displayed)
         self._group_state["macro"]["excluded"] = []
 
-        self._group_state["micro"]["displayed"] = list(self._group_channels["micro"])
+        self._group_state["micro"]["displayed"] = list(micro_displayed)
         self._group_state["micro"]["excluded"] = []
 
-        self._selected_channel["macro"] = (
-            self._group_state["macro"]["displayed"][0]
-            if self._group_state["macro"]["displayed"] else None
-        )
-        self._selected_channel["micro"] = (
-            self._group_state["micro"]["displayed"][0]
-            if self._group_state["micro"]["displayed"] else None
-        )
+        self._selected_channel["macro"] = macro_displayed[0] if macro_displayed else None
+        self._selected_channel["micro"] = micro_displayed[0] if micro_displayed else None
 
         self._rebuild_psd_cache()
         self._refresh_lists()
-        self._refresh_all_plots()
         self._sync_selection_to_lists()
+        self._refresh_all_plots()
 
     def _ordered(self, names: list[str]) -> list[str]:
         order = {name: i for i, name in enumerate(self._display_names)}
