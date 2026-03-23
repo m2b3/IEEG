@@ -332,7 +332,8 @@ To switch to Average:
 
 1. Click **Preprocessing > Re-referencing > Average**
 
-Average applies a shared average reference. The original channel names remain the same, but the waveform values are recomputed. Computation exclude bad channels
+Average applies a shared average reference. The original channel names remain the same, but the waveform values are recomputed. Computation exclude channels marked as bad and time intervals annotated as "Bad segment"
+
 
 ### Median
 
@@ -340,7 +341,7 @@ To switch to Median:
 
 1. Click **Preprocessing > Re-referencing > Median**
 
-Median applies a shared median reference. As with Average, the original channel names stay the same. Computation exclude bad channels
+Median applies a shared median reference. As with Average, the original channel names stay the same. Computation exclude channels marked as bad and time intervals annotated as "Bad segment"
 
 
 ### Common reference
@@ -583,6 +584,16 @@ The computation panel uses:
 
 The panel follows the main viewer time and cursor behavior when “linked” box clicked..
 
+### Quick channel selection
+
+The computation panel provides quick selection buttons:
+
+- **All**: select all channels
+- **Macro**: select all macro channels
+- **Micro**: select all micro channels
+
+This allows rapid setup of computations without manual selection.
+
 ---
 
 ## 14. Power Spectral Density (PSD) panel
@@ -705,6 +716,7 @@ Saved projects preserve review state such as:
 - hidden channels
 - bad channels
 - edited bipolar montage state
+- filters
 
 The active reference mode itself is not automatically restored when reopening a project.
 

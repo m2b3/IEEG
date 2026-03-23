@@ -13,6 +13,7 @@ from app.annotations import (
     Annotation, new_id,
     ANNOTATION_STYLES,
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
+    ANNOTATION_TYPES,
 )
 from app.referencing import BipolarMontage, BipolarPair
 
@@ -651,7 +652,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
 
         elif self._reference_mode in ("average", "median"):
-            # Global reference pool: all non-bad channels, even if some are hidden
+            # Reference pool: all non-bad channels, even if some are hidden
             ref_abs = self._all_nonbad_abs_indices()
             if not ref_abs:
                 return None, None
@@ -665,10 +666,19 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             data_v, _ = raw[vis_raw_picks, start_samp:end_samp]
             data_v = np.asarray(data_v, dtype=float)
 
+            # Exclude manually annotated bad segments from the reference computation
+            bad_mask = self._build_bad_segment_mask_for_abs(ref_abs, times)
+            if bad_mask.shape == ref_data.shape:
+                ref_data = ref_data.copy()
+                ref_data[bad_mask] = np.nan
+
             if self._reference_mode == "average":
-                ref = np.mean(ref_data, axis=0, keepdims=True)
+                ref = np.nanmean(ref_data, axis=0, keepdims=True)
             else:
-                ref = np.median(ref_data, axis=0, keepdims=True)
+                ref = np.nanmedian(ref_data, axis=0, keepdims=True)
+
+            # fallback for samples where everything got masked
+            ref = np.where(np.isnan(ref), 0.0, ref)
 
             data_v = data_v - ref
 
@@ -1545,6 +1555,51 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 pass
         self._annotation_items = []
 
+    def _build_bad_segment_mask_for_abs(
+        self,
+        visible_abs: list[int],
+        times: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Return a boolean mask of shape (n_channels, n_times) where True means:
+        exclude this sample from the average/median reference pool.
+
+        Rules:
+        - global "Bad segment" annotations mask all channels over that interval
+        - channel-specific "Bad segment" annotations mask only that channel
+        - only applies to channels present in visible_abs / ref_abs passed in
+        """
+        n_ch = len(visible_abs)
+        n_t = int(times.size)
+
+        mask = np.zeros((n_ch, n_t), dtype=bool)
+        if n_ch == 0 or n_t == 0:
+            return mask
+
+        abs_to_row = {int(abs_idx): row for row, abs_idx in enumerate(visible_abs)}
+
+        for a in self._annotations:
+            if str(a.kind) != "Bad segment":
+                continue
+
+            t0 = float(min(a.t_start, a.t_end))
+            t1 = float(max(a.t_start, a.t_end))
+
+            # interval -> sample mask on the provided times vector
+            time_mask = (times >= t0) & (times <= t1)
+            if not np.any(time_mask):
+                continue
+
+            if a.abs_channel is None:
+                # global bad segment
+                mask[:, time_mask] = True
+            else:
+                row = abs_to_row.get(int(a.abs_channel))
+                if row is not None:
+                    mask[row, time_mask] = True
+
+        return mask
+
     # ---------------- Zoom window ----------------
     def _current_view_state(self) -> dict[str, float | int]:
         return {
@@ -1860,6 +1915,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         return True
 
                     if ev.type() == QEvent.Type.MouseMove and self._anno_drag_active:
+                        t0 = float(self._anno_drag_start_t if self._anno_drag_start_t is not None else t)
+                        y0 = float(self._anno_drag_start_y if self._anno_drag_start_y is not None else y)
+                        self._update_preview_roi(t0=t0, t1=t, y=y0)
                         ev.accept()
                         return True
 
@@ -1884,14 +1942,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                             t0 = t0 - dt / 2.0
                             t1 = t0 + dt
 
-                        self._create_annotation(t0=t0, t1=t1, y=y0)
+                        self._create_annotation_from_drag(t0=t0, t1=t1, y=y0)
                         self.stop_annotation_mode()
                         self.render()
 
                         ev.accept()
                         return True
 
-        return super().eventFilter(obj, ev)
+
 
     def _on_mouse_clicked(self, event):
         """Left click selects channel."""
