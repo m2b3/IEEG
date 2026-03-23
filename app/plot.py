@@ -1289,7 +1289,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 note=str(note or ""),
             )
             self._annotations.append(a)
-            self._add_annotation_items(a)
             self.annotationsChanged.emit()
             return
 
@@ -1316,7 +1315,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 note=str(note or ""),
             )
             self._annotations.append(a)
-            self._add_annotation_items(a)
 
         self.annotationsChanged.emit()
     
@@ -1799,7 +1797,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     ev.accept()
                     return True
 
-            # Wheel behavior (keep your current behavior)
+            # Wheel behavior
             if ev.type() == QEvent.Type.Wheel:
                 scene_pos = self.mapToScene(ev.position().toPoint())
 
@@ -1816,31 +1814,29 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 ev.ignore()
                 return True
 
-       # --- Right-click context menu: swallow the whole RMB gesture ---
-        if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.RightButton:
-            scene_pos = self.mapToScene(ev.position().toPoint())
+            # --- Right-click context menu: swallow the whole RMB gesture ---
+            if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.RightButton:
+                scene_pos = self.mapToScene(ev.position().toPoint())
 
-            if self._sig_vb.sceneBoundingRect().contains(scene_pos):
-                self._context_menu_active = True
+                if self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                    self._context_menu_active = True
 
-                # open menu immediately on press
-                if self._show_context_menu_for_scene_pos(scene_pos):
+                    if self._show_context_menu_for_scene_pos(scene_pos):
+                        ev.accept()
+                        return True
+
                     ev.accept()
                     return True
 
+            if ev.type() == QEvent.Type.MouseMove and getattr(self, "_context_menu_active", False):
                 ev.accept()
                 return True
 
-        if ev.type() == QEvent.Type.MouseMove and getattr(self, "_context_menu_active", False):
-            # prevent pyqtgraph from interpreting RMB as a drag
-            ev.accept()
-            return True
-
-        if ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.RightButton:
-            if getattr(self, "_context_menu_active", False):
-                self._context_menu_active = False
-                ev.accept()
-                return True
+            if ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.RightButton:
+                if getattr(self, "_context_menu_active", False):
+                    self._context_menu_active = False
+                    ev.accept()
+                    return True
 
             # --- Zoom selection mode ---
             if getattr(self, "_zoom_mode", False):
@@ -1893,15 +1889,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         ev.accept()
                         return True
 
-
-
-
-            # --- NEW: annotation click/drag ---
+            # --- Annotation click/drag ---
             if getattr(self, "_annotation_mode", False) and getattr(self, "_pending_kind", None) is not None:
-                if ev.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseMove, QEvent.Type.MouseButtonRelease):
+                if ev.type() in (
+                    QEvent.Type.MouseButtonPress,
+                    QEvent.Type.MouseMove,
+                    QEvent.Type.MouseButtonRelease,
+                ):
                     scene_pos = self.mapToScene(ev.position().toPoint())
-                    if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
-                        return super().eventFilter(obj, ev)
+
+                    if ev.type() == QEvent.Type.MouseButtonPress:
+                        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                            return super().eventFilter(obj, ev)
+                    elif not self._anno_drag_active:
+                        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                            return super().eventFilter(obj, ev)
 
                     p = self._sig_vb.mapSceneToView(scene_pos)
                     t = float(p.x())
@@ -1936,7 +1938,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         if t1 < t0:
                             t0, t1 = t1, t0
 
-                        # click => default 100 ms
                         if abs(t1 - t0) < 1e-6:
                             dt = 0.10
                             t0 = t0 - dt / 2.0
@@ -1949,7 +1950,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         ev.accept()
                         return True
 
-
+        return super().eventFilter(obj, ev)
 
     def _on_mouse_clicked(self, event):
         """Left click selects channel."""
