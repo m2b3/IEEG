@@ -43,6 +43,7 @@ class ComputationPanel(QWidget):
         self._raw: BaseRaw | None = None
         self._picks: np.ndarray | None = None           # abs_idx -> raw_idx
         self._ch_names_displayed: list[str] = []        # abs_idx -> display name
+        self._channel_groups: dict[str, str] = {}   # display_name -> "macro" | "micro"
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
 
@@ -61,6 +62,16 @@ class ComputationPanel(QWidget):
         self.list_channels = QListWidget()
         self.list_channels.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         ch_layout.addWidget(self.list_channels, 1)
+
+        quick_row = QHBoxLayout()
+        self.btn_sel_all = QPushButton("All")
+        self.btn_sel_macro = QPushButton("Macro")
+        self.btn_sel_micro = QPushButton("Micro")
+
+        quick_row.addWidget(self.btn_sel_all)
+        quick_row.addWidget(self.btn_sel_macro)
+        quick_row.addWidget(self.btn_sel_micro)
+        ch_layout.addLayout(quick_row)
 
         btn_row = QHBoxLayout()
         self.btn_add = QPushButton("Add…")
@@ -138,6 +149,10 @@ class ComputationPanel(QWidget):
         self.chk_match_main.toggled.connect(lambda _: self._request_update_plot())
         self.cbo_algo.currentIndexChanged.connect(self._on_algo_changed)
 
+        self.btn_sel_all.clicked.connect(self._select_all_channels)
+        self.btn_sel_macro.clicked.connect(lambda: self._select_group_channels("macro"))
+        self.btn_sel_micro.clicked.connect(lambda: self._select_group_channels("micro"))
+
         # --- Throttled updates ---
         self._update_timer = QTimer(self)
         self._update_timer.setSingleShot(True)
@@ -150,11 +165,14 @@ class ComputationPanel(QWidget):
         raw: BaseRaw | None,
         picks: np.ndarray | None,
         displayed_names: list[str],
+        channel_groups: dict[str, str] | None = None,
     ) -> None:
         self._raw = raw
         self._picks = picks
         self._ch_names_displayed = displayed_names or []
+        self._channel_groups = dict(channel_groups or {})
         self._refresh_channel_list_titles()
+        self._update_group_button_titles()
 
     def set_selected_channels_abs(self, selected_abs: list[int], *, replace: bool = True) -> None:
         cleaned = sorted({int(i) for i in selected_abs if int(i) >= 0})
@@ -423,3 +441,31 @@ class ComputationPanel(QWidget):
     def _on_algo_changed(self, _idx: int) -> None:
         self.state.algorithm = str(self.cbo_algo.currentData() or "mean")
         self._request_update_plot()
+
+    def _select_all_channels(self) -> None:
+        all_abs = list(range(len(self._ch_names_displayed)))
+        self.set_selected_channels_abs(all_abs, replace=True)
+
+    def _select_group_channels(self, group: str) -> None:
+        chosen = [
+            abs_idx
+            for abs_idx, ch_name in enumerate(self._ch_names_displayed)
+            if self._channel_groups.get(ch_name, "macro") == group
+        ]
+        self.set_selected_channels_abs(chosen, replace=True)
+
+
+    def _update_group_button_titles(self) -> None:
+        n_all = len(self._ch_names_displayed)
+        n_macro = sum(
+            1 for ch in self._ch_names_displayed
+            if self._channel_groups.get(ch, "macro") == "macro"
+        )
+        n_micro = sum(
+            1 for ch in self._ch_names_displayed
+            if self._channel_groups.get(ch, "macro") == "micro"
+        )
+
+        self.btn_sel_all.setText(f"All ({n_all})")
+        self.btn_sel_macro.setText(f"Macro ({n_macro})")
+        self.btn_sel_micro.setText(f"Micro ({n_micro})")

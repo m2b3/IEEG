@@ -1132,7 +1132,8 @@ class MainWindow(QMainWindow):
             bad_channel_skips=list(data.get("bad_channel_skips", [])),
         )
 
-    # ---------------- Sync helpers  ----------------
+        # ---------------- Sync helpers  ----------------
+    
     def _sync_comp_panel_context(self) -> None:
         """Push the current dataset/channel mapping into the computation panel."""
         displayed_names = self.viewer.get_channel_names()
@@ -1140,8 +1141,9 @@ class MainWindow(QMainWindow):
             self.current_raw,
             self.current_picks,
             displayed_names,
+            channel_groups=self.channel_groups,
         )
-
+        
     def _sync_comp_panel_view_state(self, t0: float | None = None) -> None:
         """Push current main-view time/gain into the computation panel."""
         if t0 is None:

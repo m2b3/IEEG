@@ -205,6 +205,8 @@ class PSDPanel(QWidget):
             plot.showGrid(x=True, y=True, alpha=0.2)
             plot.setLabel("bottom", "Frequency (Hz)")
             plot.setLabel("left", "Power Spectral Density (dB/Hz)")
+            plot.setMenuEnabled(False)
+            plot.getViewBox().setMouseEnabled(x=False, y=False)
 
             box_layout.addLayout(top, 1)
             box_layout.addWidget(plot, 2)
@@ -490,8 +492,11 @@ class PSDPanel(QWidget):
 
             y = 10.0 * np.log10(np.maximum(psd, 1e-20))
             curve_item = pg.PlotCurveItem(freqs, y, pen=pg.mkPen(width=1))
-            curve_item.setClickable(True, width=8)
-            curve_item.sigClicked.connect(lambda curve, g=group: self._on_curve_clicked(g, curve))
+            curve_item.setClickable(True, width=12)
+            curve_item.sigClicked.connect(
+                lambda curve, ev, g=group: self._on_curve_clicked(g, curve)
+            )
+
 
             plot.addItem(curve_item)
             self._curve_items[group][ch_name] = curve_item

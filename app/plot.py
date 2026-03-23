@@ -116,6 +116,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cursor_line: Optional[pg.InfiniteLine] = None
         self._cursor_x: Optional[float] = None
         self._time_lines: list[pg.InfiniteLine] = []
+        self._context_menu_active = False
 
         # ---- Layout: label plot (left) + signal plot (right) ----
         self.label_plot = pg.PlotItem()
@@ -600,16 +601,16 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
       
     def _all_visible_abs_indices(self) -> list[int]:
         names = self.get_channel_names()
-        visible = []
+        visible: list[int] = []
 
         for abs_idx, ch_name in enumerate(names):
             raw_name = self._channel_names[abs_idx] if abs_idx < len(self._channel_names) else ch_name
 
+            # Hidden channels disappear from the main viewer
             if raw_name in self._hidden_channels:
                 continue
-            if raw_name in self._bad_channels:
-                continue
 
+            # BAD channels stay visible; they are only recolored/highlighted
             visible.append(abs_idx)
 
         return visible
@@ -775,6 +776,56 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.render()
         self.channelWindowChanged.emit(self._ch_start)
         self.timeWindowChanged.emit(self._t_start)
+
+    def _select_single_channel_abs(self, abs_idx: int, *, emit: bool = True) -> None:
+        self._selected_abs_set = {int(abs_idx)}
+        self._selection_anchor_abs = int(abs_idx)
+        self.highlight_selected_channels()
+        if emit:
+            self.selectionChanged.emit(sorted(self._selected_abs_set))
+
+    def _selected_channel_names(self) -> list[str]:
+        return [self._channel_names[i] for i in sorted(self._selected_abs_set)]
+
+    def _show_context_menu_for_scene_pos(self, scene_pos) -> bool:
+        if self._raw is None or self._visible_abs.size == 0:
+            return False
+
+        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+            return False
+
+        data_point = self._sig_vb.mapSceneToView(scene_pos)
+        y = float(data_point.y())
+        abs_idx = self._abs_channel_from_y(y)
+        if abs_idx is None:
+            return False
+
+        if abs_idx not in self._selected_abs_set:
+            self._select_single_channel_abs(abs_idx)
+
+        selected_abs = sorted(self._selected_abs_set)
+        selected_names = [self._channel_names[i] for i in selected_abs]
+
+        menu = QtWidgets.QMenu()
+        act_open_panel = menu.addAction("Open Computation Panel")
+        act_open_annos = menu.addAction("Open Annotations Panel")
+        menu.addSeparator()
+        act_hide = menu.addAction(f"Hide ({len(selected_names)})")
+
+        all_bad = all(name in self._bad_channels for name in selected_names)
+        act_bad = menu.addAction("Unmark as bad" if all_bad else "Mark as bad")
+
+        chosen = menu.exec_(QtGui.QCursor.pos())
+        if chosen == act_open_panel:
+            self.requestOpenComputationPanel.emit(selected_abs)
+        elif chosen == act_open_annos:
+            self.requestOpenAnnotationsPanel.emit()
+        elif chosen == act_hide:
+            self._hide_channels(selected_names)
+        elif chosen == act_bad:
+            self._set_bad_channels(selected_names, bad=not all_bad)
+
+        return True
 
 
     @staticmethod
@@ -1710,6 +1761,32 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 ev.ignore()
                 return True
 
+       # --- Right-click context menu: swallow the whole RMB gesture ---
+        if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.RightButton:
+            scene_pos = self.mapToScene(ev.position().toPoint())
+
+            if self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                self._context_menu_active = True
+
+                # open menu immediately on press
+                if self._show_context_menu_for_scene_pos(scene_pos):
+                    ev.accept()
+                    return True
+
+                ev.accept()
+                return True
+
+        if ev.type() == QEvent.Type.MouseMove and getattr(self, "_context_menu_active", False):
+            # prevent pyqtgraph from interpreting RMB as a drag
+            ev.accept()
+            return True
+
+        if ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.RightButton:
+            if getattr(self, "_context_menu_active", False):
+                self._context_menu_active = False
+                ev.accept()
+                return True
+
             # --- Zoom selection mode ---
             if getattr(self, "_zoom_mode", False):
                 if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Escape:
@@ -1817,78 +1894,28 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         return super().eventFilter(obj, ev)
 
     def _on_mouse_clicked(self, event):
-        """Left click selects channel. Right click on signal opens menu."""
+        """Left click selects channel."""
         if self._raw is None or self._visible_abs.size == 0:
             return
-
 
         if event.double():
             if event.button() == Qt.MouseButton.LeftButton:
                 self.zoom_back_one_step()
             return
-        
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+
         pos = event.scenePos()
         in_label = self._label_vb.sceneBoundingRect().contains(pos)
         in_signal = self._sig_vb.sceneBoundingRect().contains(pos)
-
-        # ---- Right click: context menu only in signal area ----
-        if event.button() == Qt.MouseButton.RightButton and in_signal:
-            data_point = self._sig_vb.mapSceneToView(pos)
-            y = float(data_point.y())
-            plot_row = int(y // float(self._spacing))
-            n_vis = len(self._last_visible_abs)
-
-            if plot_row < 0 or plot_row >= n_vis:
-                return
-
-            data_row = (n_vis - 1 - plot_row)  # <-- map plotted row back to data row
-            abs_idx = int(self._last_visible_abs[data_row])
-
-            # If you right-click a channel that isn't selected, select only that one first
-            if abs_idx not in self._selected_abs_set:
-                self._selected_abs_set = {abs_idx}
-                self._selection_anchor_abs = abs_idx
-                self.highlight_selected_channels()
-                # optional: self.selectionChanged.emit(sorted(self._selected_abs_set))
-
-            selected_abs = sorted(self._selected_abs_set)
-            selected_names = [self._channel_names[i] for i in selected_abs]
-
-            menu = QtWidgets.QMenu()
-            act_open_panel = menu.addAction("Open Computation Panel")
-            act_open_annos = menu.addAction("Open Annotations Panel")
-            menu.addSeparator()
-
-            act_hide = menu.addAction(f"Hide ({len(selected_names)})")
-
-            # If ALL are bad => offer Unmark, else offer Mark (sets all to bad)
-            all_bad = all(name in self._bad_channels for name in selected_names)
-            act_bad = menu.addAction("Unmark as bad" if all_bad else "Mark as bad")
-
-            chosen = menu.exec_(QtGui.QCursor.pos())
-            if chosen == act_open_panel:
-                self.requestOpenComputationPanel.emit(selected_abs)
-            elif chosen == act_open_annos:
-                self.requestOpenAnnotationsPanel.emit()
-            elif chosen == act_hide:
-                self._hide_channels(selected_names)
-            elif chosen == act_bad:
-                self._set_bad_channels(selected_names, bad=not all_bad)
-
-            return
-
-
-
-        # ---- Left click: selection ----
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
 
         vb = self._label_vb if in_label else self._sig_vb
         data_point = vb.mapSceneToView(pos)
         y = float(data_point.y())
 
         n_vis = len(self._visible_abs)
-        centers = (np.arange(n_vis)[::-1]) * self._spacing  # <-- top has largest y
+        centers = (np.arange(n_vis)[::-1]) * self._spacing
         idx_vis = int(np.argmin(np.abs(centers - y)))
         idx_vis = max(0, min(idx_vis, n_vis - 1))
 
@@ -1898,23 +1925,19 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
         shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
 
-        # Visible list excluding hidden channels (needed for shift-range)
         all_vis = self._all_visible_abs_indices()
 
         if not ctrl and not shift:
-            # Normal click => single selection
             self._selected_abs_set = {idx_abs}
             self._selection_anchor_abs = idx_abs
 
         elif ctrl and not shift:
-            # Ctrl-click => toggle one
             if idx_abs in self._selected_abs_set:
                 self._selected_abs_set.remove(idx_abs)
             else:
                 self._selected_abs_set.add(idx_abs)
 
         else:
-            # Shift or Ctrl+Shift => range selection
             if self._selection_anchor_abs is None:
                 self._selection_anchor_abs = idx_abs
 
@@ -1922,23 +1945,17 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 i1 = all_vis.index(self._selection_anchor_abs)
                 i2 = all_vis.index(idx_abs)
                 lo, hi = (i1, i2) if i1 <= i2 else (i2, i1)
-                range_set = set(all_vis[lo : hi + 1])
+                range_set = set(all_vis[lo:hi + 1])
 
                 if ctrl:
                     self._selected_abs_set |= range_set
                 else:
                     self._selected_abs_set = range_set
 
-        # Keep existing "clicked" semantic (primary)
         self.channelClicked.emit(idx_abs)
-
-        # Tell others (computation panel later)
         self.selectionChanged.emit(sorted(self._selected_abs_set))
-
-        # Repaint highlight
         self.highlight_selected_channels()
-
-
+        
 class _AnnotationROI(pg.RectROI):
     def __init__(self, *, viewer: MultiChannelViewer, anno_id: str, pos, size, brush):
         super().__init__(pos, size, pen=None, movable=True)
