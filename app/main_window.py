@@ -861,11 +861,6 @@ class MainWindow(QMainWindow):
                 ),
             )
 
-        self._push_scope_profile_to_ui()
-        self._rebuild_active_raw_from_source()
-        self._refresh_active_signal_everywhere()
-        self._update_filter_summary_label()
-
         review = payload.get("review")
         if not isinstance(review, dict):
             review = {}
@@ -875,6 +870,12 @@ class MainWindow(QMainWindow):
         bad_raw = review.get("bad_channels", [])
         saved_montage_raw = review.get("bipolar_montage")
         saved_channel_groups = review.get("channel_groups", {})
+
+        self._restore_channel_groups(saved_channel_groups)
+        self._push_scope_profile_to_ui()
+        self._rebuild_active_raw_from_source()
+        self._refresh_active_signal_everywhere()
+        self._update_filter_summary_label()
 
         hidden = set(hidden_raw) if isinstance(hidden_raw, list) else set()
         bad = set(bad_raw) if isinstance(bad_raw, list) else set()
@@ -889,7 +890,6 @@ class MainWindow(QMainWindow):
                 if isinstance(saved_montage_raw, dict)
                 else None
             )
-            self._restore_channel_groups(saved_channel_groups)
         finally:
             self._restoring_project = False
 
