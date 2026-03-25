@@ -73,10 +73,10 @@ def build_menubar(main_window):
     review_menu = menubar.addMenu("Review")
 
     ## Submenu Event Viewers
-    view_menu = review_menu.addMenu("Event Viewers")
-    add_action(view_menu, "Epileptic Spikes", lambda: print("TODO"))
-    add_action(view_menu, "Ripples", lambda: print("TODO"))
-    add_action(view_menu, "Fast Ripples", lambda: print("TODO"))
+    event_viewers_menu = review_menu.addMenu("Event Viewers")
+    add_action(event_viewers_menu, "Epileptic Spikes", lambda: print("TODO"))
+    add_action(event_viewers_menu, "Ripples", lambda: print("TODO"))
+    add_action(event_viewers_menu, "Fast Ripples", lambda: print("TODO"))
 
     add_action(review_menu, "Events Display", lambda: print("TODO"))
 

@@ -589,7 +589,24 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.render()
 
     def get_channel_group(self, ch_name: str) -> str:
-        return self._channel_groups.get(str(ch_name), "macro")
+        ch_name = str(ch_name)
+
+        direct = self._channel_groups.get(ch_name)
+        if direct in {"macro", "micro"}:
+            return direct
+
+        if self._reference_mode == "bipolar":
+            for pair in self._bipolar_pairs:
+                if pair.name != ch_name:
+                    continue
+
+                ch1_group = self._channel_groups.get(str(pair.ch1), "macro")
+                ch2_group = self._channel_groups.get(str(pair.ch2), "macro")
+                if ch1_group == "micro" and ch2_group == "micro":
+                    return "micro"
+                return "macro"
+
+        return "macro"
     
     # ---------------- Visible data & window helpers ---------------
    

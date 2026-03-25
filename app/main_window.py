@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
     QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
     QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTextBrowser, QTabWidget
+    QHeaderView, QTextBrowser, QTabWidget, QTabBar
 )
 
 from PySide6.QtCore import Qt
@@ -191,16 +191,21 @@ class MainWindow(QMainWindow):
 
 
         self.main_tabs = QTabWidget()
+        self.main_tabs.setTabsClosable(True)
+        self.main_tabs.tabCloseRequested.connect(self._on_main_tab_close_requested)
 
         self.viewer = MultiChannelViewer()
-        self.main_tabs.addTab(self.viewer, "Viewer")
+        self._viewer_tab_index = self.main_tabs.addTab(self.viewer, "Viewer")
 
         self.psd_panel = PSDPanel(
             parent=self,
             mark_bad_callback=self._mark_channels_bad_from_psd,
             mark_good_callback=self._mark_channels_good_from_psd,
         )
-        self.main_tabs.addTab(self.psd_panel, "PSD")
+        self._psd_tab_index = self.main_tabs.addTab(self.psd_panel, "PSD")
+        self.main_tabs.tabBar().setTabButton(self._viewer_tab_index, QTabBar.ButtonPosition.LeftSide, None)
+        self.main_tabs.tabBar().setTabButton(self._viewer_tab_index, QTabBar.ButtonPosition.RightSide, None)
+        self._set_psd_tab_visible(False)
 
         layout.addWidget(self.main_tabs, 1)
 
@@ -410,6 +415,7 @@ class MainWindow(QMainWindow):
         self._update_filter_summary_label()
 
         self.main_tabs.setCurrentWidget(self.viewer)
+        self._set_psd_tab_visible(False)
 
         self.console.log("File closed.")
 
@@ -1142,11 +1148,15 @@ class MainWindow(QMainWindow):
     def _sync_comp_panel_context(self) -> None:
         """Push the current dataset/channel mapping into the computation panel."""
         displayed_names = self.viewer.get_channel_names()
+        display_channel_groups = {
+            ch_name: self.viewer.get_channel_group(ch_name)
+            for ch_name in displayed_names
+        }
         self.comp_panel.set_data_context(
             self.current_raw,
             self.current_picks,
             displayed_names,
-            channel_groups=self.channel_groups,
+            channel_groups=display_channel_groups,
         )
         
     def _sync_comp_panel_view_state(self, t0: float | None = None) -> None:
@@ -1234,18 +1244,11 @@ class MainWindow(QMainWindow):
             return
         if self._psd_interval is None:
             return
+        if not self._is_psd_tab_open():
+            return
 
         display_names = self.viewer.get_channel_names()
-
-        macro_names: list[str] = []
-        micro_names: list[str] = []
-
-        for ch_name in display_names:
-            group = self.channel_groups.get(str(ch_name), "macro")
-            if group == "micro":
-                micro_names.append(ch_name)
-            else:
-                macro_names.append(ch_name)
+        macro_names, micro_names = self._split_display_channels_for_psd(display_names)
 
         start_s, stop_s = self._psd_interval
         self.psd_panel.set_psd_context(
@@ -1434,6 +1437,48 @@ class MainWindow(QMainWindow):
     def _refresh_display_name_dependent_ui(self) -> None:
         self._sync_comp_panel_context()
         self._refresh_annotation_list()
+        self._refresh_psd_panel_context()
+
+    def _is_psd_tab_open(self) -> bool:
+        return bool(self.main_tabs.isTabVisible(self._psd_tab_index))
+
+    def _set_psd_tab_visible(self, visible: bool) -> None:
+        self.main_tabs.setTabVisible(self._psd_tab_index, bool(visible))
+        if not visible:
+            self.main_tabs.setCurrentWidget(self.viewer)
+
+    def _on_main_tab_close_requested(self, index: int) -> None:
+        if index == self._psd_tab_index:
+            self._set_psd_tab_visible(False)
+
+    def _split_display_channels_for_psd(self, display_names: list[str]) -> tuple[list[str], list[str]]:
+        macro_names: list[str] = []
+        micro_names: list[str] = []
+
+        if self.viewer.reference_mode() == "bipolar":
+            montage = self.viewer.get_bipolar_montage()
+            pair_by_name = {}
+            if montage is not None:
+                pair_by_name = {pair.name: pair for pair in montage.pairs}
+
+            for ch_name in display_names:
+                pair = pair_by_name.get(ch_name)
+                source_name = pair.ch1 if pair is not None else ch_name
+                group = self.channel_groups.get(str(source_name), "macro")
+                if group == "micro":
+                    micro_names.append(ch_name)
+                else:
+                    macro_names.append(ch_name)
+            return macro_names, micro_names
+
+        for ch_name in display_names:
+            group = self.channel_groups.get(str(ch_name), "macro")
+            if group == "micro":
+                micro_names.append(ch_name)
+            else:
+                macro_names.append(ch_name)
+
+        return macro_names, micro_names
 
     def _capture_viewer_state(self) -> dict:
         return {
@@ -2283,15 +2328,7 @@ class MainWindow(QMainWindow):
 
         display_names = list(self.viewer.get_channel_names())
         bad_names = list(getattr(self.viewer, "_bad_channels", set()))
-
-        macro_names = [
-            ch for ch in display_names
-            if self.channel_groups.get(ch, "macro") == "macro"
-        ]
-        micro_names = [
-            ch for ch in display_names
-            if self.channel_groups.get(ch, "macro") == "micro"
-        ]
+        macro_names, micro_names = self._split_display_channels_for_psd(display_names)
 
         self.psd_panel.set_psd_context(
             raw=self.current_raw,
@@ -2304,6 +2341,7 @@ class MainWindow(QMainWindow):
             micro_names=micro_names,
         )
 
+        self._set_psd_tab_visible(True)
         self.main_tabs.setCurrentWidget(self.psd_panel)
 
     def _on_bad_channels_changed(self) -> None:
