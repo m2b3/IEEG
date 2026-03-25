@@ -103,6 +103,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         # Vertical stacking
         self._spacing: float = 200.0  # y spacing in "display units"
+        self._vertical_margin_factor: float = 0.75
 
         # ---- Render caches ----
         self._visible_abs: np.ndarray = np.array([], dtype=int)  # abs indices in displayed channel list
@@ -518,8 +519,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._annotation_items.append(rect)
                             
     def _set_ranges(self, t_ds: np.ndarray, n_vis: int):
-        y0 = -0.5 * self._spacing
-        y1 = (n_vis - 1) * self._spacing + 0.5 * self._spacing
+        ypad = float(self._vertical_margin_factor) * float(self._spacing)
+        y0 = -ypad
+        y1 = (n_vis - 1) * float(self._spacing) + ypad
 
         t0 = float(t_ds[0])
         t1 = float(t_ds[-1])
@@ -668,6 +670,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             # Exclude manually annotated bad segments from the reference computation
             bad_mask = self._build_bad_segment_mask_for_abs(ref_abs, times)
+            print("ref_data shape =", ref_data.shape, "bad_mask shape =", bad_mask.shape)
+            print("masked entries =", int(bad_mask.sum()))
             if bad_mask.shape == ref_data.shape:
                 ref_data = ref_data.copy()
                 ref_data[bad_mask] = np.nan
@@ -1575,10 +1579,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             return mask
 
         abs_to_row = {int(abs_idx): row for row, abs_idx in enumerate(visible_abs)}
+        print("BAD MASK INPUT visible_abs[:10] =", visible_abs[:10], "n_ch =", len(visible_abs), "n_t =", len(times))
 
         for a in self._annotations:
             if str(a.kind) != "Bad segment":
                 continue
+
+            print("ANNO", a.kind, a.abs_channel, a.t_start, a.t_end)
 
             t0 = float(min(a.t_start, a.t_end))
             t1 = float(max(a.t_start, a.t_end))
@@ -1595,6 +1602,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 row = abs_to_row.get(int(a.abs_channel))
                 if row is not None:
                     mask[row, time_mask] = True
+            
+            print("BAD MASK total masked samples =", int(mask.sum()))
 
         return mask
 

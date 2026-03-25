@@ -169,11 +169,27 @@ class ComputationPanel(QWidget):
     ) -> None:
         self._raw = raw
         self._picks = picks
-        self._ch_names_displayed = displayed_names or []
-        self._channel_groups = dict(channel_groups or {})
-        self._refresh_channel_list_titles()
-        self._update_group_button_titles()
+        self._ch_names_displayed = list(displayed_names or [])
 
+        cleaned_groups: dict[str, str] = {}
+        for ch_name in self._ch_names_displayed:
+            g = str((channel_groups or {}).get(ch_name, "macro")).strip().lower()
+            cleaned_groups[ch_name] = g if g in {"macro", "micro"} else "macro"
+
+        self._channel_groups = cleaned_groups
+
+        # keep only still-valid selections after channel list changes
+        self.state.selected_abs = [
+            idx for idx in self.state.selected_abs
+            if 0 <= idx < len(self._ch_names_displayed)
+        ]
+
+        self._refresh_channel_list_titles()
+        self._sync_list_widget_from_state()
+        self._update_channels_title()
+        self._update_group_button_titles()
+        self._request_update_plot()
+        
     def set_selected_channels_abs(self, selected_abs: list[int], *, replace: bool = True) -> None:
         cleaned = sorted({int(i) for i in selected_abs if int(i) >= 0})
 
@@ -447,24 +463,29 @@ class ComputationPanel(QWidget):
         self.set_selected_channels_abs(all_abs, replace=True)
 
     def _select_group_channels(self, group: str) -> None:
-        chosen = [
-            abs_idx
-            for abs_idx, ch_name in enumerate(self._ch_names_displayed)
-            if self._channel_groups.get(ch_name, "macro") == group
-        ]
-        self.set_selected_channels_abs(chosen, replace=True)
+        group = str(group).strip().lower()
+        if group not in {"macro", "micro"}:
+            return
 
+        chosen = []
+        for abs_idx, ch_name in enumerate(self._ch_names_displayed):
+            ch_group = str(self._channel_groups.get(ch_name, "macro")).strip().lower()
+            if ch_group == group:
+                chosen.append(abs_idx)
+
+        self.set_selected_channels_abs(chosen, replace=True)
 
     def _update_group_button_titles(self) -> None:
         n_all = len(self._ch_names_displayed)
-        n_macro = sum(
-            1 for ch in self._ch_names_displayed
-            if self._channel_groups.get(ch, "macro") == "macro"
-        )
-        n_micro = sum(
-            1 for ch in self._ch_names_displayed
-            if self._channel_groups.get(ch, "macro") == "micro"
-        )
+        n_macro = 0
+        n_micro = 0
+
+        for ch_name in self._ch_names_displayed:
+            group = str(self._channel_groups.get(ch_name, "macro")).strip().lower()
+            if group == "micro":
+                n_micro += 1
+            else:
+                n_macro += 1
 
         self.btn_sel_all.setText(f"All ({n_all})")
         self.btn_sel_macro.setText(f"Macro ({n_macro})")

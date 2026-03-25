@@ -90,7 +90,7 @@ class PSDPanel(QWidget):
     GROUPS = ("macro", "micro")
 
     def __init__(self, parent=None, mark_bad_callback=None, mark_good_callback=None):
-        super().__init__(parent, Qt.WindowType.Window)
+        super().__init__(parent)
         self.setWindowTitle("PSD Panel")
         self.resize(1400, 850)
 
