@@ -1,5 +1,6 @@
 from PySide6.QtGui import QAction
-from PySide6.QtGui import QKeySequence  
+from PySide6.QtGui import QKeySequence
+
 
 def add_action(menu, name, slot):
     action = QAction(name, menu)
@@ -9,9 +10,9 @@ def add_action(menu, name, slot):
 
 
 def build_menubar(main_window):
-
     menubar = main_window.menuBar()
-    menubar.clear()   
+    menubar.clear()
+
     # -------- File --------
     file_menu = menubar.addMenu("File")
     add_action(file_menu, "New", main_window.on_new_project)
@@ -22,13 +23,13 @@ def build_menubar(main_window):
     act_save = add_action(file_menu, "Save", main_window.on_save_project)
     act_save.setShortcut(QKeySequence.StandardKey.Save)    # Ctrl+S
 
-    act_saveas = add_action(file_menu, "Save as…", main_window.on_save_project_as)
+    act_saveas = add_action(file_menu, "Save as...", main_window.on_save_project_as)
     act_saveas.setShortcut(QKeySequence.StandardKey.SaveAs)     # Ctrl+Shift+S
 
     file_menu.addSeparator()
 
     act_close = add_action(file_menu, "Close", main_window.on_close_project)
-    add_action(file_menu, "Settings", lambda: print ("TODO: Settings"))
+    add_action(file_menu, "Settings", lambda: print("TODO: Settings"))
     add_action(file_menu, "Exit", main_window.close)
 
     main_window._act_save = act_save
@@ -53,8 +54,8 @@ def build_menubar(main_window):
     pre_menu = menubar.addMenu("Preprocessing")
     add_action(pre_menu, "Power Spectrum", main_window.open_psd_panel)
     add_action(pre_menu, "Permanent Filters", main_window.on_toggle_permanent_filters)
-    
-    ## Submenu Re-Referencing
+
+    # Submenu Re-Referencing
     ref_menu = pre_menu.addMenu("Re-referencing")
 
     add_action(ref_menu, "Monopolar", main_window.on_reference_monopolar)
@@ -72,7 +73,7 @@ def build_menubar(main_window):
     # -------- Review --------
     review_menu = menubar.addMenu("Review")
 
-    ## Submenu Event Viewers
+    # Submenu Event Viewers
     event_viewers_menu = review_menu.addMenu("Event Viewers")
     add_action(event_viewers_menu, "Epileptic Spikes", lambda: print("TODO"))
     add_action(event_viewers_menu, "Ripples", lambda: print("TODO"))
@@ -83,7 +84,7 @@ def build_menubar(main_window):
     # -------- Results --------
     results_menu = menubar.addMenu("Results")
 
-    ## Submenu Topographic map 
+    # Submenu Topographic map
     top_menu = results_menu.addMenu("Topographic map")
     add_action(top_menu, "Epileptic Spikes", lambda: print("TODO"))
     add_action(top_menu, "Ripples", lambda: print("TODO"))
@@ -91,7 +92,7 @@ def build_menubar(main_window):
     add_action(top_menu, "ES & Ripples", lambda: print("TODO"))
     add_action(top_menu, "ES & Fast Ripples", lambda: print("TODO"))
 
-    ## Submenu Export metrics
+    # Submenu Export metrics
     metrics_menu = results_menu.addMenu("Export metrics")
     add_action(metrics_menu, "Epileptic Spikes", lambda: print("TODO"))
     add_action(metrics_menu, "Ripples", lambda: print("TODO"))
@@ -101,14 +102,13 @@ def build_menubar(main_window):
 
     # -------- Help --------
     help_menu = menubar.addMenu("Help")
-    add_action(help_menu, "User Guide", main_window.on_open_user_guide)    
+    add_action(help_menu, "User Guide", main_window.on_open_user_guide)
     add_action(help_menu, "Shortcuts", lambda: print("TODO"))
-
 
     # Store what should be disabled until a file is loaded
     main_window._menus_disabled_until_loaded = [
         view_menu, edit_menu, pre_menu, detect_menu, review_menu, results_menu
     ]
-    main_window._menus_always_enabled = [file_menu, help_menu]# ✅ store what should be disabled until a file is loaded
-    
+    main_window._menus_always_enabled = [file_menu, help_menu]
+
     return act_save, act_saveas, act_close

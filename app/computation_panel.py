@@ -74,7 +74,7 @@ class ComputationPanel(QWidget):
         ch_layout.addLayout(quick_row)
 
         btn_row = QHBoxLayout()
-        self.btn_add = QPushButton("Add…")
+        self.btn_add = QPushButton("Add...")
         self.btn_remove = QPushButton("Remove selected")
         self.btn_clear = QPushButton("Clear")
         btn_row.addWidget(self.btn_add)
@@ -131,7 +131,7 @@ class ComputationPanel(QWidget):
         self.plot = pg.PlotWidget()
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.setLabel("bottom", "Time (s)")
-        self.plot.setLabel("left", "Mean voltage (µV)")
+        self.plot.setLabel("left", "Mean voltage (uV)")
         self.curve = self.plot.plot([], [])
         p_layout.addWidget(self.plot, 1)
 
@@ -277,7 +277,7 @@ class ComputationPanel(QWidget):
         layout = QVBoxLayout(dlg)
 
         search = QLineEdit()
-        search.setPlaceholderText("Search channels…")
+        search.setPlaceholderText("Search channels...")
         layout.addWidget(search)
 
         lst = QListWidget()
@@ -404,7 +404,7 @@ class ComputationPanel(QWidget):
         if self.chk_match_main.isChecked():
             y_uv = y_v * 1e6
             gain_factor = 1.0 / max(1e-9, self._main_gain_uv * self._correction_factor)
-            return y_uv * gain_factor, "Amplitude (µV, main-scaled)"
+            return y_uv * gain_factor, "Amplitude (uV, main-scaled)"
 
         return y_v, "Mean voltage (V)"
 

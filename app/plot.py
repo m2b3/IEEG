@@ -29,7 +29,7 @@ class AnnotationRect(QtWidgets.QGraphicsRectItem):
             return super().mousePressEvent(event)
 
         menu = QtWidgets.QMenu()
-        act_edit = menu.addAction("Edit annotation…")
+        act_edit = menu.addAction("Edit annotation...")
         act_del = menu.addAction("Delete annotation")
 
         chosen = menu.exec_(event.screenPos())
@@ -126,7 +126,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.addItem(self.label_plot, 0, 0)
         self.addItem(self.signal_plot, 0, 1)
 
-        self.label_plot.setMaximumWidth(100)   # try 140–200
+        self.label_plot.setMaximumWidth(100)   # try 140-200
         self.label_plot.setMinimumWidth(60)
 
         # Hide label plot axes
@@ -571,7 +571,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             plot_row = (n_vis - 1 - i)
             y_center = plot_row * self._spacing
             txt = pg.TextItem(
-                text=f"±{self._gain_uv:.0f} µV",
+                text=f"+/-{self._gain_uv:.0f} uV",
                 anchor=(0.5, 0.5),
                 color=(160, 160, 160),
             )
@@ -2042,7 +2042,7 @@ class _AnnotationROI(pg.RectROI):
 
     def contextMenuEvent(self, ev):
         menu = QtWidgets.QMenu()
-        act_edit = menu.addAction("Edit…")
+        act_edit = menu.addAction("Edit...")
         act_del = menu.addAction("Delete")
         chosen = menu.exec_(ev.screenPos().toPoint())
 

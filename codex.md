@@ -127,3 +127,54 @@ Backward compatibility:
 - Existing project files that only contain `source.raw_file` still open the same way.
 
 I verified the patch with a local diff; I did not run the GUI.
+
+## User
+Read agent_instructions.md and follow it strictly.
+
+Fix these two issues only, with minimal changes:
+
+1. Fix visible encoding/mojibake issues in UI text and docs (examples: â€¦, ÂµV, â€“) in files such as README.md, app/menus.py, app/plot.py, and app/computation_panel.py.
+2. Start splitting MainWindow into a cleaner structure, but keep the change small and safe:
+- extract one clearly scoped responsibility from app/main_window.py into a separate module/class
+- prefer a low-risk extraction such as project loading/saving, reference handling, or filter handling
+- keep behavior unchanged
+
+First explain the root cause briefly.
+Then propose the minimal safe refactor.
+Then implement it.
+Then summarize exactly what changed.
+Do not make unrelated changes.
+
+## Assistant
+Root cause:
+- Several user-facing strings in the UI layer had been saved with inconsistent encoding at some point, leaving visible broken text in menus and labels.
+- `MainWindow` was also handling project file dialogs and path-resolution details inline, which is a low-level responsibility that can be split out safely without changing app behavior.
+
+Minimal safe refactor:
+- Extract only the project file dialog/path workflow into a helper class, while keeping project state application, save/load behavior, and UI updates in `MainWindow`.
+
+Implemented changes:
+- Added [project_file_helpers.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_file_helpers.py), which encapsulates:
+  - choosing a raw EEG file
+  - choosing a project file to open
+  - choosing a project file to create/save
+  - resolving a raw file path for a project, including the existing absolute/relative/manual-locate behavior
+- Updated [main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py) to call `ProjectFileHelper` from `on_new_project()`, `on_open_project()`, and `on_save_project_as()` instead of handling those dialogs and suffix/path details inline.
+- Fixed visible broken UI text in:
+  - [menus.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/menus.py)
+  - [plot.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/plot.py)
+  - [computation_panel.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/computation_panel.py)
+  - [main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py)
+
+Exactly what changed:
+- Normalized broken UI text such as:
+  - `Save as…` -> `Save as...`
+  - `Hidden…` -> `Hidden...`
+  - `Edit Bipolar…` -> `Edit Bipolar...`
+  - `Optional note…` -> `Optional note...`
+  - broken microvolt/min-max display strings -> ASCII-safe `uV` and `+/-`
+  - broken annotation time separator -> `-`
+- Kept README unchanged because it did not show a concrete broken string in this pass.
+- Moved only the project file chooser/path resolution responsibility out of `MainWindow`; behavior of project creation/open/save remains the same.
+
+I verified the patch with a local diff and a final scan for the broken mojibake patterns in the targeted files; I did not run the GUI.

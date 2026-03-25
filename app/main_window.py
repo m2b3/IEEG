@@ -10,7 +10,7 @@ import mne
 from mne.io import BaseRaw
 
 from PySide6.QtWidgets import (
-    QApplication, QAbstractSpinBox, QDoubleSpinBox, QFileDialog, QFrame,
+    QApplication, QAbstractSpinBox, QDoubleSpinBox, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
     QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
     QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
@@ -30,6 +30,7 @@ from app.annotations import (
     ANNOTATION_SCOPES, SCOPE_SELECTED
 )
 from app.project_io import save_project, load_project
+from app.project_file_helpers import ProjectFileHelper
 from app.referencing import (
     build_automatic_bipolar_montage,
     BipolarMontage,
@@ -465,13 +466,13 @@ class MainWindow(QMainWindow):
 
         # Hidden channels menu button
         self.btn_hidden = QToolButton()
-        self.btn_hidden.setText("Hidden…")
+        self.btn_hidden.setText("Hidden...")
         self.btn_hidden.clicked.connect(self._show_hidden_channels_menu)
         tb.addWidget(self.btn_hidden)
 
         # Edit bipolar referencing 
         self.btn_edit_bipolar = QToolButton()
-        self.btn_edit_bipolar.setText("Edit Bipolar…")
+        self.btn_edit_bipolar.setText("Edit Bipolar...")
         self.btn_edit_bipolar.setEnabled(False)
         self.btn_edit_bipolar.clicked.connect(self.on_edit_bipolar_pairs)
         tb.addWidget(self.btn_edit_bipolar)
@@ -731,30 +732,13 @@ class MainWindow(QMainWindow):
         )
     
     def on_new_project(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open EEG/iEEG file",
-            "",
-            "EEG files (*.edf *.bdf *.fif *.vhdr *.set *.cnt);;All files (*)",
-        )
-        if not path:
+        raw_path = ProjectFileHelper.choose_raw_file(self)
+        if raw_path is None:
             return
 
-        raw_path = Path(path)
-
-        project_default = str(raw_path.with_suffix("")) + ".ieeg"
-        proj_path_str, _ = QFileDialog.getSaveFileName(
-            self,
-            "Create project file",
-            project_default,
-            "iEEG Project (*.ieeg);;All files (*)",
-        )
-        if not proj_path_str:
+        project_path = ProjectFileHelper.choose_project_to_create(self, raw_path)
+        if project_path is None:
             return
-
-        project_path = Path(proj_path_str)
-        if project_path.suffix.lower() != ".ieeg":
-            project_path = project_path.with_suffix(".ieeg")
 
         # Reuse the normal raw-file opening flow so UI/state setup stays centralized
         if not self._open_raw_file(raw_path):
@@ -783,16 +767,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Create project error", str(e))
 
     def on_open_project(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open project",
-            "",
-            "iEEG Project (*.ieeg);;All files (*)",
-        )
-        if not path:
+        project_path = ProjectFileHelper.choose_project_to_open(self)
+        if project_path is None:
             return
-
-        project_path = Path(path)
 
         try:
             payload = load_project(project_path)
@@ -805,12 +782,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open project error", "Project is missing a valid 'source' section.")
             return
 
-        raw_file = source.get("raw_file")
-        raw_file_relative = source.get("raw_file_relative")
         if not (
-            isinstance(raw_file, str) and raw_file.strip()
+            isinstance(source.get("raw_file"), str) and source.get("raw_file", "").strip()
         ) and not (
-            isinstance(raw_file_relative, str) and raw_file_relative.strip()
+            isinstance(source.get("raw_file_relative"), str) and source.get("raw_file_relative", "").strip()
         ):
             QMessageBox.critical(
                 self,
@@ -819,48 +794,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        raw_path = None
-
-        if isinstance(raw_file, str) and raw_file.strip():
-            abs_path = Path(raw_file)
-            if abs_path.exists():
-                raw_path = abs_path
-
-        if (
-            raw_path is None
-            and isinstance(raw_file_relative, str)
-            and raw_file_relative.strip()
-        ):
-            rel_path = project_path.parent / raw_file_relative
-            if rel_path.exists():
-                raw_path = rel_path
-
+        raw_path = ProjectFileHelper.resolve_project_raw_path(self, project_path, source)
         if raw_path is None:
-            start_dir = str(project_path.parent)
-            located_path, _ = QFileDialog.getOpenFileName(
-                self,
-                "Locate raw EEG file",
-                start_dir,
-                "EEG files (*.edf *.bdf *.fif *.vhdr *.set *.eeg *.mff);;All files (*)",
-            )
-            if not located_path:
-                QMessageBox.critical(
-                    self,
-                    "Open project error",
-                    "Raw EEG file could not be located.",
-                )
-                return
-
-            raw_path = Path(located_path)
-            if not raw_path.exists():
-                QMessageBox.critical(
-                    self,
-                    "Open project error",
-                    f"Raw EEG file not found:\n{raw_path}",
-                )
-                return
-
-            self.loaded_file = raw_path
+            return
 
         # Reuse the standard raw-file opening flow
         if not self._open_raw_file(raw_path):
@@ -987,18 +923,9 @@ class MainWindow(QMainWindow):
         elif self.loaded_file is not None:
             default = str(self.loaded_file.with_suffix(".ieeg"))
 
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save project as",
-            default,
-            "iEEG Project (*.ieeg);;All files (*)",
-        )
-        if not path:
+        p = ProjectFileHelper.choose_project_to_save_as(self, default)
+        if p is None:
             return
-
-        p = Path(path)
-        if p.suffix.lower() != ".ieeg":
-            p = p.with_suffix(".ieeg")
 
         try:
             save_project(p, self)
@@ -2192,7 +2119,7 @@ class MainWindow(QMainWindow):
         scope.setCurrentText(SCOPE_SELECTED)
 
         note = QLineEdit(dlg)
-        note.setPlaceholderText("Optional note…")
+        note.setPlaceholderText("Optional note...")
 
         layout.addRow("Type:", combo)
         layout.addRow("Scope:", scope)
@@ -2239,7 +2166,7 @@ class MainWindow(QMainWindow):
                 else:
                     ch_txt = str(a.abs_channel)
 
-            txt = f"[{a.kind}] {ch_txt}  {a.t_start:.3f}–{a.t_end:.3f}"
+            txt = f"[{a.kind}] {ch_txt}  {a.t_start:.3f}-{a.t_end:.3f}"
             if a.note:
                 txt += f"  |  {a.note}"
 
