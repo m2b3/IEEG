@@ -191,12 +191,18 @@ class MainWindow(QMainWindow):
 
 
         self.main_tabs = QTabWidget()
+
         self.viewer = MultiChannelViewer()
         self.main_tabs.addTab(self.viewer, "Viewer")
-        layout.addWidget(self.main_tabs, 1)
 
-        self.psd_tab_index: int | None = None
-        self.psd_display_mode = "window"   # can be "window" or "tab"
+        self.psd_panel = PSDPanel(
+            parent=self,
+            mark_bad_callback=self._mark_channels_bad_from_psd,
+            mark_good_callback=self._mark_channels_good_from_psd,
+        )
+        self.main_tabs.addTab(self.psd_panel, "PSD")
+
+        layout.addWidget(self.main_tabs, 1)
 
         # ---- Timeline (time slider) ----
         self.timeline = QFrame()
@@ -226,14 +232,7 @@ class MainWindow(QMainWindow):
         self.project_dirty: bool = False
         self._saved_bipolar_montage: BipolarMontage | None = None
 
-        self.psd_panel: PSDPanel | None = None
-        self.psd_display_mode = "window"   # "window" or "tab"
-        self.psd_tab = None
-
         self.source_raw: BaseRaw | None = None   # original, never modified
-        self.current_raw: BaseRaw | None = None  # active signal used everywhere
-        self.current_picks: np.ndarray | None = None
-        self.loaded_file: Path | None = None
 
         self.filter_profiles = FilterProfiles()
         self._psd_interval: tuple[float, float] | None = None
@@ -346,12 +345,9 @@ class MainWindow(QMainWindow):
         self.sc_ctrl_up.activated.connect(lambda: self._scroll_channels(-1, mult=20))
         self.sc_ctrl_down.activated.connect(lambda: self._scroll_channels(+1, mult=20))
 
-        # shortcut for PSD display as tab or window
         self.shortcut_psd_tab = QShortcut(QKeySequence("Ctrl+T"), self)
-        self.shortcut_psd_tab.activated.connect(self.open_psd_as_tab)
-
-        self.shortcut_psd_window = QShortcut(QKeySequence("Ctrl+W"), self)
-        self.shortcut_psd_window.activated.connect(self.open_psd_as_window)
+        self.shortcut_psd_tab.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.shortcut_psd_tab.activated.connect(self.open_psd_panel)
 
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
@@ -413,9 +409,7 @@ class MainWindow(QMainWindow):
         self._push_scope_profile_to_ui()
         self._update_filter_summary_label()
 
-        if self.psd_panel is not None:
-            self.psd_panel.close()
-            self.psd_panel = None
+        self.main_tabs.setCurrentWidget(self.viewer)
 
         self.console.log("File closed.")
 
@@ -1062,8 +1056,7 @@ class MainWindow(QMainWindow):
         self.viewer.set_channel_groups(self.channel_groups)
         self._mark_project_dirty()
 
-        if self.psd_panel is not None:
-            self._refresh_psd_panel_context()
+        self._refresh_psd_panel_context()
 
         n_micro = sum(1 for g in self.channel_groups.values() if g == "micro")
         n_macro = sum(1 for g in self.channel_groups.values() if g == "macro")
@@ -1237,8 +1230,6 @@ class MainWindow(QMainWindow):
         self._update_montage_label()
    
     def _refresh_psd_panel_context(self) -> None:
-        if self.psd_panel is None:
-            return
         if self.current_raw is None or self.current_picks is None:
             return
         if self._psd_interval is None:
@@ -1397,45 +1388,7 @@ class MainWindow(QMainWindow):
         group = str(group).lower()
         return [ch for ch, g in self.channel_groups.items() if g == group]
 
-    def set_psd_mode_window(self) -> None:
-        self.psd_display_mode = "window"
 
-    def set_psd_mode_tab(self) -> None:
-        self.psd_display_mode = "tab"
-
-    def _ensure_psd_panel(self) -> PSDPanel:
-        if self.psd_panel is None:
-            self.psd_panel = PSDPanel(
-                parent=self,
-                mark_bad_callback=self._mark_channels_bad_from_psd,
-                mark_good_callback=self._mark_channels_good_from_psd,
-            )
-        return self.psd_panel
-
-    def _show_psd_as_tab(self) -> None:
-        panel = self._ensure_psd_panel()
-
-        if self.psd_tab_index is None:
-            self.psd_tab_index = self.main_tabs.addTab(panel, "PSD")
-
-        self.main_tabs.setCurrentWidget(panel)
-        panel.show()
-
-    def _show_psd_as_window(self) -> None:
-        panel = self._ensure_psd_panel()
-
-        # if it was previously inserted as a tab, remove it first
-        idx = self.main_tabs.indexOf(panel)
-        if idx != -1:
-            self.main_tabs.removeTab(idx)
-            self.psd_tab_index = None
-            panel.setParent(None)
-
-        panel.setWindowTitle("PSD Panel")
-        panel.show()
-        panel.raise_()
-        panel.activateWindow()
-        
 # ---------------- Viewer interaction callbacks ----------------
    
     def _on_time_range_changed(self, v: float):
@@ -2309,7 +2262,6 @@ class MainWindow(QMainWindow):
             self._act_reset_zoom.setEnabled(bool(has_zoom_base))
 
 # ---------------- PSD pannel  -------------
-
     def open_psd_panel(self) -> None:
         if self.current_raw is None or self.current_picks is None:
             QMessageBox.information(self, "PSD", "Load a dataset first.")
@@ -2317,6 +2269,7 @@ class MainWindow(QMainWindow):
 
         total_s = float(self.current_raw.times[-1]) if self.current_raw.n_times > 1 else 0.0
         dlg = PSDIntervalDialog(total_s, self)
+
         if self._psd_interval is not None:
             start_s, stop_s = self._psd_interval
             dlg.start_spin.setValue(float(start_s))
@@ -2327,8 +2280,6 @@ class MainWindow(QMainWindow):
 
         start_s, stop_s = dlg.values()
         self._psd_interval = (float(start_s), float(stop_s))
-
-        panel = self._ensure_psd_panel()
 
         display_names = list(self.viewer.get_channel_names())
         bad_names = list(getattr(self.viewer, "_bad_channels", set()))
@@ -2342,7 +2293,7 @@ class MainWindow(QMainWindow):
             if self.channel_groups.get(ch, "macro") == "micro"
         ]
 
-        panel.set_psd_context(
+        self.psd_panel.set_psd_context(
             raw=self.current_raw,
             picks=self.current_picks,
             display_names=display_names,
@@ -2353,13 +2304,7 @@ class MainWindow(QMainWindow):
             micro_names=micro_names,
         )
 
-        if self.psd_display_mode == "tab":
-            self._show_psd_as_tab()
-        else:
-            self._show_psd_as_window()
-
-    def _on_psd_panel_destroyed(self, *args) -> None:
-        self.psd_panel = None
+        self.main_tabs.setCurrentWidget(self.psd_panel)
 
     def _on_bad_channels_changed(self) -> None:
         self._mark_project_dirty()
@@ -2368,7 +2313,7 @@ class MainWindow(QMainWindow):
         self._saved_bipolar_montage = None
 
         # Always keep PSD state in sync if the panel is open
-        if self.psd_panel is not None and self.psd_panel.isVisible():
+        if self.psd_panel.isVisible():
             current_bad = set(self.viewer.get_bad_channels())
             self.psd_panel._bad_names = current_bad
             self.psd_panel._refresh_lists()
@@ -2415,10 +2360,9 @@ class MainWindow(QMainWindow):
         self.viewer.set_bad_channels(current_bad)
 
         # keep PSD panel visual state in sync if it is open
-        if self.psd_panel is not None:
-            self.psd_panel._bad_names = set(current_bad)
-            for group in ("macro", "micro"):
-                self.psd_panel._refresh_plot(group)
+        self.psd_panel._bad_names = set(current_bad)
+        for group in ("macro", "micro"):
+            self.psd_panel._refresh_plot(group)
         self.console.log(f"Marked as bad: {', '.join(added)}")
 
     def _mark_channels_good_from_psd(self, channel_names: list[str]) -> None:
@@ -2439,20 +2383,11 @@ class MainWindow(QMainWindow):
 
         self.viewer.set_bad_channels(current_bad)
 
-        if self.psd_panel is not None:
-            self.psd_panel._bad_names = set(current_bad)
-            for group in ("macro", "micro"):
-                self.psd_panel._refresh_plot(group)
+        self.psd_panel._bad_names = set(current_bad)
+        for group in ("macro", "micro"):
+            self.psd_panel._refresh_plot(group)
 
         self.console.log(f"Unmarked as bad: {', '.join(removed)}")
-
-    def open_psd_as_tab(self) -> None:
-        self.psd_display_mode = "tab"
-        self.open_psd_panel()
-
-    def open_psd_as_window(self) -> None:
-        self.psd_display_mode = "window"
-        self.open_psd_panel()
 
 # ---------------- Filters  -------------
     def on_toggle_permanent_filters(self) -> None:
