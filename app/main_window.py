@@ -806,22 +806,68 @@ class MainWindow(QMainWindow):
             return
 
         raw_file = source.get("raw_file")
-        if not isinstance(raw_file, str) or not raw_file.strip():
-            QMessageBox.critical(self, "Open project error", "Project does not contain a valid raw_file path.")
-            return
-
-        raw_path = Path(raw_file)
-        if not raw_path.exists():
+        raw_file_relative = source.get("raw_file_relative")
+        if not (
+            isinstance(raw_file, str) and raw_file.strip()
+        ) and not (
+            isinstance(raw_file_relative, str) and raw_file_relative.strip()
+        ):
             QMessageBox.critical(
                 self,
                 "Open project error",
-                f"Raw EEG file not found:\n{raw_path}",
+                "Project does not contain a valid raw_file path.",
             )
             return
+
+        raw_path = None
+
+        if isinstance(raw_file, str) and raw_file.strip():
+            abs_path = Path(raw_file)
+            if abs_path.exists():
+                raw_path = abs_path
+
+        if (
+            raw_path is None
+            and isinstance(raw_file_relative, str)
+            and raw_file_relative.strip()
+        ):
+            rel_path = project_path.parent / raw_file_relative
+            if rel_path.exists():
+                raw_path = rel_path
+
+        if raw_path is None:
+            start_dir = str(project_path.parent)
+            located_path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Locate raw EEG file",
+                start_dir,
+                "EEG files (*.edf *.bdf *.fif *.vhdr *.set *.eeg *.mff);;All files (*)",
+            )
+            if not located_path:
+                QMessageBox.critical(
+                    self,
+                    "Open project error",
+                    "Raw EEG file could not be located.",
+                )
+                return
+
+            raw_path = Path(located_path)
+            if not raw_path.exists():
+                QMessageBox.critical(
+                    self,
+                    "Open project error",
+                    f"Raw EEG file not found:\n{raw_path}",
+                )
+                return
+
+            self.loaded_file = raw_path
 
         # Reuse the standard raw-file opening flow
         if not self._open_raw_file(raw_path):
             return
+
+        if self.loaded_file != raw_path:
+            self.loaded_file = raw_path
 
         preprocessing = payload.get("preprocessing", {})
         if not isinstance(preprocessing, dict):

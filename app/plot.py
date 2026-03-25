@@ -687,8 +687,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             # Exclude manually annotated bad segments from the reference computation
             bad_mask = self._build_bad_segment_mask_for_abs(ref_abs, times)
-            print("ref_data shape =", ref_data.shape, "bad_mask shape =", bad_mask.shape)
-            print("masked entries =", int(bad_mask.sum()))
             if bad_mask.shape == ref_data.shape:
                 ref_data = ref_data.copy()
                 ref_data[bad_mask] = np.nan
@@ -1596,13 +1594,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             return mask
 
         abs_to_row = {int(abs_idx): row for row, abs_idx in enumerate(visible_abs)}
-        print("BAD MASK INPUT visible_abs[:10] =", visible_abs[:10], "n_ch =", len(visible_abs), "n_t =", len(times))
-
         for a in self._annotations:
             if str(a.kind) != "Bad segment":
                 continue
-
-            print("ANNO", a.kind, a.abs_channel, a.t_start, a.t_end)
 
             t0 = float(min(a.t_start, a.t_end))
             t1 = float(max(a.t_start, a.t_end))
@@ -1619,8 +1613,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 row = abs_to_row.get(int(a.abs_channel))
                 if row is not None:
                     mask[row, time_mask] = True
-            
-            print("BAD MASK total masked samples =", int(mask.sum()))
 
         return mask
 

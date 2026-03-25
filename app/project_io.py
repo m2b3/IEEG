@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from dataclasses import asdict
 from typing import Any
@@ -47,12 +48,19 @@ def build_project_dict(main_window) -> dict[str, Any]:
     else:
         project_name = "untitled"
 
+    raw_file_abs = str(main_window.loaded_file) if main_window.loaded_file else None
+    raw_file_rel = _relative_raw_file_path(
+        loaded_file=getattr(main_window, "loaded_file", None),
+        project_path=getattr(main_window, "project_path", None),
+    )
+
     return {
         "format": PROJECT_FORMAT,
         "version": PROJECT_VERSION,
         "project_name": project_name,
         "source": {
-            "raw_file": str(main_window.loaded_file) if main_window.loaded_file else None,
+            "raw_file": raw_file_abs,
+            "raw_file_relative": raw_file_rel,
         },
         "review": {
             "annotations": annotations,
@@ -103,10 +111,25 @@ def load_project(path: Path) -> dict[str, Any]:
         raise ValueError("Project file missing 'source' section")
 
     raw_file = source.get("raw_file")
-    if not isinstance(raw_file, str) or not raw_file.strip():
-        raise ValueError("Project does not contain a valid source.raw_file")
+    raw_file_relative = source.get("raw_file_relative")
+    has_abs = isinstance(raw_file, str) and bool(raw_file.strip())
+    has_rel = isinstance(raw_file_relative, str) and bool(raw_file_relative.strip())
+    if not has_abs and not has_rel:
+        raise ValueError("Project does not contain a valid source.raw_file or source.raw_file_relative")
 
     return payload
+
+
+def _relative_raw_file_path(loaded_file, project_path) -> str | None:
+    if loaded_file is None or project_path is None:
+        return None
+
+    try:
+        raw_path = Path(loaded_file).resolve()
+        project_dir = Path(project_path).resolve().parent
+        return os.path.relpath(raw_path, project_dir)
+    except Exception:
+        return None
 
 def _serialize_filter_settings(filters) -> dict[str, Any]:
     return {

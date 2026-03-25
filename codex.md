@@ -83,3 +83,47 @@ Assumption:
 - I interpreted “If mixed pairing, channel 1 group is choose” as “use channel 1’s group for PSD classification when a bipolar pair mixes macro and micro channels.”
 
 I verified the patch with a local diff; I did not run the GUI.
+
+## User
+Read agent_instructions.md and follow it strictly.
+
+Fix these two issues only, with minimal changes:
+
+1. Remove or replace remaining debug print() calls in plot.py so the GUI does not spam stdout.
+2. Make project file paths portable:
+- save both absolute and relative raw file paths when possible
+- on open, try absolute path first, then relative path from the project file
+- if neither works, prompt the user to locate the raw file manually
+- keep backward compatibility with existing project files
+
+First explain the root cause briefly.
+Then implement the fixes.
+Then summarize exactly what changed.
+Do not make unrelated changes.
+
+## Assistant
+Root cause:
+- `app/plot.py` still contained temporary debug `print()` calls inside render/reference code, so normal GUI use could spam stdout.
+- Project files only stored a single raw-file path and the open flow only tried that exact location, which made saved projects brittle when moved between folders or machines.
+
+Implemented fixes:
+- In [app/plot.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/plot.py), removed the remaining debug `print()` calls from the average/median reference path and bad-segment mask builder.
+- In [app/project_io.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_io.py#L51), project saving now stores:
+  - `source.raw_file` as the absolute raw path, preserving current behavior
+  - `source.raw_file_relative` as a project-relative path when it can be computed
+- In [app/project_io.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_io.py#L114), project loading now accepts either `raw_file` or `raw_file_relative`, so older project files remain valid.
+- In [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L809), project open now:
+  - tries `source.raw_file` first
+  - then tries `project_path.parent / source.raw_file_relative`
+  - if neither exists, prompts the user to locate the raw EEG file manually
+
+Exactly what changed:
+- Deleted the remaining stdout debug prints in `plot.py`.
+- Added relative raw-path serialization in `project_io.py` while keeping absolute path serialization.
+- Relaxed project validation so either absolute or relative raw path is accepted.
+- Updated project open in `main_window.py` to resolve raw files in this order: absolute, relative-to-project, manual user selection.
+
+Backward compatibility:
+- Existing project files that only contain `source.raw_file` still open the same way.
+
+I verified the patch with a local diff; I did not run the GUI.
