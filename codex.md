@@ -178,3 +178,33 @@ Exactly what changed:
 - Moved only the project file chooser/path resolution responsibility out of `MainWindow`; behavior of project creation/open/save remains the same.
 
 I verified the patch with a local diff and a final scan for the broken mojibake patterns in the targeted files; I did not run the GUI.
+
+## User
+okey let s redo a full analysis of this code, check for errors and possible improvement
+
+## Assistant
+**Findings**
+- High: Reopened projects still lose the active reference mode. Project save persists edited bipolar montage data, but not the actual active reference mode, and project open ends by forcing monopolar mode. See [app/project_io.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_io.py#L40), [app/project_io.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_io.py#L69), and [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L892).
+- Medium: `MainWindow` still reaches into `PSDPanel` private state and private methods directly, which makes the tab fragile and tightly couples two widgets that should communicate through a public API. See [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L2329), [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L2330), [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L2333), [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L2374), and [app/main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L2397).
+- Medium: The menu bar still contains many placeholder actions wired to `print("TODO")`, so users can trigger dead-end features and the app still writes to stdout from UI actions. See [app/menus.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/menus.py#L32), [app/menus.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/menus.py#L69), and [app/menus.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/menus.py#L106).
+- Low: The computation panel exposes an `Algorithm` selector, but only one option exists and `state.algorithm` is never used in the actual computation path, so the UI suggests extensibility that the implementation does not yet support. See [app/computation_panel.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/computation_panel.py#L126), [app/computation_panel.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/computation_panel.py#L150), and [app/computation_panel.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/computation_panel.py#L458).
+- Low: The README install section is incomplete; it ends inside a code fence after `pip install -r requirements.txt`, which makes the docs look truncated. See [README.md](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/README.md).
+
+**Architecture**
+- Entry point is [main.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/main.py), which launches [MainWindow](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L55).
+- The separation into [plot.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/plot.py#L44), [referencing.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/referencing.py), [filtering.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/filtering.py), and [project_io.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_io.py) is a good foundation.
+- The main structural weakness is that [main_window.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/main_window.py#L55) is still a very large coordinator handling file IO, state restoration, re-referencing, filtering, PSD wiring, annotations, and multiple dialogs in one class.
+
+**Improvements**
+- Persist and restore full reference state in project files, not just edited bipolar montage data.
+- Give `PSDPanel` a small public sync API like `set_bad_channels(...)` / `refresh_from_context(...)` so `MainWindow` stops mutating underscore-prefixed internals.
+- Replace menu `TODO` actions with disabled actions or user-facing “Not implemented yet” dialogs to avoid stdout writes from the GUI.
+- Either remove the computation panel algorithm selector for now or implement the algorithm dispatch so the control is real.
+- Continue the small-scope extraction approach that already started with [project_file_helpers.py](/c:/Users/m2b3m/Documents/EpilepsyTools/I_EEG/app/project_file_helpers.py): filters or reference handling would be the next safest splits.
+- Add a small smoke-test layer around project save/open, re-reference switching, and PSD refresh because those flows are stateful and regress easily.
+
+**Open Questions**
+- Should project reopen restore the exact last review view, including reference mode and PSD interval, or is monopolar-on-open intentional?
+- Are the many placeholder menu entries part of an active roadmap, or should they be hidden until implemented?
+
+I did not run the GUI or automated tests; this is a static review of the current source tree.

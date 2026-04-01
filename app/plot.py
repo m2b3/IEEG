@@ -77,6 +77,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     badChannelsChanged = Signal()
     #  Zoom window
     zoomStateChanged = Signal(bool)  # True when a zoom base view exists
+    scalogramRequested = Signal(int, float, float)  # abs channel, start_s, stop_s
+    scalogramModeChanged = Signal(bool)
 
     # ---------------- Init ----------------
     def __init__(self, parent=None):
@@ -216,6 +218,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._zoom_drag_start_y: float | None = None
         self._zoom_preview: QtWidgets.QGraphicsRectItem | None = None
 
+        # ---- Scalogram selection ----
+        self._scalogram_mode: bool = False
+        self._scalogram_drag_active: bool = False
+        self._scalogram_drag_start_t: float | None = None
+        self._scalogram_drag_abs: int | None = None
+        self._scalogram_preview: QtWidgets.QGraphicsRectItem | None = None
+        self._min_scalogram_duration_s: float = 0.05
+
     def clear(self) -> None:
         """Reset viewer to an empty state."""
         self._raw = None
@@ -237,6 +247,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._zoom_drag_active = False
         self._zoom_drag_start_t = None
         self._zoom_drag_start_y = None
+        self.stop_scalogram_selection_mode()
 
         self._t_start = 0.0
         self._ch_start = 0
@@ -328,6 +339,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._zoom_drag_start_t = None
         self._zoom_drag_start_y = None
         self.zoomStateChanged.emit(False)
+        self.stop_scalogram_selection_mode()
 
         # Show axis + grid now that we have data
         self.signal_plot.showAxis("bottom")
@@ -1198,6 +1210,79 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cached_bipolar_data = full_data
         return full_data
 
+    def get_channel_segment(
+        self,
+        abs_idx: int,
+        start_s: float,
+        stop_s: float,
+    ) -> tuple[np.ndarray, np.ndarray] | None:
+        if self._raw is None or self._picks.size == 0:
+            return None
+        if not (0 <= int(abs_idx) < len(self.get_channel_names())):
+            return None
+
+        raw = self._raw
+        fs = float(self._fs)
+        t0 = float(min(start_s, stop_s))
+        t1 = float(max(start_s, stop_s))
+        if t1 <= t0:
+            return None
+
+        start_samp = max(0, min(int(np.floor(t0 * fs)), raw.n_times - 1))
+        stop_samp = max(start_samp + 1, min(int(np.ceil(t1 * fs)), raw.n_times))
+
+        times = np.asarray(raw.times[start_samp:stop_samp], dtype=float)
+        if times.size == 0:
+            return None
+
+        if self._reference_mode == "monopolar":
+            raw_pick = int(self._picks[int(abs_idx)])
+            data_v, _ = raw[[raw_pick], start_samp:stop_samp]
+            signal_v = np.asarray(data_v, dtype=float)[0]
+
+        elif self._reference_mode in ("average", "median"):
+            usable_abs = self._all_nonbad_abs_indices()
+            if not usable_abs:
+                return None
+            ref_picks = self._picks[np.asarray(usable_abs, dtype=int)]
+            ref_data, _ = raw[ref_picks, start_samp:stop_samp]
+            ref_data = np.asarray(ref_data, dtype=float)
+            bad_mask = self._build_bad_segment_mask_for_abs(usable_abs, times)
+            if bad_mask.shape == ref_data.shape:
+                ref_data = ref_data.copy()
+                ref_data[bad_mask] = np.nan
+
+            if self._reference_mode == "average":
+                ref = np.nanmean(ref_data, axis=0)
+            else:
+                ref = np.nanmedian(ref_data, axis=0)
+            ref = np.where(np.isnan(ref), 0.0, ref)
+
+            raw_pick = int(self._picks[int(abs_idx)])
+            data_v, _ = raw[[raw_pick], start_samp:stop_samp]
+            signal_v = np.asarray(data_v, dtype=float)[0] - ref
+
+        elif self._reference_mode == "common":
+            if not self._common_ref_name or self._common_ref_name not in self._channel_names:
+                return None
+            raw_pick = int(self._picks[int(abs_idx)])
+            ref_abs = self._channel_names.index(self._common_ref_name)
+            ref_pick = int(self._picks[ref_abs])
+            data_v, _ = raw[[raw_pick], start_samp:stop_samp]
+            ref_v, _ = raw[[ref_pick], start_samp:stop_samp]
+            signal_v = np.asarray(data_v, dtype=float)[0] - np.asarray(ref_v, dtype=float)[0]
+
+        elif self._reference_mode == "bipolar":
+            full_data = self._get_or_compute_bipolar_data()
+            if full_data is None or not (0 <= int(abs_idx) < full_data.shape[0]):
+                return None
+            signal_v = np.asarray(full_data[int(abs_idx), start_samp:stop_samp], dtype=float)
+
+        else:
+            return None
+
+        return signal_v * 1e6, times
+
  # ---------------- Cursor & navigation ----------------
 
     def set_time_start(self, t_start: float):
@@ -1227,6 +1312,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def start_annotation_mode(self, *, kind: str, note: str = "", scope: str = SCOPE_CLICKED) -> None:
         if self._raw is None:
             return
+        self.stop_scalogram_selection_mode()
         self._annotation_mode = True
         self._pending_kind = str(kind)
         self._pending_note = str(note or "")
@@ -1644,6 +1730,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         # cancel annotation mode if active
         if self._annotation_mode:
             self.stop_annotation_mode()
+        self.stop_scalogram_selection_mode()
 
         self._zoom_mode = True
         self._zoom_drag_active = False
@@ -1672,6 +1759,58 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._zoom_preview = None
 
         self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def start_scalogram_selection_mode(self) -> None:
+        if self._raw is None or self._picks.size == 0:
+            return
+
+        if self._annotation_mode:
+            self.stop_annotation_mode()
+        self.stop_zoom_selection_mode()
+
+        self._scalogram_mode = True
+        self._scalogram_drag_active = False
+        self._scalogram_drag_start_t = None
+        self._scalogram_drag_abs = None
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.scalogramModeChanged.emit(True)
+
+    def stop_scalogram_selection_mode(self) -> None:
+        was_active = self._scalogram_mode
+        self._scalogram_mode = False
+        self._scalogram_drag_active = False
+        self._scalogram_drag_start_t = None
+        self._scalogram_drag_abs = None
+
+        if self._scalogram_preview is not None:
+            try:
+                self.signal_plot.removeItem(self._scalogram_preview)
+            except Exception:
+                pass
+            self._scalogram_preview = None
+
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+        if was_active:
+            self.scalogramModeChanged.emit(False)
+
+    def _update_scalogram_preview(self, *, abs_idx: int, t0: float, t1: float) -> None:
+        y_center = self._row_center_y_for_abs(abs_idx)
+        if y_center is None:
+            return
+
+        x0, x1 = (t0, t1) if t0 <= t1 else (t1, t0)
+        height = 0.8 * float(self._spacing)
+        y0 = y_center - height / 2.0
+
+        if self._scalogram_preview is None:
+            rect = QtWidgets.QGraphicsRectItem()
+            rect.setPen(pg.mkPen((255, 190, 80), width=1.5))
+            rect.setBrush(pg.mkBrush(255, 190, 80, 60))
+            rect.setZValue(25)
+            self.signal_plot.addItem(rect)
+            self._scalogram_preview = rect
+
+        self._scalogram_preview.setRect(x0, y0, max(1e-6, x1 - x0), height)
 
     def reset_zoom_to_base(self) -> None:
         if self._zoom_base_view is None:
@@ -1907,6 +2046,73 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         ev.accept()
                         return True
 
+            # --- Scalogram selection mode ---
+            if getattr(self, "_scalogram_mode", False):
+                if ev.type() == QEvent.Type.KeyPress and ev.key() == Qt.Key.Key_Escape:
+                    self.stop_scalogram_selection_mode()
+                    ev.accept()
+                    return True
+
+                if ev.type() in (
+                    QEvent.Type.MouseButtonPress,
+                    QEvent.Type.MouseMove,
+                    QEvent.Type.MouseButtonRelease,
+                ):
+                    scene_pos = self.mapToScene(ev.position().toPoint())
+
+                    if ev.type() == QEvent.Type.MouseButtonPress:
+                        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                            return super().eventFilter(obj, ev)
+                    elif not self._scalogram_drag_active:
+                        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                            return super().eventFilter(obj, ev)
+
+                    p = self._sig_vb.mapSceneToView(scene_pos)
+                    t = float(p.x())
+                    y = float(p.y())
+
+                    if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.LeftButton:
+                        abs_idx = self._abs_channel_from_y(y)
+                        if abs_idx is None:
+                            ev.accept()
+                            return True
+                        self._select_single_channel_abs(abs_idx)
+                        self._scalogram_drag_active = True
+                        self._scalogram_drag_start_t = t
+                        self._scalogram_drag_abs = abs_idx
+                        self._update_scalogram_preview(abs_idx=abs_idx, t0=t, t1=t)
+                        ev.accept()
+                        return True
+
+                    if ev.type() == QEvent.Type.MouseMove and self._scalogram_drag_active:
+                        abs_idx = self._scalogram_drag_abs
+                        t0 = float(self._scalogram_drag_start_t if self._scalogram_drag_start_t is not None else t)
+                        if abs_idx is not None:
+                            self._update_scalogram_preview(abs_idx=abs_idx, t0=t0, t1=t)
+                        ev.accept()
+                        return True
+
+                    if ev.type() == QEvent.Type.MouseButtonRelease and ev.button() == Qt.MouseButton.LeftButton:
+                        if not self._scalogram_drag_active:
+                            return True
+
+                        abs_idx = self._scalogram_drag_abs
+                        t0 = float(self._scalogram_drag_start_t if self._scalogram_drag_start_t is not None else t)
+                        t_min, t_max = (t0, t) if t0 <= t else (t, t0)
+
+                        self._scalogram_drag_active = False
+                        self._scalogram_drag_start_t = None
+                        self._scalogram_drag_abs = None
+
+                        min_duration = max(self._min_scalogram_duration_s, 2.0 / max(self._fs, 1.0))
+                        if abs(t_max - t_min) >= min_duration and abs_idx is not None:
+                            self.scalogramRequested.emit(int(abs_idx), float(t_min), float(t_max))
+                            self.stop_scalogram_selection_mode()
+                        elif abs_idx is not None:
+                            self._update_scalogram_preview(abs_idx=int(abs_idx), t0=t_min, t1=t_min)
+                        ev.accept()
+                        return True
+
             # --- Annotation click/drag ---
             if getattr(self, "_annotation_mode", False) and getattr(self, "_pending_kind", None) is not None:
                 if ev.type() in (
@@ -1973,6 +2179,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def _on_mouse_clicked(self, event):
         """Left click selects channel."""
         if self._raw is None or self._visible_abs.size == 0:
+            return
+        if getattr(self, "_scalogram_mode", False) or getattr(self, "_scalogram_drag_active", False):
             return
 
         if event.double():

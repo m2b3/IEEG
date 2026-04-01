@@ -50,6 +50,7 @@ from app.filtering import (
     build_filtered_raw_by_group,
     is_filter_active,
 )
+from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 
 
 class MainWindow(QMainWindow):
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.resize(1400, 800)
 
         # ---- Menu bar ----
+        self._act_scalogram: QAction | None = None
         self._act_reset_zoom: QAction | None = None
         self._act_save, self._act_saveas, self._act_close = build_menubar(self)
         self._act_save.setEnabled(False)
@@ -242,6 +244,7 @@ class MainWindow(QMainWindow):
 
         self.filter_profiles = FilterProfiles()
         self._psd_interval: tuple[float, float] | None = None
+        self._scalogram_windows: list[ScalogramViewerWindow] = []
 
         self.channel_groups: dict[str, str] = {}
 
@@ -308,6 +311,8 @@ class MainWindow(QMainWindow):
         self.viewer.annotationSelected.connect(self._on_plot_annotation_selected)
         self.viewer.requestOpenAnnotationsPanel.connect(self._open_annotations_panel)
         self.viewer.zoomStateChanged.connect(self._on_zoom_state_changed)
+        self.viewer.scalogramRequested.connect(self._open_scalogram_for_selection)
+        self.viewer.scalogramModeChanged.connect(self._on_scalogram_mode_changed)
 
         # --- Shortcuts ---
         # --- Arrow-key scrolling (view navigation) ---
@@ -2263,6 +2268,76 @@ class MainWindow(QMainWindow):
         self.anno_list.scrollToItem(item)
 
 # ---------------- Zoom window  -------------
+    def on_toggle_scalogram_mode(self, checked: bool) -> None:
+        if self.current_raw is None:
+            if self._act_scalogram is not None:
+                self._act_scalogram.blockSignals(True)
+                self._act_scalogram.setChecked(False)
+                self._act_scalogram.blockSignals(False)
+            QMessageBox.information(self, "Scalogram", "Load a dataset first.")
+            return
+
+        if checked:
+            self.viewer.start_scalogram_selection_mode()
+            self.console.log(
+                "Scalogram mode: drag on one channel to select a time interval. "
+                "The mode resets automatically after opening the window. Esc cancels."
+            )
+        else:
+            self.viewer.stop_scalogram_selection_mode()
+            self.console.log("Scalogram mode cancelled.")
+
+    def _on_scalogram_mode_changed(self, active: bool) -> None:
+        if self._act_scalogram is None:
+            return
+        if self._act_scalogram.isChecked() == bool(active):
+            return
+        self._act_scalogram.blockSignals(True)
+        self._act_scalogram.setChecked(bool(active))
+        self._act_scalogram.blockSignals(False)
+
+    def _open_scalogram_for_selection(self, abs_idx: int, start_s: float, stop_s: float) -> None:
+        segment = self.viewer.get_channel_segment(abs_idx, start_s, stop_s)
+        if segment is None:
+            QMessageBox.warning(self, "Scalogram", "Unable to extract the selected channel interval.")
+            return
+
+        signal_uv, absolute_times = segment
+        if absolute_times.size < 2:
+            QMessageBox.information(self, "Scalogram", "Select a slightly longer interval.")
+            return
+
+        display_names = self.viewer.get_channel_names()
+        if not (0 <= int(abs_idx) < len(display_names)):
+            return
+
+        rel_times = absolute_times - float(absolute_times[0])
+        context = build_scalogram_context(
+            channel_name=display_names[int(abs_idx)],
+            loaded_file=self.loaded_file,
+            start_time=float(start_s),
+            duration=float(stop_s - start_s),
+            sampling_rate=float(self.current_raw.info["sfreq"]) if self.current_raw is not None else 0.0,
+        )
+        window = ScalogramViewerWindow(
+            context=context,
+            signal_uv=signal_uv,
+            relative_times_s=rel_times,
+            parent=self,
+        )
+        window.destroyed.connect(lambda *_args, w=window: self._discard_scalogram_window(w))
+        self._scalogram_windows.append(window)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        self.console.log(
+            f"Opened scalogram for {context.channel_name} | "
+            f"{context.start_time:.3f}s to {context.start_time + context.duration:.3f}s"
+        )
+
+    def _discard_scalogram_window(self, window: ScalogramViewerWindow) -> None:
+        self._scalogram_windows = [w for w in self._scalogram_windows if w is not window]
+
     def on_zoom_selection(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Zoom Selection", "Load a dataset first.")
