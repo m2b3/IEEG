@@ -128,7 +128,9 @@ def _relative_raw_file_path(loaded_file, project_path) -> str | None:
         raw_path = Path(loaded_file).resolve()
         project_dir = Path(project_path).resolve().parent
         return os.path.relpath(raw_path, project_dir)
-    except Exception:
+    except Exception as e:
+        import sys
+        print(f"Warning: Could not compute relative path ({loaded_file}, {project_path}): {e}", file=sys.stderr)
         return None
 
 def _serialize_filter_settings(filters) -> dict[str, Any]:

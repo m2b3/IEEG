@@ -282,15 +282,17 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for roi in self._anno_rois.values():
             try:
                 self.signal_plot.removeItem(roi)
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"Warning: Failed to remove annotation ROI: {e}", file=sys.stderr)
         self._anno_rois.clear()
 
         for txt in self._anno_labels.values():
             try:
                 self.signal_plot.removeItem(txt)
-            except Exception:
-                pass
+            except Exception as e:
+                import sys
+                print(f"Warning: Failed to remove annotation label: {e}", file=sys.stderr)
         self._anno_labels.clear()
 
         self.stop_annotation_mode()

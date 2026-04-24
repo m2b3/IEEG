@@ -191,6 +191,7 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         if self._signal_uv.size < 8 or self._context.sampling_rate <= 0:
             self._freq_bins_hz = np.array([], dtype=float)
             self._power = np.empty((0, 0), dtype=float)
+            self._scalogram_times_s = np.array([], dtype=float)
             return
 
         fs = float(self._context.sampling_rate)
@@ -200,20 +201,30 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
             nperseg = n_samples
         noverlap = min(nperseg // 2, max(0, nperseg - 8))
 
-        freqs, times, power = signal.spectrogram(
-            self._signal_uv,
-            fs=fs,
-            window="hann",
-            nperseg=nperseg,
-            noverlap=noverlap,
-            detrend="constant",
-            scaling="density",
-            mode="psd",
-        )
-
-        self._freq_bins_hz = np.asarray(freqs, dtype=float)
-        self._scalogram_times_s = np.asarray(times, dtype=float)
-        self._power = np.asarray(power, dtype=float)
+        try:
+            freqs, times, power = signal.spectrogram(
+                self._signal_uv,
+                fs=fs,
+                window="hann",
+                nperseg=nperseg,
+                noverlap=noverlap,
+                detrend="constant",
+                scaling="density",
+                mode="psd",
+            )
+            self._freq_bins_hz = np.asarray(freqs, dtype=float)
+            self._scalogram_times_s = np.asarray(times, dtype=float)
+            self._power = np.asarray(power, dtype=float)
+            
+            # Validate output shapes
+            if self._power.ndim != 2 or self._freq_bins_hz.ndim != 1 or self._scalogram_times_s.ndim != 1:
+                raise ValueError(f"Invalid spectrogram output shapes: power{self._power.shape}, freqs{self._freq_bins_hz.shape}, times{self._scalogram_times_s.shape}")
+        except Exception as e:
+            import sys
+            print(f"Warning: Scalogram computation failed: {e}", file=sys.stderr)
+            self._freq_bins_hz = np.array([], dtype=float)
+            self._power = np.empty((0, 0), dtype=float)
+            self._scalogram_times_s = np.array([], dtype=float)
 
     def _update_frequency_label(self, f_min: float, f_max: float) -> None:
         self.freq_range_label.setText(f"Displayed range: {f_min:.1f} Hz - {f_max:.1f} Hz")
