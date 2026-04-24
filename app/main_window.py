@@ -2196,15 +2196,21 @@ class MainWindow(QMainWindow):
         self.viewer.jump_to_annotation(str(anno_id))
 
     def _on_annotation_list_context_menu(self, pos) -> None:
+        clicked_item = self.anno_list.itemAt(pos)
+        if clicked_item is not None and clicked_item not in self.anno_list.selectedItems():
+            self.anno_list.setCurrentItem(clicked_item)
+            clicked_item.setSelected(True)
+
         items = self.anno_list.selectedItems()
         if not items:
             return
 
         menu = QMenu(self)
+        act_edit = menu.addAction("Edit annotation...")
         act_delete = menu.addAction("Delete selected annotation(s)")
 
         chosen = menu.exec_(self.anno_list.mapToGlobal(pos))
-        if chosen != act_delete:
+        if chosen is None:
             return
 
         ids = []
@@ -2212,6 +2218,14 @@ class MainWindow(QMainWindow):
             anno_id = item.data(Qt.ItemDataRole.UserRole)
             if anno_id:
                 ids.append(str(anno_id))
+
+        if chosen == act_edit:
+            if ids:
+                self._on_request_edit_annotation(ids[0])
+            return
+
+        if chosen != act_delete:
+            return
 
         for anno_id in ids:
             self.viewer.delete_annotation(anno_id)
@@ -2234,7 +2248,25 @@ class MainWindow(QMainWindow):
         note = QLineEdit(dlg)
         note.setText(a.note)
 
+        max_time = 0.0
+        if self.current_raw is not None and self.current_raw.n_times > 1:
+            max_time = float(self.current_raw.times[-1])
+
+        start_spin = QDoubleSpinBox(dlg)
+        start_spin.setDecimals(3)
+        start_spin.setRange(0.0, max_time if max_time > 0.0 else max(float(a.t_start), float(a.t_end), 1.0))
+        start_spin.setSingleStep(0.05)
+        start_spin.setValue(float(a.t_start))
+
+        end_spin = QDoubleSpinBox(dlg)
+        end_spin.setDecimals(3)
+        end_spin.setRange(0.0, max_time if max_time > 0.0 else max(float(a.t_start), float(a.t_end), 1.0))
+        end_spin.setSingleStep(0.05)
+        end_spin.setValue(float(a.t_end))
+
         layout.addRow("Type:", combo)
+        layout.addRow("Start (s):", start_spin)
+        layout.addRow("End (s):", end_spin)
         layout.addRow("Note:", note)
 
         buttons = QDialogButtonBox(
@@ -2248,7 +2280,18 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
 
-        self.viewer.update_annotation(anno_id, kind=combo.currentText(), note=note.text().strip())
+        start_s = float(start_spin.value())
+        end_s = float(end_spin.value())
+        if end_s < start_s:
+            start_s, end_s = end_s, start_s
+
+        self.viewer.update_annotation(
+            anno_id,
+            kind=combo.currentText(),
+            note=note.text().strip(),
+            t_start=start_s,
+            t_end=end_s,
+        )
 
     def _on_plot_annotation_selected(self, anno_id: str):
         # Ensure dock is visible when user clicks an annotation

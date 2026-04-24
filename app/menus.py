@@ -39,12 +39,12 @@ def build_menubar(main_window):
     # -------- Viewer --------
     view_menu = menubar.addMenu("Viewer")
     add_action(view_menu, "Zoom Selection", main_window.on_zoom_selection)
+    act_reset_zoom = add_action(view_menu, "Reset Zoom", main_window.on_reset_zoom)
+    act_reset_zoom.setEnabled(False)
     act_scalogram = QAction("Scalogram", view_menu)
     act_scalogram.setCheckable(True)
     act_scalogram.toggled.connect(main_window.on_toggle_scalogram_mode)
     view_menu.addAction(act_scalogram)
-    act_reset_zoom = add_action(view_menu, "Reset Zoom", main_window.on_reset_zoom)
-    act_reset_zoom.setEnabled(False)
 
     main_window._act_scalogram = act_scalogram
     main_window._act_reset_zoom = act_reset_zoom

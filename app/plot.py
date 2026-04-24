@@ -41,6 +41,19 @@ class AnnotationRect(QtWidgets.QGraphicsRectItem):
 
         event.accept()
 
+    def contextMenuEvent(self, event):
+        menu = QtWidgets.QMenu()
+        act_edit = menu.addAction("Edit annotation...")
+        act_del = menu.addAction("Delete annotation")
+
+        chosen = menu.exec_(event.screenPos())
+        if chosen == act_edit:
+            self._viewer.requestEditAnnotation.emit(self._anno_id)
+        elif chosen == act_del:
+            self._viewer.delete_annotation(self._anno_id)
+
+        event.accept()
+
 class MultiChannelViewer(pg.GraphicsLayoutWidget):
     """
     Widget that displays multiple EEG channels stacked vertically.
@@ -868,6 +881,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         return True
 
+    def _scene_pos_hits_annotation(self, scene_pos) -> bool:
+        for item in self.scene().items(scene_pos):
+            if isinstance(item, (AnnotationRect, _AnnotationROI)):
+                return True
+        return False
+
 
     @staticmethod
     def _nice_time_step(window_s: float, target_lines: int = 10) -> float:
@@ -1423,15 +1442,27 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self.annotationsChanged.emit()
     
-    def update_annotation(self, anno_id: str, *, kind: str, note: str) -> None:
+    def update_annotation(
+        self,
+        anno_id: str,
+        *,
+        kind: str,
+        note: str,
+        t_start: float | None = None,
+        t_end: float | None = None,
+    ) -> None:
         # update data
         for i, a in enumerate(self._annotations):
             if a.id == anno_id:
+                new_t_start = float(a.t_start if t_start is None else t_start)
+                new_t_end = float(a.t_end if t_end is None else t_end)
+                if new_t_end < new_t_start:
+                    new_t_start, new_t_end = new_t_end, new_t_start
                 self._annotations[i] = Annotation(
                     id=a.id,
                     kind=str(kind),
-                    t_start=a.t_start,
-                    t_end=a.t_end,
+                    t_start=new_t_start,
+                    t_end=new_t_end,
                     abs_channel=a.abs_channel,
                     note=str(note or ""),
                 )
@@ -1974,6 +2005,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             # --- Right-click context menu: swallow the whole RMB gesture ---
             if ev.type() == QEvent.Type.MouseButtonPress and ev.button() == Qt.MouseButton.RightButton:
                 scene_pos = self.mapToScene(ev.position().toPoint())
+
+                if self._scene_pos_hits_annotation(scene_pos):
+                    return super().eventFilter(obj, ev)
 
                 if self._sig_vb.sceneBoundingRect().contains(scene_pos):
                     self._context_menu_active = True
