@@ -545,22 +545,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(rect)
             self._annotation_items.append(rect)
                             
-    def _visible_time_bounds(self) -> tuple[float, float]:
-        t0 = float(self._t_start)
-        t1 = t0 + float(self._time_range)
-        if self._raw is not None and self._raw.n_times > 1:
-            total_s = float(self._raw.times[-1])
-            t0 = max(0.0, min(t0, total_s))
-            t1 = max(t0, min(t1, total_s))
-        return t0, max(t0 + 1e-9, t1)
-
     def _set_ranges(self, t_ds: np.ndarray, n_vis: int):
         ypad = float(self._vertical_margin_factor) * float(self._spacing)
         y0 = -ypad
         y1 = (n_vis - 1) * float(self._spacing) + ypad
 
-        t0, t1 = self._visible_time_bounds()
-        self._sig_vb.setXRange(t0, t1, padding=0)
+        t0 = float(t_ds[0])
+        t1 = float(t_ds[-1])
+        xpad = 0.06 * max(1e-9, (t1 - t0))
+        self._sig_vb.setXRange(t0 - xpad, t1, padding=0)
         self._sig_vb.setYRange(y0, y1, padding=0)
 
         self._label_vb.setYRange(y0, y1, padding=0)
@@ -569,12 +562,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def _draw_time_lines(self, t_ds: np.ndarray):
         step = self._nice_time_step(self._time_range, target_lines=10)
 
-        t0, t1 = self._visible_time_bounds()
+        t0 = float(t_ds[0])
+        t1 = float(t_ds[-1])
 
-        start = np.ceil(t0 / step) * step
-        xs = np.arange(start, t1 + 0.5 * step, step)
-        xs = xs[(xs > t0 + 1e-9) & (xs < t1 - 1e-9)]
-        xs = np.concatenate(([t0], xs, [t1]))
+        start = np.floor(t0 / step) * step
+        xs = np.arange(start, t1 + step, step)
 
         for x in xs:
             ln = pg.InfiniteLine(pos=float(x), angle=90, movable=False)
@@ -596,9 +588,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cursor_line.sigPositionChanged.connect(self._on_cursor_moved)
 
     def _draw_minmax(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, n_vis: int):
-        t0, t1 = self._visible_time_bounds()
+        t0 = float(t_ds[0])
+        t1 = float(t_ds[-1])
         width = max(1e-9, (t1 - t0))
-        x_left = t0 + 0.02 * width
+        margin = getattr(self, "_amp_left_margin", 0.08 * width)
+        x_left = t0 - 0.5 * margin
 
         for i in range(n_vis):
             plot_row = (n_vis - 1 - i)

@@ -411,10 +411,20 @@ class ZoomedEventView(QWidget):
 
         self._waveform_plot.clear()
         color = self._event.review_color
+        start_s = float(self._event.start)
+        end_s = float(self._event.end)
+        if end_s <= start_s:
+            end_s = start_s + 1e-6
+
         if self._event.waveform is not None and len(self._event.waveform) > 0:
-            self._waveform_plot.plot(self._event.waveform, pen=pg.mkPen(color=color, width=2))
+            waveform = np.asarray(self._event.waveform, dtype=float).reshape(-1)
+            times = np.linspace(start_s, end_s, waveform.size)
+            self._waveform_plot.plot(times, waveform, pen=pg.mkPen(color=color, width=2))
         else:
-            self._waveform_plot.plot([0, 1], [0, 0], pen=pg.mkPen(color='#666666', width=1))
+            self._waveform_plot.plot([start_s, end_s], [0, 0], pen=pg.mkPen(color='#666666', width=1))
+
+        self._waveform_plot.setXRange(start_s, end_s, padding=0)
+        self._waveform_plot.setLabel("bottom", "Time", units="s")
     
     def keyPressEvent(self, event):
         key = event.key()
