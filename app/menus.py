@@ -84,6 +84,9 @@ def build_menubar(main_window):
     add_action(event_viewers_menu, "Ripples", lambda: print("TODO"))
     add_action(event_viewers_menu, "Fast Ripples", lambda: print("TODO"))
 
+    # Expert Event Grid - load and display expert-reviewed HFO annotations
+    add_action(review_menu, "Expert Event Grid", main_window.open_expert_event_grid)
+
     add_action(review_menu, "Events Display", lambda: print("TODO"))
 
     # -------- Results --------

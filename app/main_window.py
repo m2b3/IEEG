@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import re
 import shutil
 import tempfile
@@ -51,6 +52,7 @@ from app.filtering import (
     is_filter_active,
 )
 from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
+from app.expert_event_grid import ExpertEventGridDialog
 
 
 class MainWindow(QMainWindow):
@@ -245,6 +247,8 @@ class MainWindow(QMainWindow):
         self.filter_profiles = FilterProfiles()
         self._psd_interval: tuple[float, float] | None = None
         self._scalogram_windows: list[ScalogramViewerWindow] = []
+        self._expert_event_grid_dialog: ExpertEventGridDialog | None = None
+        self._expert_event_grid_loaded_file: Path | None = None
 
         self.channel_groups: dict[str, str] = {}
 
@@ -279,7 +283,6 @@ class MainWindow(QMainWindow):
         self.anno_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.anno_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.anno_list.customContextMenuRequested.connect(self._on_annotation_list_context_menu)
-
 
         # ---- Connections ----
         self.viewer.channelClicked.connect(self._on_channel_clicked)
@@ -363,6 +366,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
         try:
+            if self._expert_event_grid_dialog is not None:
+                self._expert_event_grid_dialog.close()
             if hasattr(self, "console") and self.console is not None:
                 self.console.close()
         finally:
@@ -389,7 +394,7 @@ class MainWindow(QMainWindow):
         # Avoid viewer->MainWindow signal side effects during teardown
         self.viewer.blockSignals(True)
         try:
-            self.viewer.clear()
+            self.viewer.reset_empty()
         finally:
             self.viewer.blockSignals(False)
 
@@ -399,6 +404,9 @@ class MainWindow(QMainWindow):
 
         self.comp_dock.hide()
         self.anno_dock.hide()
+        if self._expert_event_grid_dialog is not None:
+            self._expert_event_grid_dialog.close()
+        self._expert_event_grid_loaded_file = None
         self.anno_list.clear()
         self._anno_items_by_id.clear()
 
@@ -562,6 +570,7 @@ class MainWindow(QMainWindow):
 
         self.project_path = None
         self.project_dirty = False
+        self._expert_event_grid_loaded_file = None
 
         self._enable_loaded_ui()
         self._act_save.setEnabled(False)
@@ -2467,6 +2476,290 @@ class MainWindow(QMainWindow):
         self.viewer.set_bipolar_mode(montage)
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
+
+    # ---------------- Expert Event Grid -------------
+
+    def open_expert_event_grid(self) -> None:
+        """Open the Expert Event Grid as a separate window."""
+        if self.loaded_file is None:
+            QMessageBox.information(
+                self,
+                "Expert Event Grid",
+                "Load an EDF file first."
+            )
+            return
+
+        if self._expert_event_grid_dialog is None:
+            dlg = ExpertEventGridDialog(self)
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dlg.destroyed.connect(lambda *_args: setattr(self, "_expert_event_grid_dialog", None))
+            dlg.grid.requestJumpToTime.connect(self._jump_viewer_to_event)
+            dlg.grid.eventClicked.connect(self._on_expert_event_clicked)
+            self._expert_event_grid_dialog = dlg
+
+        self._expert_event_grid_dialog.set_edf_path(self.loaded_file)
+        self._expert_event_grid_dialog.grid.set_raw(self.current_raw)
+        self._expert_event_grid_dialog.grid.set_waveform_callback(self._extract_waveform_from_raw)
+
+        if self._expert_event_grid_loaded_file != self.loaded_file:
+            auto_path = self._find_expert_hfo_events_path(self.loaded_file)
+            if auto_path is not None:
+                if self._expert_event_grid_dialog.load_events_for_edf(self.loaded_file, auto_path):
+                    self._expert_event_grid_loaded_file = self.loaded_file
+                    self.console.log(f"Auto-loaded expert HFO events: {auto_path}")
+            else:
+                self.console.log("No matching expert HFO events file found automatically.")
+
+        self._expert_event_grid_dialog.show()
+        self._expert_event_grid_dialog.raise_()
+        self._expert_event_grid_dialog.activateWindow()
+
+    def _find_expert_hfo_manifest(self, raw_path: Path) -> Path | None:
+        """Find the expert recording manifest near the BIDS package or known local complement."""
+        raw_path = Path(raw_path)
+        candidates: list[Path] = []
+
+        for parent in [raw_path.parent, *raw_path.parents]:
+            candidates.append(parent / "manifest" / "expert_recording_manifest.csv")
+            candidates.append(parent / "updated_dataset" / "manifest" / "expert_recording_manifest.csv")
+            if parent.name.lower() == "bids":
+                candidates.append(parent.parent / "manifest" / "expert_recording_manifest.csv")
+                candidates.append(parent.parent / "updated_dataset" / "manifest" / "expert_recording_manifest.csv")
+
+        complement_root = Path.home() / "Documents" / "omni dataset complement"
+        candidates.append(complement_root / "manifest" / "expert_recording_manifest.csv")
+        candidates.append(complement_root / "updated_dataset" / "manifest" / "expert_recording_manifest.csv")
+
+        seen: set[Path] = set()
+        for candidate in candidates:
+            try:
+                resolved = candidate.expanduser().resolve()
+            except OSError:
+                resolved = candidate.expanduser()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if resolved.exists():
+                return resolved
+
+        return None
+
+    def _paths_match_manifest_entry(self, manifest_path: Path, raw_path: Path, entry_path: str) -> bool:
+        if not entry_path:
+            return False
+
+        raw_resolved = raw_path.expanduser().resolve()
+        entry = Path(entry_path)
+        entry_candidates = [entry]
+        if not entry.is_absolute():
+            entry_candidates.append(manifest_path.parent.parent / entry)
+
+        for candidate in entry_candidates:
+            try:
+                if candidate.expanduser().resolve() == raw_resolved:
+                    return True
+            except OSError:
+                pass
+
+        raw_parts = tuple(p.lower() for p in raw_path.parts)
+        entry_parts = tuple(p.lower() for p in entry.parts)
+        if "bids" in raw_parts and "bids" in entry_parts:
+            raw_bids = raw_parts[raw_parts.index("bids"):]
+            entry_bids = entry_parts[entry_parts.index("bids"):]
+            if raw_bids == entry_bids:
+                return True
+
+        return bool(entry_parts) and len(entry_parts) <= len(raw_parts) and raw_parts[-len(entry_parts):] == entry_parts
+
+    def _resolve_manifest_annotation_path(self, manifest_path: Path, annotation_path: str) -> Path | None:
+        if not annotation_path:
+            return None
+
+        path = Path(annotation_path)
+        candidates = [path]
+        package_root = manifest_path.parent.parent
+        if not path.is_absolute():
+            candidates.append(package_root / path)
+        elif package_root.name.lower() == "updated_dataset":
+            parts_lower = [part.lower() for part in path.parts]
+            try:
+                complement_idx = parts_lower.index("omni dataset complement")
+            except ValueError:
+                complement_idx = -1
+            if complement_idx >= 0 and complement_idx + 1 < len(path.parts):
+                suffix = Path(*path.parts[complement_idx + 1:])
+                candidates.append(package_root / suffix)
+
+        for candidate in candidates:
+            resolved = candidate.expanduser()
+            if resolved.exists():
+                return resolved
+
+        return None
+
+    def _find_expert_hfo_events_path(self, raw_path: Path) -> Path | None:
+        raw_path = Path(raw_path)
+        manifest_path = self._find_expert_hfo_manifest(raw_path)
+
+        if manifest_path is not None:
+            try:
+                with manifest_path.open("r", newline="", encoding="utf-8-sig") as f:
+                    for row in csv.DictReader(f):
+                        edf_entries = [
+                            (row.get("package_bids_edf_path") or "").strip(),
+                            (row.get("local_raw_edf_path") or "").strip(),
+                        ]
+                        if not any(
+                            self._paths_match_manifest_entry(manifest_path, raw_path, edf_entry)
+                            for edf_entry in edf_entries
+                        ):
+                            continue
+
+                        annotation_path = self._resolve_manifest_annotation_path(
+                            manifest_path,
+                            (row.get("package_annotation_path") or "").strip(),
+                        )
+                        match_status = (row.get("match_status") or "").strip()
+                        if annotation_path is not None:
+                            if match_status:
+                                self.console.log(f"Expert HFO manifest match: {match_status}")
+                            return annotation_path
+                        if match_status:
+                            self.console.log(
+                                f"Expert HFO manifest row matched, but annotation file was not found ({match_status})."
+                            )
+                        return None
+            except Exception as e:
+                self.console.log(f"Could not read expert HFO manifest: {e}")
+
+        return self._find_expert_hfo_events_by_convention(raw_path)
+
+    def _find_expert_hfo_events_by_convention(self, raw_path: Path) -> Path | None:
+        raw_path = Path(raw_path)
+        parts_lower = [part.lower() for part in raw_path.parts]
+        try:
+            bids_idx = parts_lower.index("bids")
+        except ValueError:
+            return None
+
+        package_root = Path(*raw_path.parts[:bids_idx])
+        relative_to_bids = Path(*raw_path.parts[bids_idx + 1:])
+        expected = (
+            package_root
+            / "derivatives"
+            / "expert_hfo"
+            / relative_to_bids.with_name(f"{raw_path.stem}_expert_hfo_events.csv")
+        )
+        return expected if expected.exists() else None
+
+    def _jump_viewer_to_event(self, time_s: float, channel: str) -> None:
+        """
+        Jump the main viewer to a specific time and optionally highlight a channel.
+
+        Args:
+            time_s: Time in seconds to jump to
+            channel: Channel name to highlight (optional)
+        """
+        if self.current_raw is None:
+            return
+
+        # Jump to the event time
+        self.viewer.set_time_start(time_s)
+
+        # If a channel is specified, try to find and select it
+        if channel:
+            display_names = self.viewer.get_channel_names()
+            if channel in display_names:
+                idx = display_names.index(channel)
+                # Scroll to show this channel
+                self.viewer.set_channel_start(max(0, idx - 5))
+
+        # Update time controls
+        self.time_ctl.set_t0(time_s)
+
+    def _on_expert_event_clicked(self, event) -> None:
+        """Handle when an expert event is clicked in the grid."""
+        # The requestJumpToTime signal already handles jumping to the event
+        # This is for any additional handling if needed
+        self.console.log(f"Event clicked: {event.channel} at {event.start:.3f}s")
+
+    def load_expert_events(self, events_path: Path) -> bool:
+        """
+        Load expert events from a file for the currently loaded EDF.
+
+        Args:
+            events_path: Path to the events CSV/JSON file
+
+        Returns:
+            True if events loaded successfully
+        """
+        if self.loaded_file is None:
+            QMessageBox.warning(
+                self,
+                "No EDF Loaded",
+                "Please load an EDF file before loading events."
+            )
+            return False
+
+        if self._expert_event_grid_dialog is None:
+            self.open_expert_event_grid()
+            if self._expert_event_grid_dialog is None:
+                return False
+
+        self._expert_event_grid_dialog.grid.set_raw(self.current_raw)
+        self._expert_event_grid_dialog.grid.set_waveform_callback(self._extract_waveform_from_raw)
+        success = self._expert_event_grid_dialog.load_events_for_edf(self.loaded_file, events_path)
+
+        if success and self._expert_event_grid_dialog.grid.events:
+            self._expert_event_grid_loaded_file = self.loaded_file
+            self._expert_event_grid_dialog.show()
+            self.console.log(
+                f"Loaded {len(self._expert_event_grid_dialog.grid.events)} expert events"
+            )
+
+        return success
+
+    def _extract_waveform_from_raw(self, channel: str, start_s: float, end_s: float) -> np.ndarray:
+        """
+        Extract waveform data from the raw file for display in the event grid.
+
+        Args:
+            channel: Channel name
+            start_s: Start time in seconds
+            end_s: End time in seconds
+
+        Returns:
+            Waveform data as numpy array
+        """
+        if self.current_raw is None:
+            return np.array([])
+
+        try:
+            # Find the channel index
+            channel_names = self.current_raw.ch_names
+            if channel not in channel_names:
+                return np.array([])
+
+            ch_idx = channel_names.index(channel)
+
+            # Get the data for this channel and time range
+            start_idx = int(start_s * self.current_raw.info['sfreq'])
+            end_idx = int(end_s * self.current_raw.info['sfreq'])
+
+            # Clamp to valid range
+            start_idx = max(0, start_idx)
+            end_idx = min(self.current_raw.n_times, end_idx)
+
+            if end_idx <= start_idx:
+                return np.array([])
+
+            # Extract data
+            data, _ = self.current_raw[ch_idx, start_idx:end_idx]
+            return data.flatten()
+
+        except Exception as e:
+            self.console.log(f"Error extracting waveform: {e}")
+            return np.array([])
 
     def _mark_channels_bad_from_psd(self, channel_names: list[str]) -> None:
         if self.current_raw is None or not channel_names:
