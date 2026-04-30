@@ -80,6 +80,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     # Wheel zoom requests (handled by MainWindow via spinboxes)
     requestTimeRangeDelta = Signal(int)   # +1 zoom out, -1 zoom in
     requestChanRangeDelta = Signal(int)   # +1 show more channels, -1 show fewer
+    requestAmpRangeDelta = Signal(int)    # +1 zoom out (higher gain), -1 zoom in (lower gain)
     # Annotations
     annotationsChanged = Signal()
     requestEditAnnotation = Signal(str)  # anno_id
@@ -1958,20 +1959,25 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
             step_dir = -1 if dy > 0 else +1  # wheel up => -1
             shift = bool(ev.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            ctrl = bool(ev.modifiers() & Qt.KeyboardModifier.ControlModifier)
 
-            # SHIFT = zoom
+            # SHIFT = zoom based on cursor location
             if shift:
+                if region == "amplitude_axis":
+                    self.requestAmpRangeDelta.emit(step_dir)
+                    ev.accept()
+                    return
+                if region == "channel_labels":
+                    self.requestChanRangeDelta.emit(step_dir)
+                    ev.accept()
+                    return
                 if region == "signal":
                     self.requestTimeRangeDelta.emit(step_dir)
                     ev.accept()
                     return
-                if region == "label":
-                    self.requestChanRangeDelta.emit(step_dir)
-                    ev.accept()
-                    return
 
             # No shift = scroll channels
-            if region in ("label", "signal"):
+            if region in ("channel_labels", "signal", "amplitude_axis"):
                 self.set_channel_start(self._ch_start + step_dir)
                 ev.accept()
                 return
@@ -1993,12 +1999,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
                 in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
                 in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
-
+                
+                # If in signal area, check if it's over the amplitude axis (left side)
+                in_amplitude_axis = False
                 if in_signal:
-                    self._handle_wheel(ev, "signal")
-                    return True
+                    # Check if cursor is in the left margin of signal plot (amplitude axis area)
+                    signal_rect = self._sig_vb.sceneBoundingRect()
+                    axis_width = 60  # Approximate width of Y-axis in pixels
+                    in_amplitude_axis = (scene_pos.x() - signal_rect.left()) < axis_width
+
                 if in_label:
-                    self._handle_wheel(ev, "label")
+                    self._handle_wheel(ev, "channel_labels")
+                    return True
+                elif in_amplitude_axis:
+                    self._handle_wheel(ev, "amplitude_axis")
+                    return True
+                elif in_signal:
+                    self._handle_wheel(ev, "signal")
                     return True
 
                 ev.ignore()

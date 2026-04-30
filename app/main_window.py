@@ -76,6 +76,10 @@ class MainWindow(QMainWindow):
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(False)
 
+        # Disable TODO actions (always disabled)
+        for action in getattr(self, "_todo_actions", []):
+            action.setEnabled(False)
+
         # ---- Toolbar (controls) ----
         self._build_toolbar()
         self.tb.setEnabled(False) 
@@ -288,6 +292,7 @@ class MainWindow(QMainWindow):
         self.viewer.channelClicked.connect(self._on_channel_clicked)
         self.viewer.requestTimeRangeDelta.connect(self._zoom_time_range)
         self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
+        self.viewer.requestAmpRangeDelta.connect(self._zoom_amp_range)
         self.viewer.requestOpenComputationPanel.connect(self._open_computation_panel)
 
         # Timeline sync
@@ -1516,6 +1521,13 @@ class MainWindow(QMainWindow):
         new_v = self.chan_range.value() + direction * step
         new_v = max(self.chan_range.minimum(), min(self.chan_range.maximum(), new_v))
         self.chan_range.setValue(new_v)
+
+    def _zoom_amp_range(self, direction: int):
+        """direction: -1 zoom in (lower gain, smaller amplitude), +1 zoom out (higher gain, larger amplitude)"""
+        step = self.gain.singleStep() if self.gain.singleStep() else 10.0
+        new_v = self.gain.value() + direction * step
+        new_v = max(self.gain.minimum(), min(self.gain.maximum(), new_v))
+        self.gain.setValue(new_v)
 
     def _on_viewer_cursor_moved(self, x: float) -> None:
         if self.comp_panel is None:

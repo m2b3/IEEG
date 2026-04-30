@@ -29,7 +29,7 @@ def build_menubar(main_window):
     file_menu.addSeparator()
 
     act_close = add_action(file_menu, "Close", main_window.on_close_project)
-    add_action(file_menu, "Settings", lambda: print("TODO: Settings"))
+    act_settings = add_action(file_menu, "Settings", lambda: print("TODO: Settings"))
     add_action(file_menu, "Exit", main_window.close)
 
     main_window._act_save = act_save
@@ -51,7 +51,7 @@ def build_menubar(main_window):
 
     # -------- Edit --------
     edit_menu = menubar.addMenu("Edit")
-    add_action(edit_menu, "Implantation", lambda: print("TODO: Implantation"))
+    act_implantation = add_action(edit_menu, "Implantation", lambda: print("TODO: Implantation"))
     add_action(edit_menu, "Annotate", main_window.on_annotate)
     add_action(edit_menu, "Channel Groups", main_window.on_edit_channel_groups)
 
@@ -71,52 +71,62 @@ def build_menubar(main_window):
 
     # -------- Detect --------
     detect_menu = menubar.addMenu("Detect")
-    add_action(detect_menu, "Epileptic Spikes", lambda: print("TODO: Spike detection"))
-    add_action(detect_menu, "Ripples", lambda: print("TODO: Seizure detection"))
-    add_action(detect_menu, "Fast Ripples", lambda: print("TODO: Seizure detection"))
+    act_detect_spikes = add_action(detect_menu, "Epileptic Spikes", lambda: print("TODO: Spike detection"))
+    act_detect_ripples = add_action(detect_menu, "Ripples", lambda: print("TODO: Seizure detection"))
+    act_detect_fast_ripples = add_action(detect_menu, "Fast Ripples", lambda: print("TODO: Seizure detection"))
 
     # -------- Review --------
     review_menu = menubar.addMenu("Review")
 
     # Submenu Event Viewers
     event_viewers_menu = review_menu.addMenu("Event Viewers")
-    add_action(event_viewers_menu, "Epileptic Spikes", lambda: print("TODO"))
-    add_action(event_viewers_menu, "Ripples", lambda: print("TODO"))
-    add_action(event_viewers_menu, "Fast Ripples", lambda: print("TODO"))
+    act_review_spikes = add_action(event_viewers_menu, "Epileptic Spikes", lambda: print("TODO"))
+    act_review_ripples = add_action(event_viewers_menu, "Ripples", lambda: print("TODO"))
+    act_review_fast_ripples = add_action(event_viewers_menu, "Fast Ripples", lambda: print("TODO"))
 
     # Expert Event Grid - load and display expert-reviewed HFO annotations
     add_action(review_menu, "Expert Event Grid", main_window.open_expert_event_grid)
 
-    add_action(review_menu, "Events Display", lambda: print("TODO"))
+    act_events_display = add_action(review_menu, "Events Display", lambda: print("TODO"))
 
     # -------- Results --------
     results_menu = menubar.addMenu("Results")
 
     # Submenu Topographic map
     top_menu = results_menu.addMenu("Topographic map")
-    add_action(top_menu, "Epileptic Spikes", lambda: print("TODO"))
-    add_action(top_menu, "Ripples", lambda: print("TODO"))
-    add_action(top_menu, "Fast Ripples", lambda: print("TODO"))
-    add_action(top_menu, "ES & Ripples", lambda: print("TODO"))
-    add_action(top_menu, "ES & Fast Ripples", lambda: print("TODO"))
+    act_topo_spikes = add_action(top_menu, "Epileptic Spikes", lambda: print("TODO"))
+    act_topo_ripples = add_action(top_menu, "Ripples", lambda: print("TODO"))
+    act_topo_fast_ripples = add_action(top_menu, "Fast Ripples", lambda: print("TODO"))
+    act_topo_es_ripples = add_action(top_menu, "ES & Ripples", lambda: print("TODO"))
+    act_topo_es_fast_ripples = add_action(top_menu, "ES & Fast Ripples", lambda: print("TODO"))
 
     # Submenu Export metrics
     metrics_menu = results_menu.addMenu("Export metrics")
-    add_action(metrics_menu, "Epileptic Spikes", lambda: print("TODO"))
-    add_action(metrics_menu, "Ripples", lambda: print("TODO"))
-    add_action(metrics_menu, "Fast Ripples", lambda: print("TODO"))
-    add_action(metrics_menu, "Other Events", lambda: print("TODO"))
-    add_action(metrics_menu, "Notes", lambda: print("TODO"))
+    act_metrics_spikes = add_action(metrics_menu, "Epileptic Spikes", lambda: print("TODO"))
+    act_metrics_ripples = add_action(metrics_menu, "Ripples", lambda: print("TODO"))
+    act_metrics_fast_ripples = add_action(metrics_menu, "Fast Ripples", lambda: print("TODO"))
+    act_metrics_other = add_action(metrics_menu, "Other Events", lambda: print("TODO"))
+    act_metrics_notes = add_action(metrics_menu, "Notes", lambda: print("TODO"))
 
     # -------- Help --------
     help_menu = menubar.addMenu("Help")
     add_action(help_menu, "User Guide", main_window.on_open_user_guide)
-    add_action(help_menu, "Shortcuts", lambda: print("TODO"))
+    act_shortcuts = add_action(help_menu, "Shortcuts", lambda: print("TODO"))
 
     # Store what should be disabled until a file is loaded
     main_window._menus_disabled_until_loaded = [
         view_menu, edit_menu, pre_menu, detect_menu, review_menu, results_menu
     ]
     main_window._menus_always_enabled = [file_menu, help_menu]
+
+    # Store TODO actions to keep them always disabled
+    main_window._todo_actions = [
+        act_settings, act_implantation,
+        act_detect_spikes, act_detect_ripples, act_detect_fast_ripples,
+        act_review_spikes, act_review_ripples, act_review_fast_ripples, act_events_display,
+        act_topo_spikes, act_topo_ripples, act_topo_fast_ripples, act_topo_es_ripples, act_topo_es_fast_ripples,
+        act_metrics_spikes, act_metrics_ripples, act_metrics_fast_ripples, act_metrics_other, act_metrics_notes,
+        act_shortcuts
+    ]
 
     return act_save, act_saveas, act_close
