@@ -1538,13 +1538,18 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         y0 = yc - h / 2.0
 
         if self._anno_preview is None:
-            self._anno_preview = pg.RectROI([x0, y0], [max(1e-6, x1 - x0), h], pen=None, movable=False)
+            self._anno_preview = pg.RectROI(
+                [x0, y0],
+                [max(1e-6, x1 - x0), h],
+                pen=pg.mkPen(rgb[0], rgb[1], rgb[2], width=2),
+                movable=False,
+            )
             self._anno_preview.setZValue(-5)
             self.signal_plot.addItem(self._anno_preview)
 
         self._anno_preview.setPos([x0, y0])
         self._anno_preview.setSize([max(1e-6, x1 - x0), h])
-        self._anno_preview.setBrush(pg.mkBrush(rgb[0], rgb[1], rgb[2], 60)) # type: ignore
+        self._anno_preview.setBrush(pg.mkBrush(0, 0, 0, 0)) # type: ignore
 
     def _add_annotation_items(self, a: Annotation) -> None:
         rgb = ANNOTATION_STYLES.get(a.kind, (0, 200, 0))
@@ -1579,6 +1584,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         roi.sigRegionChangeFinished.connect(lambda: self._commit_roi_to_annotation(a.id))
 
         self.signal_plot.addItem(roi)
+        roi.setPen(pg.mkPen(rgb[0], rgb[1], rgb[2], width=2))
         self._anno_rois[a.id] = roi
 
         # Note label (displayed next to annotation)
@@ -1838,8 +1844,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._scalogram_preview is None:
             rect = QtWidgets.QGraphicsRectItem()
-            rect.setPen(pg.mkPen((255, 190, 80), width=1.5))
-            rect.setBrush(pg.mkBrush(255, 190, 80, 60))
+            rect.setPen(pg.mkPen((255, 255, 255), width=2))
+            rect.setBrush(pg.mkBrush(0, 0, 0, 0))
             rect.setZValue(25)
             self.signal_plot.addItem(rect)
             self._scalogram_preview = rect
@@ -1872,8 +1878,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._zoom_preview is None:
             rect = QtWidgets.QGraphicsRectItem()
-            rect.setPen(pg.mkPen((100, 200, 255), width=1))
-            rect.setBrush(pg.mkBrush(100, 200, 255, 40))
+            rect.setPen(pg.mkPen((255, 255, 255), width=2))
+            rect.setBrush(pg.mkBrush(0, 0, 0, 0))
             rect.setZValue(20)
             self.signal_plot.addItem(rect)
             self._zoom_preview = rect

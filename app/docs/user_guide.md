@@ -253,6 +253,7 @@ Once zoom mode is active:
 
 - the mouse cursor changes to a crosshair
 - the viewer waits for a rectangular selection
+- the selected area is shown with a white outlined rectangle
 - the mode remains active until one zoom is applied or cancelled
 
 ### Zoom into a region
@@ -298,7 +299,58 @@ This restores the exact viewer state that was active when **Zoom Selection** was
 
 ---
 
-## 8. Reference modes
+## 8. Scalogram selection
+
+The viewer includes a temporary **Scalogram** mode for opening a time-frequency view from one channel and one selected time interval.
+
+### Activate scalogram mode
+
+To enter scalogram mode:
+
+1. Click **View > Scalogram**
+
+Once scalogram mode is active:
+
+- the mouse cursor changes to a crosshair
+- the next left-button drag selects one channel and a time interval
+- the selected interval is shown with a white outlined rectangle
+- the mode exits automatically after the scalogram window opens
+
+### Open a scalogram
+
+To open a scalogram:
+
+1. Press and hold the **left mouse button** on the channel you want to inspect
+2. Drag horizontally across the time interval
+3. Release the mouse button
+
+When you release the mouse button, the application opens a separate scalogram window for that channel and interval.
+
+Very short selections are ignored; drag a slightly longer interval if no window opens.
+
+### Scalogram window
+
+The scalogram window shows:
+
+- the selected channel context
+- the raw signal for the selected interval
+- the scalogram image
+- a frequency-range slider
+- a hover readout for time, absolute time, frequency, and power
+
+Use **Apply Filter** after changing the frequency range. Use **Reset to Default** to show the full frequency range again.
+
+Double left-click inside the raw or scalogram plot to reset that plot to its default view.
+
+### Cancel scalogram mode
+
+To cancel scalogram mode without opening a window:
+
+- press **Escape**
+
+---
+
+## 9. Reference modes
 
 Click **Preprocessing > Re-referencing** to switch between reference modes.
 
@@ -358,7 +410,7 @@ The channel labels are preserved. Only the waveform values change.
 
 ---
 
-## 9. Editing the bipolar montage
+## 10. Editing the bipolar montage
 
 The **Edit Bipolar…** button in the toolbar becomes available when bipolar mode is active.
 
@@ -422,7 +474,7 @@ When finished:
 
 ---
 
-## 10. Bipolar validation and warnings
+## 11. Bipolar validation and warnings
 
 Before applying bipolar edits, the editor checks several rules.
 
@@ -448,7 +500,7 @@ This allows intentional unusual pairings while still warning you.
 
 ---
 
-## 11. Annotations
+## 12. Annotations
 
 The application supports interactive annotation of the signal display.
 
@@ -463,6 +515,8 @@ To add an annotation:
    - optional note
 3. Click **OK**
 4. Drag on the signal display where you want to place the annotation
+
+While dragging, the preview uses a transparent fill and an outline color that matches the selected annotation type. Existing annotation regions use the same colored outline so their bounds remain visible.
 
 ### Cancel annotation mode
 
@@ -502,7 +556,7 @@ From the list, you can:
 - delete it from the plot context menu
 
 ---
-## 12. Permanent filters
+## 13. Permanent filters
 
 Permanent filters are applied at the application level and affect the active signal used throughout the interface.
 
@@ -564,7 +618,7 @@ Permanent filter settings are included in the project save system. When a projec
 
 ---
 
-## 13. Computation panel
+## 14. Computation panel
 
 The application provides a computation panel linked to selected channels.
 
@@ -596,7 +650,7 @@ This allows rapid setup of computations without manual selection.
 
 ---
 
-## 14. Power Spectral Density (PSD) panel
+## 15. Power Spectral Density (PSD) panel
 
 The PSD panel lets you inspect the power spectral density of multiple channels over a chosen time interval.
 
@@ -692,7 +746,7 @@ Behavior:
 
 ---
 
-## 15. Closing files and exiting
+## 16. Closing files and exiting
 
 ### Close the current file or project
 
@@ -708,7 +762,7 @@ To quit completely:
 
 ---
 
-## 16. Saving behavior
+## 17. Saving behavior
 
 Saved projects preserve review state such as:
 
@@ -731,7 +785,7 @@ depending on your previous review context.
 
 ---
 
-## 17. Practical review workflow
+## 18. Practical review workflow
 
 A common workflow is:
 

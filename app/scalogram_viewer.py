@@ -176,8 +176,9 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         pen = pg.mkPen((230, 230, 230), width=1.2)
         self.raw_plot.plot(self._times_s, self._signal_uv, pen=pen)
 
-        ymin = float(np.min(self._signal_uv)) if self._signal_uv.size else -1.0
-        ymax = float(np.max(self._signal_uv)) if self._signal_uv.size else 1.0
+        finite_signal = self._signal_uv[np.isfinite(self._signal_uv)]
+        ymin = float(np.min(finite_signal)) if finite_signal.size else -1.0
+        ymax = float(np.max(finite_signal)) if finite_signal.size else 1.0
         if np.isclose(ymin, ymax):
             ymin -= 1.0
             ymax += 1.0
@@ -193,6 +194,11 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
             self._power = np.empty((0, 0), dtype=float)
             self._scalogram_times_s = np.array([], dtype=float)
             return
+        if not np.any(np.isfinite(self._signal_uv)):
+            self._freq_bins_hz = np.array([], dtype=float)
+            self._power = np.empty((0, 0), dtype=float)
+            self._scalogram_times_s = np.array([], dtype=float)
+            return
 
         fs = float(self._context.sampling_rate)
         n_samples = int(self._signal_uv.size)
@@ -200,10 +206,11 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         if nperseg < 16:
             nperseg = n_samples
         noverlap = min(nperseg // 2, max(0, nperseg - 8))
+        signal_uv = np.nan_to_num(self._signal_uv, nan=0.0, posinf=0.0, neginf=0.0)
 
         try:
             freqs, times, power = signal.spectrogram(
-                self._signal_uv,
+                signal_uv,
                 fs=fs,
                 window="hann",
                 nperseg=nperseg,
@@ -219,6 +226,8 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
             # Validate output shapes
             if self._power.ndim != 2 or self._freq_bins_hz.ndim != 1 or self._scalogram_times_s.ndim != 1:
                 raise ValueError(f"Invalid spectrogram output shapes: power{self._power.shape}, freqs{self._freq_bins_hz.shape}, times{self._scalogram_times_s.shape}")
+            if self._power.shape != (self._freq_bins_hz.size, self._scalogram_times_s.size):
+                raise ValueError(f"Scalogram shape mismatch: power{self._power.shape}, freqs{self._freq_bins_hz.shape}, times{self._scalogram_times_s.shape}")
         except Exception as e:
             import sys
             print(f"Warning: Scalogram computation failed: {e}", file=sys.stderr)
@@ -233,8 +242,37 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         self.freq_slider.setValues(0.0, self._nyquist)
         self._apply_frequency_filter()
 
+    def _frequency_bounds(self, freqs: np.ndarray) -> tuple[float, float]:
+        finite = np.asarray(freqs, dtype=float).reshape(-1)
+        finite = np.sort(finite[np.isfinite(finite)])
+        if finite.size == 0:
+            return 0.0, max(1.0, self._nyquist)
+
+        if finite.size == 1:
+            all_freqs = np.asarray(self._freq_bins_hz, dtype=float).reshape(-1)
+            all_freqs = np.sort(all_freqs[np.isfinite(all_freqs)])
+            diffs = np.diff(all_freqs)
+            diffs = diffs[diffs > 0]
+            step = float(np.median(diffs)) if diffs.size else max(1.0, self._nyquist)
+            y0 = float(finite[0] - step / 2.0)
+            y1 = float(finite[0] + step / 2.0)
+        else:
+            low_step = max(1e-6, float(finite[1] - finite[0]))
+            high_step = max(1e-6, float(finite[-1] - finite[-2]))
+            y0 = float(finite[0] - low_step / 2.0)
+            y1 = float(finite[-1] + high_step / 2.0)
+
+        y0 = max(0.0, y0)
+        if self._nyquist > 0:
+            y1 = min(float(self._nyquist), y1)
+        if y1 <= y0:
+            y1 = y0 + 1e-6
+        return y0, y1
+
     def _apply_frequency_filter(self) -> None:
         if self._power.size == 0 or self._freq_bins_hz.size == 0:
+            self._current_display_freqs = np.array([], dtype=float)
+            self._current_display_power = np.empty((0, 0), dtype=float)
             self.hover_label.setText("Scalogram unavailable for this interval.")
             return
 
@@ -251,6 +289,8 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         display_freqs = self._freq_bins_hz[mask]
         display_power = self._power[mask, :]
         if display_freqs.size == 0 or display_power.size == 0:
+            self._current_display_freqs = np.array([], dtype=float)
+            self._current_display_power = np.empty((0, 0), dtype=float)
             self.hover_label.setText("No frequency bins available in the selected range.")
             return
 
@@ -258,23 +298,31 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         self._current_display_power = display_power
 
         power_db = 10.0 * np.log10(np.maximum(display_power, 1e-12))
-        t0 = float(self._scalogram_times_s[0]) if self._scalogram_times_s.size else 0.0
-        t1 = float(self._scalogram_times_s[-1]) if self._scalogram_times_s.size else self._context.duration
-        y0 = float(display_freqs[0])
-        y1 = float(display_freqs[-1])
+        finite_power_db = power_db[np.isfinite(power_db)]
+        if finite_power_db.size == 0:
+            self._current_display_freqs = np.array([], dtype=float)
+            self._current_display_power = np.empty((0, 0), dtype=float)
+            self.hover_label.setText("Scalogram unavailable for this interval.")
+            return
+
+        level_min = float(np.min(finite_power_db))
+        level_max = float(np.max(finite_power_db))
+        power_db = np.where(np.isfinite(power_db), power_db, level_min)
+
+        x0 = 0.0
+        x1 = max(float(self._context.duration), 1e-3)
+        y0, y1 = self._frequency_bounds(display_freqs)
 
         self.image_item.setImage(power_db, autoLevels=False)
-        self.image_item.setRect(QtCore.QRectF(t0, y0, max(1e-6, t1 - t0), max(1e-6, y1 - y0)))
+        self.image_item.setRect(QtCore.QRectF(x0, y0, max(1e-6, x1 - x0), max(1e-6, y1 - y0)))
 
-        level_min = float(np.nanmin(power_db))
-        level_max = float(np.nanmax(power_db))
         if np.isclose(level_min, level_max):
             level_max = level_min + 1.0
         self.image_item.setLevels((level_min, level_max))
         self.color_bar.setLevels(values=(level_min, level_max))
 
         self.scalogram_plot.set_default_view(
-            x_range=(0.0, max(self._context.duration, 1e-3)),
+            x_range=(0.0, x1),
             y_range=(max(0.0, y0), max(y0 + 1e-6, y1)),
         )
         self.hover_label.setText("Move over the scalogram to inspect time, frequency, and power.")

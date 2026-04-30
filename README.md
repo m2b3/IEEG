@@ -1,28 +1,29 @@
 # iEEG Tool
 
-A desktop application for reviewing intracranial EEG (iEEG) recordings with interactive visualization, rereferencing tools, annotation support, and project-based review workflows.
+A desktop application for reviewing intracranial EEG (iEEG) recordings with interactive visualization, rereferencing tools, annotation support, scalogram review, and project-based workflows.
 
-Built with **PySide6**, **PyQtGraph**, and **MNE**.
+Built with **PySide6**, **PyQtGraph**, **MNE**, NumPy, and SciPy.
 
 ## Overview
 
-iEEG Tool is designed to support efficient clinical or research review of multichannel EEG/iEEG data. The viewer provides a stacked multichannel display, interactive navigation, rereferencing options, annotation tools, and a project workflow that preserves review state across sessions.
+iEEG Tool supports clinical or research review of multichannel EEG/iEEG data. The main viewer provides a stacked multichannel signal display, interactive navigation, rereferencing options, annotation tools, PSD/computation panels, scalogram windows, and project files that preserve review state across sessions.
 
-The application is built around an MNE-based loading pipeline and a PySide6 / PyQtGraph user interface.
+The application is built around an MNE-based loading pipeline and a PySide6 / PyQtGraph interface.
 
 The program is structured around a main viewer that:
 
-- loads EEG data using MNE
+- loads EEG/iEEG data using MNE
 - displays channels stacked vertically
-- shows a time window of the recording
-- allows interactive navigation, scrolling, zooming, and channel selection
+- shows a selected time window of the recording
+- supports scrolling, zooming, channel selection, annotation, and scalogram selection
 
 Main components include:
 
-- `main_window.py` — application logic and UI coordination
-- `plot.py` — `MultiChannelViewer` rendering and interaction engine
-- `menus.py` — menu structure
-- `console_viewer.py` — console output window
+- `main_window.py` - application logic and UI coordination
+- `plot.py` - `MultiChannelViewer` rendering and interaction engine
+- `scalogram_viewer.py` - selected-channel time-frequency review window
+- `menus.py` - menu structure
+- `console_viewer.py` - console output window
 
 Rendering is optimized to:
 
@@ -30,39 +31,54 @@ Rendering is optimized to:
 - load only the visible time window
 - decimate data for responsiveness
 
-## Main features
+## Main Features
 
 - Load EEG/iEEG recordings from common electrophysiology formats
 - Scroll through multichannel data with adjustable time window, channel count, and gain
-- Switch between multiple rereferencing modes:
-  - Monopolar
-  - Bipolar
-  - Average
-  - Median
-  - Common reference
+- Switch between monopolar, bipolar, average, median, and common-reference modes
 - Automatically generate bipolar montages from channel labels
 - Edit bipolar pairs manually
 - Mark channels as hidden or bad
 - Add and edit annotations directly in the viewer
+- Use transparent outlined selection rectangles for annotation, zoom, and scalogram workflows
 - Use zoom selection for rectangular zoom-in review
+- Open scalogram windows from a selected channel/time interval and filter displayed frequencies
 - Save and reopen project state
-- Use a dedicated computation panel for selected channels
+- Use dedicated computation and PSD panels for selected channels
 
 ## Installation
 
 ### Install Python
 
-Recommended version:
+Recommended versions:
 
 - Python 3.10
 - Python 3.11
 
-Download from:
+Download Python from:
+
 https://www.python.org/downloads/
 
-### Install dependencies
+### Install Dependencies
 
 From the project root folder:
 
 ```bash
 pip install -r requirements.txt
+```
+
+## Running
+
+From the project root folder:
+
+```bash
+python main.py
+```
+
+## User Guide
+
+The full guide is bundled at:
+
+`app/docs/user_guide.md`
+
+It is also available inside the application from **Help > User Guide**.

@@ -55,6 +55,29 @@ from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 from app.expert_event_grid import ExpertEventGridDialog
 
 
+def _channel_label_sort_key(label: str) -> tuple:
+    parsed = parse_channel_label(label)
+    if parsed is not None:
+        return (
+            0,
+            parsed.electrode_prefix.casefold(),
+            parsed.contact_number,
+            parsed.normalized_label.casefold(),
+            str(label).casefold(),
+        )
+    return (1, str(label).casefold())
+
+
+class _SortableTableWidgetItem(QTableWidgetItem):
+    def __lt__(self, other):
+        if isinstance(other, QTableWidgetItem):
+            left = self.data(Qt.ItemDataRole.UserRole)
+            right = other.data(Qt.ItemDataRole.UserRole)
+            if left is not None and right is not None:
+                return left < right
+        return super().__lt__(other)
+
+
 class MainWindow(QMainWindow):
     # ---------------- Lifecycle ----------------
 
@@ -981,6 +1004,8 @@ class MainWindow(QMainWindow):
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        table.horizontalHeader().setSectionsClickable(True)
+        table.horizontalHeader().setSortIndicatorShown(False)
         layout.addWidget(table)
 
         button_row = QHBoxLayout()
@@ -1006,6 +1031,8 @@ class MainWindow(QMainWindow):
 
         channel_names = list(self.source_raw.ch_names)
         working_groups = dict(self.channel_groups)
+        sort_column: int | None = None
+        sort_order = Qt.SortOrder.AscendingOrder
 
         def _populate(filter_text: str = "") -> None:
             text = filter_text.strip().lower()
@@ -1018,13 +1045,35 @@ class MainWindow(QMainWindow):
                 row = table.rowCount()
                 table.insertRow(row)
 
-                item_name = QTableWidgetItem(ch)
+                item_name = _SortableTableWidgetItem(ch)
+                item_name.setData(Qt.ItemDataRole.UserRole, _channel_label_sort_key(ch))
                 item_name.setFlags(item_name.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 table.setItem(row, 0, item_name)
 
-                item_group = QTableWidgetItem(working_groups.get(ch, "macro").capitalize())
+                group = working_groups.get(ch, "macro")
+                item_group = _SortableTableWidgetItem(group.capitalize())
+                item_group.setData(Qt.ItemDataRole.UserRole, str(group).casefold())
                 item_group.setFlags(item_group.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 table.setItem(row, 1, item_group)
+
+            if sort_column is not None:
+                table.sortItems(sort_column, sort_order)
+
+        def _sort_by_header(column: int) -> None:
+            nonlocal sort_column, sort_order
+            if sort_column == int(column):
+                sort_order = (
+                    Qt.SortOrder.DescendingOrder
+                    if sort_order == Qt.SortOrder.AscendingOrder
+                    else Qt.SortOrder.AscendingOrder
+                )
+            else:
+                sort_column = int(column)
+                sort_order = Qt.SortOrder.AscendingOrder
+
+            table.horizontalHeader().setSortIndicatorShown(True)
+            table.horizontalHeader().setSortIndicator(sort_column, sort_order)
+            table.sortItems(sort_column, sort_order)
 
         def _set_selected_group(group: str) -> None:
             selected_rows = sorted({idx.row() for idx in table.selectionModel().selectedRows()})
@@ -1040,8 +1089,10 @@ class MainWindow(QMainWindow):
                 ch_name = name_item.text().strip()
                 working_groups[ch_name] = group
                 group_item.setText(group.capitalize())
+                group_item.setData(Qt.ItemDataRole.UserRole, group.casefold())
 
         search.textChanged.connect(_populate)
+        table.horizontalHeader().sectionClicked.connect(_sort_by_header)
         btn_set_micro.clicked.connect(lambda: _set_selected_group("micro"))
         btn_set_macro.clicked.connect(lambda: _set_selected_group("macro"))
 
@@ -2376,12 +2427,16 @@ class MainWindow(QMainWindow):
             return
 
         rel_times = absolute_times - float(absolute_times[0])
+        sampling_rate = float(self.current_raw.info["sfreq"]) if self.current_raw is not None else 0.0
+        context_duration = float(rel_times[-1]) if rel_times.size else float(stop_s - start_s)
+        if context_duration <= 0.0 and sampling_rate > 0.0:
+            context_duration = 1.0 / sampling_rate
         context = build_scalogram_context(
             channel_name=display_names[int(abs_idx)],
             loaded_file=self.loaded_file,
-            start_time=float(start_s),
-            duration=float(stop_s - start_s),
-            sampling_rate=float(self.current_raw.info["sfreq"]) if self.current_raw is not None else 0.0,
+            start_time=float(absolute_times[0]),
+            duration=float(context_duration),
+            sampling_rate=sampling_rate,
         )
         window = ScalogramViewerWindow(
             context=context,
