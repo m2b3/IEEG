@@ -208,3 +208,13 @@ okey let s redo a full analysis of this code, check for errors and possible impr
 - Are the many placeholder menu entries part of an active roadmap, or should they be hidden until implemented?
 
 I did not run the GUI or automated tests; this is a static review of the current source tree.
+
+## User
+let s update the read me and guide user if required
+
+## Assistant
+Updated README.md and app/docs/user_guide.md for the recent user-facing changes.
+
+README now mentions channel-group sorting and PSD plot zoom/double-click reset with bad channels staying visible in red. The user guide now documents editing channel groups and sorting by the Channel header, notes that edited annotation times update the main plot after OK, fixes the PSD bad-channel typo, describes linked bad-channel state between the main viewer and PSD tab, and adds PSD plot zoom/reset instructions.
+
+Verification: git diff --check passes.

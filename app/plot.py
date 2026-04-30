@@ -452,11 +452,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def _draw_traces(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, visible_abs: list[int]):
         correction_factor = 0.01
         gain_factor = 1.0 / max(1e-9, (self._gain_uv * correction_factor))
+        display_names = self.get_channel_names()
 
         n_vis = min(seg_ds_uv.shape[0], len(visible_abs))
         for row in range(n_vis):
             abs_idx = visible_abs[row]
-            ch_name = self._channel_names[abs_idx]
+            ch_name = display_names[abs_idx] if abs_idx < len(display_names) else str(abs_idx)
             group = self.get_channel_group(ch_name)
 
             if ch_name in self._bad_channels:
@@ -655,7 +656,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             raw_name = self._channel_names[abs_idx] if abs_idx < len(self._channel_names) else ch_name
 
             # Hidden channels disappear from the main viewer
-            if raw_name in self._hidden_channels:
+            if ch_name in self._hidden_channels or raw_name in self._hidden_channels:
                 continue
 
             # BAD channels stay visible; they are only recolored/highlighted
@@ -670,7 +671,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for abs_idx, ch_name in enumerate(names):
             raw_name = self._channel_names[abs_idx] if abs_idx < len(self._channel_names) else ch_name
 
-            if raw_name in self._bad_channels:
+            if ch_name in self._bad_channels or raw_name in self._bad_channels:
                 continue
 
             usable.append(abs_idx)
@@ -842,7 +843,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.selectionChanged.emit(sorted(self._selected_abs_set))
 
     def _selected_channel_names(self) -> list[str]:
-        return [self._channel_names[i] for i in sorted(self._selected_abs_set)]
+        names = self.get_channel_names()
+        return [names[i] for i in sorted(self._selected_abs_set) if 0 <= i < len(names)]
 
     def _show_context_menu_for_scene_pos(self, scene_pos) -> bool:
         if self._raw is None or self._visible_abs.size == 0:
@@ -861,7 +863,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._select_single_channel_abs(abs_idx)
 
         selected_abs = sorted(self._selected_abs_set)
-        selected_names = [self._channel_names[i] for i in selected_abs]
+        names = self.get_channel_names()
+        selected_names = [names[i] for i in selected_abs if 0 <= i < len(names)]
 
         menu = QtWidgets.QMenu()
         act_open_panel = menu.addAction("Open Computation Panel")
@@ -945,15 +948,16 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             return
 
         n = int(min(len(self._curves), int(self._visible_abs.size)))
+        names = self.get_channel_names()
         for row in range(n):
             c = self._curves[row]
             abs_idx = int(self._visible_abs[row])
-            raw_name = self._channel_names[abs_idx]
+            ch_name = names[abs_idx] if abs_idx < len(names) else str(abs_idx)
 
-            is_bad = raw_name in self._bad_channels
+            is_bad = ch_name in self._bad_channels
             is_selected = abs_idx in self._selected_abs_set
 
-            group = self.get_channel_group(raw_name)
+            group = self.get_channel_group(ch_name)
             width = 3 if is_selected else 1
 
             if is_bad:
@@ -968,7 +972,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         n_lbl = int(min(len(self._labels), int(self._visible_abs.size)))
         for row in range(n_lbl):
             abs_idx = int(self._visible_abs[row])
-            ch_name = self._channel_names[abs_idx]
+            ch_name = names[abs_idx] if abs_idx < len(names) else str(abs_idx)
             group = self.get_channel_group(ch_name)
 
             if abs_idx in self._selected_abs_set:
@@ -1455,6 +1459,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         t_end: float | None = None,
     ) -> None:
         # update data
+        updated = False
         for i, a in enumerate(self._annotations):
             if a.id == anno_id:
                 new_t_start = float(a.t_start if t_start is None else t_start)
@@ -1469,10 +1474,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     abs_channel=a.abs_channel,
                     note=str(note or ""),
                 )
+                updated = True
                 break
+
+        if not updated:
+            return
 
         # update visuals
         self._apply_annotation_style(anno_id)
+        self.render()
         self.annotationsChanged.emit()
 
     def delete_annotation(self, anno_id: str) -> None:

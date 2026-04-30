@@ -22,6 +22,31 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor
 
 
+class ResettablePlotWidget(pg.PlotWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent=parent)
+        self._default_x_range: tuple[float, float] | None = None
+        self._default_y_range: tuple[float, float] | None = None
+
+    def set_default_view(self, *, x_range: tuple[float, float], y_range: tuple[float, float]) -> None:
+        self._default_x_range = (float(x_range[0]), float(x_range[1]))
+        self._default_y_range = (float(y_range[0]), float(y_range[1]))
+        self.reset_to_default_view()
+
+    def reset_to_default_view(self) -> None:
+        if self._default_x_range is not None:
+            self.setXRange(*self._default_x_range, padding=0.02)
+        if self._default_y_range is not None:
+            self.setYRange(*self._default_y_range, padding=0.05)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_to_default_view()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class PSDIntervalDialog(QDialog):
     def __init__(self, recording_duration_s: float, parent=None):
         super().__init__(parent)
@@ -201,12 +226,12 @@ class PSDPanel(QWidget):
             top.addLayout(mid_btns)
             top.addWidget(right_box, 1)
 
-            plot = pg.PlotWidget()
+            plot = ResettablePlotWidget()
             plot.showGrid(x=True, y=True, alpha=0.2)
             plot.setLabel("bottom", "Frequency (Hz)")
             plot.setLabel("left", "Power Spectral Density (dB/Hz)")
             plot.setMenuEnabled(False)
-            plot.getViewBox().setMouseEnabled(x=False, y=False)
+            plot.getViewBox().setMouseEnabled(x=True, y=True)
 
             box_layout.addLayout(top, 1)
             box_layout.addWidget(plot, 2)
@@ -243,27 +268,44 @@ class PSDPanel(QWidget):
         macro_set = set(macro_names or [])
         micro_set = set(micro_names or [])
 
-        macro_displayed = [ch for ch in ordered_all if ch in macro_set]
-        micro_displayed = [ch for ch in ordered_all if ch in micro_set]
+        grouped = {
+            "macro": [ch for ch in ordered_all if ch in macro_set],
+            "micro": [ch for ch in ordered_all if ch in micro_set],
+        }
 
+        for group, group_channels in grouped.items():
+            previous_displayed = list(self._group_state[group]["displayed"])
+            previous_excluded = list(self._group_state[group]["excluded"])
+            previous_known = set(previous_displayed) | set(previous_excluded)
+            current_known = set(group_channels)
 
+            self._group_channels[group] = list(group_channels)
 
-        self._group_channels["macro"] = macro_displayed
-        self._group_channels["micro"] = micro_displayed
+            if previous_known and previous_known == current_known:
+                displayed = [ch for ch in previous_displayed if ch in current_known]
+                excluded = [ch for ch in previous_excluded if ch in current_known]
+            else:
+                displayed = list(group_channels)
+                excluded = []
 
-        self._group_state["macro"]["displayed"] = list(macro_displayed)
-        self._group_state["macro"]["excluded"] = []
+            self._group_state[group]["displayed"] = self._ordered(displayed)
+            self._group_state[group]["excluded"] = self._ordered(excluded)
 
-        self._group_state["micro"]["displayed"] = list(micro_displayed)
-        self._group_state["micro"]["excluded"] = []
-
-        self._selected_channel["macro"] = macro_displayed[0] if macro_displayed else None
-        self._selected_channel["micro"] = micro_displayed[0] if micro_displayed else None
+            selected = self._selected_channel[group]
+            if selected not in current_known:
+                self._selected_channel[group] = group_channels[0] if group_channels else None
 
         self._rebuild_psd_cache()
         self._refresh_lists()
         self._sync_selection_to_lists()
         self._refresh_all_plots()
+
+    def update_bad_names(self, bad_names) -> None:
+        self._bad_names = set(bad_names or [])
+        self._refresh_lists()
+        self._sync_selection_to_lists()
+        for group in self.GROUPS:
+            self._apply_selection_highlight(group)
 
     def _ordered(self, names: list[str]) -> list[str]:
         order = {name: i for i, name in enumerate(self._display_names)}
@@ -480,6 +522,8 @@ class PSDPanel(QWidget):
 
         self._curve_items[group] = {}
         self._curve_to_channel[group] = {}
+        x_values: list[np.ndarray] = []
+        y_values: list[np.ndarray] = []
 
         for ch_name in self._group_state[group]["displayed"]:
             cached = self._psd_cache.get(ch_name)
@@ -501,6 +545,30 @@ class PSDPanel(QWidget):
             plot.addItem(curve_item)
             self._curve_items[group][ch_name] = curve_item
             self._curve_to_channel[group][id(curve_item)] = ch_name
+            x_values.append(np.asarray(freqs, dtype=float))
+            y_values.append(np.asarray(y, dtype=float))
+
+        if x_values and y_values:
+            x_all = np.concatenate(x_values)
+            y_all = np.concatenate(y_values)
+            finite = np.isfinite(x_all) & np.isfinite(y_all)
+            if np.any(finite):
+                x_f = x_all[finite]
+                y_f = y_all[finite]
+                x_min = float(np.min(x_f))
+                x_max = float(np.max(x_f))
+                y_min = float(np.min(y_f))
+                y_max = float(np.max(y_f))
+                if np.isclose(x_min, x_max):
+                    x_max = x_min + 1.0
+                if np.isclose(y_min, y_max):
+                    y_min -= 1.0
+                    y_max += 1.0
+                if isinstance(plot, ResettablePlotWidget):
+                    plot.set_default_view(
+                        x_range=(x_min, x_max),
+                        y_range=(y_min, y_max),
+                    )
 
         self._apply_selection_highlight(group)
 

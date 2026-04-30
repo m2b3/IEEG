@@ -2517,32 +2517,9 @@ class MainWindow(QMainWindow):
         # Saved edited montage may no longer be valid if bad channels changed.
         self._saved_bipolar_montage = None
 
-        # Always keep PSD state in sync if the panel is open
-        if self.psd_panel.isVisible():
-            current_bad = set(self.viewer.get_bad_channels())
-            self.psd_panel._bad_names = current_bad
-            self.psd_panel._refresh_lists()
-            self.psd_panel._sync_selection_to_lists()
-            for group in ("macro", "micro"):
-                self.psd_panel._refresh_plot(group)
-        # Rebuild automatic bipolar montage only when relevant
-        if self.viewer.reference_mode() != "bipolar":
-            return
-
-        if self.current_raw is None:
-            return
-
-        channel_names = self.viewer.get_raw_channel_names()
-        bad_channels = self.viewer.get_bad_channels()
-
-        montage = build_automatic_bipolar_montage(
-            channel_names,
-            bad_channels=bad_channels,
-        )
-
-        self.viewer.set_bipolar_mode(montage)
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(bool(montage.pairs))
+        # Always keep PSD state in sync if the tab is open, even when it is not current.
+        if self._is_psd_tab_open():
+            self.psd_panel.update_bad_names(self.viewer.get_bad_channels())
 
     # ---------------- Expert Event Grid -------------
 
@@ -2848,10 +2825,7 @@ class MainWindow(QMainWindow):
 
         self.viewer.set_bad_channels(current_bad)
 
-        # keep PSD panel visual state in sync if it is open
-        self.psd_panel._bad_names = set(current_bad)
-        for group in ("macro", "micro"):
-            self.psd_panel._refresh_plot(group)
+        self.psd_panel.update_bad_names(current_bad)
         self.console.log(f"Marked as bad: {', '.join(added)}")
 
     def _mark_channels_good_from_psd(self, channel_names: list[str]) -> None:
@@ -2872,9 +2846,7 @@ class MainWindow(QMainWindow):
 
         self.viewer.set_bad_channels(current_bad)
 
-        self.psd_panel._bad_names = set(current_bad)
-        for group in ("macro", "micro"):
-            self.psd_panel._refresh_plot(group)
+        self.psd_panel.update_bad_names(current_bad)
 
         self.console.log(f"Unmarked as bad: {', '.join(removed)}")
 

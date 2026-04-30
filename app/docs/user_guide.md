@@ -237,6 +237,19 @@ If all selected channels are already bad, the menu instead offers:
 
 Bad channels are treated as unusable for review-related computations and montage generation.
 
+### Edit channel groups
+
+Channel groups control macro/micro styling and group-aware review tools.
+
+To edit channel groups:
+
+1. Click **Edit > Channel Groups**
+2. Select one or more channel rows
+3. Click **Set selected to Micro** or **Set selected to Macro**
+4. Click **OK**
+
+Click the **Channel** table header to reorder the table by channel label. Repeated clicks toggle ascending and descending order.
+
 ---
 
 ## 7. Zoom selection
@@ -539,6 +552,8 @@ To modify an annotation directly from the viewer:
 1. Right-click the annotation region
 2. Click **Edit annotation…** or **Delete annotation**
 
+When editing an annotation, changes to type, start time, end time, or note are reflected immediately in the main plot after clicking **OK**.
+
 ### Edit an annotation from the annotation list
 
 When annotations exist, the **Annotations** dock appears.
@@ -701,10 +716,12 @@ Axes:
 
 When the PSD panel opens:
 
-- **Displayed channels** = all channels, includinhg BAD channels in red
+- **Displayed channels** = all channels, including bad channels in red
 - **Excluded channels** = empty
 
 Hidden channels are displayed in the PSD panel.
+
+Bad-channel updates made in the main viewer and in the PSD panel stay linked while the PSD tab is open.
 
 ### Select channels
 
@@ -723,6 +740,14 @@ Use the transfer buttons between the two lists:
 - **`>>`**: move selected channel(s) from **Excluded** to **Displayed**
 
 The PSD plot updates immediately after each change.
+
+### Zoom the PSD plot
+
+Use the mouse in the PSD plot to zoom or pan the frequency and power axes.
+
+To return the PSD plot to its full default view:
+
+- double left-click inside the plot
 
 ### Move all channels at once
 

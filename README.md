@@ -38,11 +38,13 @@ Rendering is optimized to:
 - Switch between monopolar, bipolar, average, median, and common-reference modes
 - Automatically generate bipolar montages from channel labels
 - Edit bipolar pairs manually
+- Assign channels to macro/micro groups and sort the channel-group table by label
 - Mark channels as hidden or bad
 - Add and edit annotations directly in the viewer
 - Use transparent outlined selection rectangles for annotation, zoom, and scalogram workflows
 - Use zoom selection for rectangular zoom-in review
 - Open scalogram windows from a selected channel/time interval and filter displayed frequencies
+- Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
 - Save and reopen project state
 - Use dedicated computation and PSD panels for selected channels
 
