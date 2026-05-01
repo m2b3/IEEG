@@ -218,3 +218,93 @@ Updated README.md and app/docs/user_guide.md for the recent user-facing changes.
 README now mentions channel-group sorting and PSD plot zoom/double-click reset with bad channels staying visible in red. The user guide now documents editing channel groups and sorting by the Channel header, notes that edited annotation times update the main plot after OK, fixes the PSD bad-channel typo, describes linked bad-channel state between the main viewer and PSD tab, and adds PSD plot zoom/reset instructions.
 
 Verification: git diff --check passes.
+## User
+in the different rereferencing, what is the rule for label naming ? especially in the bipolar
+
+## User
+in our dataset, what participant has expert annotation and at least one pathological spike
+
+## Assistant
+For label naming: monopolar, average, median, and common reference keep the original imported channel labels. Only the waveform values change. Bipolar replaces display labels with pair names. Automatic bipolar parsing normalizes labels by removing a leading EEG prefix, stripping trailing reference suffixes like -G2/G2, removing spaces, then extracting a core contact label such as RAI1. Consecutive contacts within the same electrode prefix become labels like RAI1-RAI2. Edited/manual bipolar rows use the same core-label rule, so changing Channel 2 produces Ch1Core-Ch2Core.
+
+For the dataset question: I could not determine the participant from the current workspace. Inside c:\Users\F15\Desktop\Eva\EpilepsyTools\I_EEG, there are no dataset manifest or expert annotation CSV/JSON files; the only matching local data files I found were .vscode JSON settings. The app expects expert annotations to have spike and artifact fields; a pathological spike would correspond to a row whose review label is spike, meaning spike is truthy and artifact is not taking priority. To identify the participant, I need the expert annotation manifest/CSV/JSON available inside this workspace or the dataset path you want me to inspect.## User
+over the database, how many event, and of which type each do you identify
+
+## Assistant
+From what is available in this workspace, I cannot compute database event counts yet: I found no event database/source files (`*.db`, `*.sqlite`, `*.sqlite3`, `*.csv`, `*.tsv`, `*.json`, `*.xlsx`, `*.parquet`) under `I_EEG`, so there are no event rows here to count.
+
+What the code can identify is:
+- Expert event grid review labels: `artifact`, `spike`, `non-spike` (`artifact` has priority over `spike` if both flags are true).
+- App annotation kinds: `Spike`, `Ripple`, `Fast ripple`, `Artifact`, `Bad segment`, `Other`.
+
+So: actual counted events are not available from the current workspace; event categories are 3 expert-review labels and 6 app annotation kinds.
+## User
+knowing that : - Total events: **36,177**
+    - Spike-associated HFO: **19,178**
+    - Non-spike HFO: **7,711**
+    - Artifacts: **9,288**
+
+and - **Accepted HFO (artifact = 1)**
+- **Rejected artifact (artifact = 0)**, is it coherent with our expert viewer  
+
+Among accepted HFOs:
+
+- **spkHFO**: spike-associated HFO (`artifact == 1` and `spike == 1`)
+- **non-spkHFO**: non-spike HFO (`artifact == 1` and `spike == 0`)
+
+## Assistant
+No, not coherent with the current expert viewer.
+
+Your dataset convention says `artifact == 1` means accepted HFO, and `artifact == 0` means rejected artifact. But the viewer currently treats `artifact == 1` as the event label `artifact`, with priority over `spike`.
+
+So today the viewer would classify:
+- `artifact=1, spike=1` as `ARTIFACT`, but it should be `spkHFO` / spike-associated HFO.
+- `artifact=1, spike=0` as `ARTIFACT`, but it should be `non-spkHFO`.
+- `artifact=0, spike=0` as `NON-SPIKE`, but it should be rejected artifact.
+
+The counts themselves are coherent: `19,178 + 7,711 + 9,288 = 36,177`. The issue is only the flag interpretation in the viewer. The viewer logic should effectively be:
+
+```python
+if artifact == 0:
+    rejected artifact
+elif spike == 1:
+    spkHFO
+else:
+    non-spkHFO
+```
+## User
+okey change the code the viewver logic to match what we just say 
+
+## Assistant
+Done in `app/expert_event_grid.py`.
+
+The expert viewer now maps the flags as:
+
+- `artifact == 0` -> `Rejected artifact` in red
+- `artifact == 1 and spike == 1` -> `spkHFO` in green
+- `artifact == 1 and spike == 0` -> `non-spkHFO` in blue
+
+I also updated the legend and removed forced uppercasing so `spkHFO` / `non-spkHFO` display with the dataset naming. Static syntax parsing passed and `git diff --check` passed; I could not run a real import-based behavior check because this environment is missing `pyqtgraph`.
+## User
+can you explore th ecsv file of omni dataset complement and count how many events, how many artifact ...
+
+## Assistant
+I checked inside the current `I_EEG` workspace, and there are no CSV/JSON event files available there to count. The code does reference an external location, `Documents\omni dataset complement`, but the project instructions in `agent_instructions.md` restrict me to this directory and its subdirectories, so I did not inspect that external folder.
+
+If you put the Omni complement CSV/manifest under `I_EEG`, or explicitly give me permission to inspect that external folder despite the local restriction, I can count it with the corrected convention:
+
+- Total events = all rows
+- Rejected artifacts = `artifact == 0`
+- spkHFO = `artifact == 1 and spike == 1`
+- non-spkHFO = `artifact == 1 and spike == 0`
+## User
+are channel name relabeled after re referencing
+
+## Assistant
+Only for bipolar.
+
+In the current code, Monopolar, Average, Median, and Common reference keep the original channel labels. The waveform values change, but `_display_names` is reset to the original `_channel_names`; Common Reference does not append the chosen reference name to each label.
+
+Bipolar is the exception: the displayed labels become the bipolar pair names. For automatic bipolar montage, labels are built from normalized adjacent contacts, for example `EEG RAI1-G2` and `EEG RAI2-G2` become `RAI1-RAI2`. The normalization removes the leading `EEG`, trailing reference suffixes like `-G2`/`G2`, spaces, and leading zeroes in contact numbers. In the manual bipolar editor, changing Channel 2 also regenerates the pair label as `channel1_core-channel2_core`.
+
+So: the raw channel names are not renamed, but the displayed names are replaced by pair names in bipolar mode only.

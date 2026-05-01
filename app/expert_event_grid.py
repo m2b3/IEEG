@@ -34,9 +34,9 @@ from PySide6.QtWidgets import (
 )
 
 # Review label colors
-COLOR_ARTIFACT = QColor(220, 50, 50)    # red
-COLOR_SPIKE = QColor(50, 200, 50)       # green
-COLOR_NON_SPIKE = QColor(50, 100, 220)  # blue
+COLOR_REJECTED_ARTIFACT = QColor(220, 50, 50)  # red
+COLOR_SPK_HFO = QColor(50, 200, 50)            # green
+COLOR_NON_SPK_HFO = QColor(50, 100, 220)       # blue
 
 # Grid dimensions
 GRID_ROWS = 6
@@ -74,8 +74,8 @@ class ExpertEvent:
         start: Start time in seconds
         end: End time in seconds
         detector: Detector name that flagged this event
-        artifact: True if marked as artifact
-        spike: True if marked as spike
+        artifact: True if accepted as HFO, False if rejected as artifact
+        spike: True if the accepted HFO is spike-associated
         waveform: Optional waveform data array
     """
     edf_file: str
@@ -93,23 +93,21 @@ class ExpertEvent:
     
     @property
     def review_label(self) -> str:
-        """Returns the review label: 'artifact', 'spike', or 'non-spike'."""
-        if self.artifact:
-            return "artifact"
-        elif self.spike:
-            return "spike"
-        else:
-            return "non-spike"
+        """Returns the expert review label using the dataset convention."""
+        if not self.artifact:
+            return "Rejected artifact"
+        if self.spike:
+            return "spkHFO"
+        return "non-spkHFO"
     
     @property
     def review_color(self) -> QColor:
         """Returns the color for this review label."""
-        if self.artifact:
-            return COLOR_ARTIFACT
-        elif self.spike:
-            return COLOR_SPIKE
-        else:
-            return COLOR_NON_SPIKE
+        if not self.artifact:
+            return COLOR_REJECTED_ARTIFACT
+        if self.spike:
+            return COLOR_SPK_HFO
+        return COLOR_NON_SPK_HFO
 
 
 def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List[ExpertEvent]:
@@ -122,8 +120,8 @@ def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List
         - start OR start_seconds: Start time in seconds
         - end OR end_seconds: End time in seconds
         - detector: Detector name
-        - artifact: 1/0 or True/False
-        - spike: 1/0 or True/False
+        - artifact: 1/0 or True/False; 1 means accepted HFO, 0 means rejected artifact
+        - spike: 1/0 or True/False; among accepted HFOs, 1 means spike-associated
         - waveform OR hfo_waveforms: Optional waveform data (JSON string)
     
     Args:
@@ -305,7 +303,7 @@ class EventCellWidget(QFrame):
         layout.addWidget(duration_bar)
         
         # Review label
-        review_label = QLabel(self._event.review_label.upper())
+        review_label = QLabel(self._event.review_label)
         review_label.setStyleSheet(f"""
             color: rgb({color.red()}, {color.green()}, {color.blue()});
             font-size: 9px;
@@ -401,7 +399,7 @@ class ZoomedEventView(QWidget):
         self._header.setText(
             f"Channel: {self._event.channel} | "
             f"Detector: {self._event.detector} | "
-            f"Review: {self._event.review_label.upper()}"
+            f"Review: {self._event.review_label}"
         )
         self._time_info.setText(
             f"Start: {self._event.start:.6f}s | "
@@ -545,9 +543,9 @@ class ExpertEventGrid(QWidget):
         
         # Legend
         legend_layout = QHBoxLayout()
-        legend_layout.addWidget(self._create_legend_item("Artifact", COLOR_ARTIFACT))
-        legend_layout.addWidget(self._create_legend_item("Spike", COLOR_SPIKE))
-        legend_layout.addWidget(self._create_legend_item("Non-spike", COLOR_NON_SPIKE))
+        legend_layout.addWidget(self._create_legend_item("Rejected artifact", COLOR_REJECTED_ARTIFACT))
+        legend_layout.addWidget(self._create_legend_item("spkHFO", COLOR_SPK_HFO))
+        legend_layout.addWidget(self._create_legend_item("non-spkHFO", COLOR_NON_SPK_HFO))
         legend_layout.addStretch()
         self._main_layout.addLayout(legend_layout)
         
