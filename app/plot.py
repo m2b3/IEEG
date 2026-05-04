@@ -448,6 +448,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._time_lines = []
         self._cursor_line = None
         self._minmax_items = []
+
+    def _ensure_signal_item(self, item) -> None:
+        """Reattach a preview item if a redraw cleared it from the signal plot."""
+        try:
+            if item.scene() is None:
+                self.signal_plot.addItem(item)
+        except Exception:
+            pass
     
     def _draw_traces(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, visible_abs: list[int]):
         correction_factor = 0.01
@@ -1554,8 +1562,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 pen=pg.mkPen(rgb[0], rgb[1], rgb[2], width=2),
                 movable=False,
             )
-            self._anno_preview.setZValue(-5)
+            self._anno_preview.setZValue(30)
             self.signal_plot.addItem(self._anno_preview)
+        else:
+            self._ensure_signal_item(self._anno_preview)
 
         self._anno_preview.setPos([x0, y0])
         self._anno_preview.setSize([max(1e-6, x1 - x0), h])
@@ -1859,6 +1869,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             rect.setZValue(25)
             self.signal_plot.addItem(rect)
             self._scalogram_preview = rect
+        else:
+            self._ensure_signal_item(self._scalogram_preview)
 
         self._scalogram_preview.setRect(x0, y0, max(1e-6, x1 - x0), height)
 
@@ -1893,6 +1905,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             rect.setZValue(20)
             self.signal_plot.addItem(rect)
             self._zoom_preview = rect
+        else:
+            self._ensure_signal_item(self._zoom_preview)
 
         self._zoom_preview.setRect(x0, yy0, max(1e-6, x1 - x0), max(1e-6, yy1 - yy0))
 
@@ -2077,8 +2091,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     QEvent.Type.MouseButtonRelease,
                 ):
                     scene_pos = self.mapToScene(ev.position().toPoint())
-                    if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
-                        return super().eventFilter(obj, ev)
+                    if ev.type() == QEvent.Type.MouseButtonPress:
+                        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                            return super().eventFilter(obj, ev)
+                    elif not self._zoom_drag_active:
+                        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                            return super().eventFilter(obj, ev)
 
                     p = self._sig_vb.mapSceneToView(scene_pos)
                     t = float(p.x())
@@ -2206,6 +2224,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         self._anno_drag_active = True
                         self._anno_drag_start_t = t
                         self._anno_drag_start_y = y
+                        self._update_preview_roi(t0=t, t1=t, y=y)
                         ev.accept()
                         return True
 

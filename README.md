@@ -37,6 +37,7 @@ Rendering is optimized to:
 - Scroll through multichannel data with adjustable time window, channel count, and gain
 - Switch between monopolar, bipolar, average, median, and common-reference modes
 - Automatically generate bipolar montages from channel labels
+- Warn before bipolar rereferencing when raw channel labels already look bipolar
 - Edit bipolar pairs manually
 - Assign channels to macro/micro groups and sort the channel-group table by label
 - Mark channels as hidden or bad
@@ -44,8 +45,10 @@ Rendering is optimized to:
 - Use transparent outlined selection rectangles for annotation, zoom, and scalogram workflows
 - Use zoom selection for rectangular zoom-in review
 - Open scalogram windows from a selected channel/time interval and filter displayed frequencies
+- Apply permanent filters from a collapsible control strip
 - Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
 - Save and reopen project state
+- Warn about unsaved review changes before closing
 - Use dedicated computation and PSD panels for selected channels
 
 ## Installation

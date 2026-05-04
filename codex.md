@@ -308,3 +308,155 @@ In the current code, Monopolar, Average, Median, and Common reference keep the o
 Bipolar is the exception: the displayed labels become the bipolar pair names. For automatic bipolar montage, labels are built from normalized adjacent contacts, for example `EEG RAI1-G2` and `EEG RAI2-G2` become `RAI1-RAI2`. The normalization removes the leading `EEG`, trailing reference suffixes like `-G2`/`G2`, spaces, and leading zeroes in contact numbers. In the manual bipolar editor, changing Channel 2 also regenerates the pair label as `channel1_core-channel2_core`.
 
 So: the raw channel names are not renamed, but the displayed names are replaced by pair names in bipolar mode only.
+## User
+if the monopolar display is already by default bipalar, what hapen
+
+## Assistant
+If the EDF/data is already bipolar by default, then the app's Monopolar mode will simply show those existing bipolar signals as raw channels. In other words, Monopolar means "no extra rereferencing inside the app", not guaranteed true monopolar physiology.
+
+If you then click Bipolar again, the app will try to build a new bipolar montage from those already-bipolar channels and subtract one displayed channel from another. That can create wrong second-order derivations. For example, if raw channels are already `A1-A2` and `A2-A3`, applying Bipolar could produce `(A1-A2) - (A2-A3) = A1 - 2*A2 + A3`, which is not a normal bipolar channel.
+
+So for files that are already bipolar, stay in Monopolar/raw display unless we add a check or metadata flag saying "this recording is already bipolar" and disable/adjust the Bipolar rereference option.
+## User
+are you sure the channel name display is updated, i checked and the old name is still there 
+
+## Assistant
+You are right to question it. The main plot does update from `_display_names` in bipolar mode, but there is an important catch: if the original file already has bipolar-looking channel names, the automatic bipolar pair label can be identical to the old raw label.
+
+In code, `set_bipolar_mode()` sets `_display_names = [pair.name for pair in self._bipolar_pairs]`, and `_draw_labels()` reads `get_channel_names()`, so the main plot label path is connected to the bipolar names.
+
+But the bipolar montage parser extracts the first contact from each raw label. If raw channels are already named like:
+
+```text
+RAI1-RAI2
+RAI2-RAI3
+```
+
+then automatic bipolar pairs become:
+
+```text
+RAI1-RAI2
+```
+
+for `(RAI1-RAI2) - (RAI2-RAI3)`. That displayed label is the same as the old first channel name, even though the signal has actually been rereferenced again. So in an already-bipolar file, the unchanged-looking label is expected with the current naming rule, and it is misleading.
+
+Also, some UI surfaces intentionally still show raw names, like the channel group editor and common-reference channel picker. The main plot should show bipolar display names, but already-bipolar input can make those names look unchanged.
+
+I would treat this as a UX/logic issue: for already-bipolar recordings, we should either disable Bipolar rereferencing or label second-order derivations explicitly, for example `(RAI1-RAI2)-(RAI2-RAI3)`.
+## User
+yes i think we should 
+
+## Assistant
+Done. I added a guard so Bipolar rereferencing is blocked when the raw channel labels already look like bipolar derivations.
+
+Changed:
+
+- `app/referencing.py`: added `looks_like_bipolar_derivation_label()` to detect labels like `RAI1-RAI2`, while still allowing acquisition-style labels like `EEG RAI1-G2`.
+- `app/main_window.py`: `on_reference_bipolar()` now checks raw channel names before building/applying a bipolar montage. If already-bipolar labels are found, it shows a warning and does not apply Bipolar rereferencing.
+- `README.md` and `app/docs/user_guide.md`: documented that already-bipolar recordings are blocked from Bipolar rereferencing.
+
+Verification:
+
+- Detection check passed: `RAI1-RAI2` -> blocked, `EEG RAI1-G2` -> allowed.
+- Python syntax parse passed for `app/referencing.py` and `app/main_window.py`.
+- `git diff --check` passed.
+## User
+oh so you are blocking the user from redoing it ? we should give the option to still do it though
+
+## Assistant
+Yes, agreed. I changed it from a hard block to a warning with an explicit **Apply anyway** option.
+
+Now, when raw labels already look bipolar, the app shows a warning listing example labels and explains that applying Bipolar may create second-order derivations. The default is **Cancel**, but the user can choose **Apply anyway** and the montage will still be applied.
+
+Updated:
+
+- `app/main_window.py`: warning dialog with **Apply anyway** / **Cancel**.
+- `README.md`: wording changed to “Warn before…” instead of block.
+- `app/docs/user_guide.md`: documents the confirmation behavior.
+
+Verification passed: Python syntax parse and `git diff --check`.
+## User
+the montage is applied but channel names are not updated ?
+
+## Assistant
+Yes, that was the remaining bug. The montage was being applied, but for already-bipolar raw labels the generated pair name could still equal the old first channel name.
+
+I fixed the naming rule so:
+
+- Normal acquisition-style channels still display compact bipolar names, for example `EEG RAI1-G2` + `EEG RAI2-G2` -> `RAI1-RAI2`.
+- Already-bipolar-looking channels now display explicit second-order names, for example `RAI1-RAI2` + `RAI2-RAI3` -> `(RAI1-RAI2)-(RAI2-RAI3)`.
+
+Changed:
+
+- `app/referencing.py`: added centralized bipolar display-name generation and regenerated montage names from source channels.
+- `app/main_window.py`: refreshes pair names before applying a montage, including saved/edited montages.
+- `app/docs/user_guide.md`: documents the explicit labels when applying Bipolar anyway.
+
+Verification passed: behavior check for normal and already-bipolar labels, Python syntax parse, and `git diff --check`.
+## User
+in the computation pannel  what is the button ‘match main display scaling ‘?
+
+## Assistant
+It is a checkbox that makes the computation panel plot use the same amplitude gain as the main viewer.
+
+When it is checked, the computation panel takes the computed signal, currently the mean across selected channels, converts it from volts to microvolts, then applies the same visual gain factor as the main display. So if you change the main viewer amplitude control, the computation panel curve visually scales in the same direction.
+
+When it is unchecked, the computation panel shows the computed signal in raw volts, with the Y axis labeled `Mean voltage (V)`.
+
+It does not change the data, selected channels, reference mode, or filtering. It only changes the plot scaling. A clearer label might be `Use main amplitude gain` or `Scale like main viewer`.
+## User
+I d like to add this feature : when closing without saving, warning msg
+
+## Assistant
+Implemented. When there are unsaved review changes, the app now prompts before closing the project, quitting the app, or replacing the current session with New/Open.
+
+The dialog offers:
+
+- **Save**: saves first, then continues. If Save As is canceled or saving fails, closing is canceled.
+- **Don't Save**: continues and discards unsaved review changes.
+- **Cancel**: keeps the current project open.
+
+Updated `app/main_window.py`, plus README and the user guide. Verification passed with Python syntax parsing and `git diff --check`.
+## User
+update the read me and user guide with the new updates if required
+
+by default when i open a new file i want the permanent filter button to be hidden 
+
+## Assistant
+Done. Permanent filter controls now stay hidden by default when a file or project is opened; users can still reveal them through **Preprocessing > Permanent Filters**.
+
+Updated:
+
+- `app/main_window.py`: `_open_raw_file()` and `_enable_loaded_ui()` now hide the permanent filter controls instead of showing them after load.
+- `app/docs/user_guide.md`: documents that permanent filter controls are hidden by default and toggled from the Preprocessing menu.
+- `README.md`: mentions permanent filters as a collapsible control strip.
+
+Verification passed: `app/main_window.py` syntax parse, visibility-call search, and `git diff --check`.
+## User
+there is some bug with tthe selection rectangle, they somtimes don t appear 
+
+## Assistant
+Fixed the likely causes in `app/plot.py`.
+
+I changed the selection previews so they are more robust across annotation, zoom, and scalogram modes:
+
+- Preview rectangles now reattach themselves if a redraw clears them from the plot while the mode is still active.
+- Annotation selection preview is drawn above the traces instead of behind them.
+- Annotation mode now shows a preview immediately on mouse-down, not only after the first mouse move.
+- Zoom selection keeps updating after the drag starts, even if the cursor leaves the signal area before release.
+
+Verification passed: Python syntax parse and `git diff --check`. I did not run an interactive GUI test in this environment.
+## User
+in the edit bipolar, remove the filter button and instead make each title (pair, and origin) clickable for order filter
+
+## Assistant
+Done. In the Edit Bipolar dialog, I removed the old Filter label/combo and made the table headers handle ordering instead.
+
+Now:
+
+- Click **Pair** to sort rows by bipolar pair label.
+- Click **Origin** to group/sort manual and automatic rows.
+- Click the same header again to reverse the order.
+- Added rows and reset-to-default rows keep the current header ordering when one is active.
+
+I also updated the user guide section for editing bipolar montage. Verification passed with Python syntax parsing and `git diff --check`.

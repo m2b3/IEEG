@@ -37,8 +37,10 @@ from app.referencing import (
     BipolarMontage,
     BipolarPair,
     update_pair_channel2,
-    extract_core_contact_label,
     parse_channel_label,
+    looks_like_bipolar_derivation_label,
+    bipolar_pair_display_name,
+    refresh_bipolar_montage_pair_names,
 )
 from app.psd_panel import PSDIntervalDialog, PSDPanel
 from app.filtering import (
@@ -393,6 +395,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
+        if not self._confirm_close_unsaved_changes("quit"):
+            event.ignore()
+            return
+
         try:
             if self._expert_event_grid_dialog is not None:
                 self._expert_event_grid_dialog.close()
@@ -404,6 +410,9 @@ class MainWindow(QMainWindow):
 
     def on_close_project(self) -> None:
         if self.current_raw is None:
+            return
+
+        if not self._confirm_close_unsaved_changes("close"):
             return
 
         self.current_raw = None
@@ -582,7 +591,7 @@ class MainWindow(QMainWindow):
         self.viewer.show()
         self.viewer.update()
         self.viewer.repaint()
-        self.filter_controls_widget.show()
+        self.filter_controls_widget.hide()
 
         self.viewer.set_view_params(
             time_range=time_range,
@@ -774,6 +783,9 @@ class MainWindow(QMainWindow):
         )
     
     def on_new_project(self) -> None:
+        if not self._confirm_close_unsaved_changes("close"):
+            return
+
         raw_path = ProjectFileHelper.choose_raw_file(self)
         if raw_path is None:
             return
@@ -809,6 +821,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Create project error", str(e))
 
     def on_open_project(self) -> None:
+        if not self._confirm_close_unsaved_changes("close"):
+            return
+
         project_path = ProjectFileHelper.choose_project_to_open(self)
         if project_path is None:
             return
@@ -938,27 +953,19 @@ class MainWindow(QMainWindow):
 
         self.console.log(f"Project opened: {project_path}")
 
-    def on_save_project(self) -> None:
-        if self.current_raw is None:
-            QMessageBox.information(self, "Save project", "Load a dataset first.")
-            return
-
-        if self.project_path is None:
-            self.on_save_project_as()
-            return
-
+    def _save_project_to_path(self, path: Path) -> bool:
         try:
-            save_project(self.project_path, self)
-            self.console.log(f"Project saved: {self.project_path}")
+            save_project(path, self)
+            self.project_path = path
+            self.console.log(f"Project saved: {path}")
             self._mark_project_clean()
+            self._act_save.setEnabled(True)
+            return True
         except Exception as e:
             QMessageBox.critical(self, "Save project error", str(e))
+            return False
 
-    def on_save_project_as(self) -> None:
-        if self.current_raw is None:
-            QMessageBox.information(self, "Save project as", "Load a dataset first.")
-            return
-
+    def _save_project_as_interactive(self) -> bool:
         default = ""
         if self.project_path is not None:
             default = str(self.project_path)
@@ -967,16 +974,66 @@ class MainWindow(QMainWindow):
 
         p = ProjectFileHelper.choose_project_to_save_as(self, default)
         if p is None:
-            return
+            return False
 
-        try:
-            save_project(p, self)
-            self.project_path = p
-            self.console.log(f"Project saved: {p}")
-            self._mark_project_clean()
-            self._act_save.setEnabled(True)
-        except Exception as e:
-            QMessageBox.critical(self, "Save project error", str(e))
+        return self._save_project_to_path(p)
+
+    def _save_current_project_interactive(self) -> bool:
+        if self.current_raw is None:
+            return True
+
+        if self.project_path is None:
+            return self._save_project_as_interactive()
+
+        return self._save_project_to_path(self.project_path)
+
+    def _confirm_close_unsaved_changes(self, action: str) -> bool:
+        if self.current_raw is None or not getattr(self, "project_dirty", False):
+            return True
+
+        item_name = "current project"
+        if self.project_path is not None:
+            item_name = self.project_path.name
+        elif self.loaded_file is not None:
+            item_name = self.loaded_file.name
+
+        action_text = "quitting" if action == "quit" else "closing"
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Unsaved changes")
+        msg.setText(f"Save changes to {item_name} before {action_text}?")
+        msg.setInformativeText("Your review changes will be lost if you do not save them.")
+        save_btn = msg.addButton("Save", QMessageBox.ButtonRole.AcceptRole)
+        dont_save_btn = msg.addButton("Don't Save", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = msg.addButton(QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(save_btn)
+        msg.setEscapeButton(cancel_btn)
+        msg.exec()
+
+        clicked = msg.clickedButton()
+        if clicked is save_btn:
+            return self._save_current_project_interactive()
+        if clicked is dont_save_btn:
+            return True
+        return False
+
+    def on_save_project(self) -> bool:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Save project", "Load a dataset first.")
+            return False
+
+        if self.project_path is None:
+            return self.on_save_project_as()
+
+        return self._save_project_to_path(self.project_path)
+
+    def on_save_project_as(self) -> bool:
+        if self.current_raw is None:
+            QMessageBox.information(self, "Save project as", "Load a dataset first.")
+            return False
+
+        return self._save_project_as_interactive()
 
     def on_edit_channel_groups(self) -> None:
         if self.source_raw is None:
@@ -1132,7 +1189,7 @@ class MainWindow(QMainWindow):
         self.timeline.show()
 
         if hasattr(self, "filter_controls_widget"):
-            self.filter_controls_widget.show()
+            self.filter_controls_widget.hide()
 
         self.viewer.show()
         self.viewer.update()
@@ -1669,16 +1726,48 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
+        channel_names = self.viewer.get_raw_channel_names()
+        already_bipolar = [
+            name for name in channel_names
+            if looks_like_bipolar_derivation_label(name)
+        ]
+        if already_bipolar:
+            examples = ", ".join(already_bipolar[:8])
+            extra = "" if len(already_bipolar) <= 8 else f", ... (+{len(already_bipolar) - 8} more)"
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Bipolar montage")
+            msg.setText("These channel names already look like bipolar derivations.")
+            msg.setInformativeText(
+                f"{examples}{extra}\n\n"
+                "Applying Bipolar rereferencing anyway may create second-order derivations."
+            )
+            apply_anyway = msg.addButton("Apply anyway", QMessageBox.ButtonRole.AcceptRole)
+            cancel = msg.addButton(QMessageBox.StandardButton.Cancel)
+            msg.setDefaultButton(cancel)
+            msg.exec()
+
+            if msg.clickedButton() is not apply_anyway:
+                self.console.log(
+                    "Bipolar re-referencing cancelled: raw channel labels already look bipolar."
+                )
+                return
+
+            self.console.log(
+                "Bipolar re-referencing confirmed despite already-bipolar-looking labels."
+            )
+
         montage = self._saved_bipolar_montage
 
         if montage is None or not montage.pairs:
-            channel_names = self.viewer.get_raw_channel_names()
             bad_channels = self.viewer.get_bad_channels()
 
             montage = build_automatic_bipolar_montage(
                 channel_names,
                 bad_channels=bad_channels,
             )
+
+        montage = refresh_bipolar_montage_pair_names(montage)
 
         if not montage.pairs:
             QMessageBox.warning(
@@ -1747,15 +1836,9 @@ class MainWindow(QMainWindow):
         # --- top controls ---
         top_bar = QHBoxLayout()
 
-        filter_label = QLabel("Filter:")
-        filter_combo = QComboBox(dlg)
-        filter_combo.addItems(["Default", "Origin: manual first"])
-
         add_pair_btn = QToolButton(dlg)
         add_pair_btn.setText("Add new pair")
 
-        top_bar.addWidget(filter_label)
-        top_bar.addWidget(filter_combo)
         top_bar.addStretch(1)
         top_bar.addWidget(add_pair_btn)
 
@@ -1766,16 +1849,21 @@ class MainWindow(QMainWindow):
         table.verticalHeader().setVisible(False)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setStretchLastSection(True)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(False)
         layout.addWidget(table)
 
         row_meta: list[dict] = []
+        sort_state = {
+            "column": None,
+            "order": Qt.SortOrder.AscendingOrder,
+        }
 
         def _pair_display_name(ch1: str, ch2: str) -> str:
-            ch1_core = extract_core_contact_label(ch1) or ch1
-            ch2_core = extract_core_contact_label(ch2) or ch2
-            return f"{ch1_core}-{ch2_core}"
+            return bipolar_pair_display_name(ch1, ch2)
 
         def _insert_row(
             *,
@@ -1873,7 +1961,7 @@ class MainWindow(QMainWindow):
             if ch2_combo is not None:
                 ch2_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
 
-        def _rebuild_table(order_mode: str) -> None:
+        def _rebuild_table() -> None:
             current_rows = []
 
             for row in range(table.rowCount()):
@@ -1905,8 +1993,20 @@ class MainWindow(QMainWindow):
                     "is_new": meta["is_new"],
                 })
 
-            if order_mode == "Origin: manual first":
-                current_rows.sort(key=lambda r: (0 if r["origin_value"] == "manual" else 1))
+            sort_column = sort_state["column"]
+            sort_order = sort_state["order"]
+            reverse = sort_order == Qt.SortOrder.DescendingOrder
+
+            if sort_column == 0:
+                current_rows.sort(key=lambda r: r["pair_name"].casefold(), reverse=reverse)
+            elif sort_column == 3:
+                current_rows.sort(
+                    key=lambda r: (
+                        0 if r["origin_value"].casefold() == "manual" else 1,
+                        r["pair_name"].casefold(),
+                    ),
+                    reverse=reverse,
+                )
 
             table.setRowCount(0)
             row_meta.clear()
@@ -1928,6 +2028,24 @@ class MainWindow(QMainWindow):
                     source_pair=row_data["source_pair"],
                     is_new=row_data["is_new"],
                 )
+
+        def _on_header_clicked(column: int) -> None:
+            if column not in (0, 3):
+                return
+
+            if sort_state["column"] == column:
+                sort_state["order"] = (
+                    Qt.SortOrder.DescendingOrder
+                    if sort_state["order"] == Qt.SortOrder.AscendingOrder
+                    else Qt.SortOrder.AscendingOrder
+                )
+            else:
+                sort_state["column"] = column
+                sort_state["order"] = Qt.SortOrder.AscendingOrder
+
+            header.setSortIndicatorShown(True)
+            header.setSortIndicator(column, sort_state["order"])
+            _rebuild_table()
 
         # initial auto rows
         for row, pair in enumerate(montage.pairs):
@@ -1981,11 +2099,11 @@ class MainWindow(QMainWindow):
                 is_new=True,
             )
 
-            if filter_combo.currentText() == "Origin: manual first":
-                _rebuild_table("Origin: manual first")
+            if sort_state["column"] in (0, 3):
+                _rebuild_table()
 
         add_pair_btn.clicked.connect(_add_new_pair_row)
-        filter_combo.currentTextChanged.connect(_rebuild_table)
+        header.sectionClicked.connect(_on_header_clicked)
 
         reset_btn = QToolButton(dlg)
         reset_btn.setText("Back to default")
@@ -2014,6 +2132,9 @@ class MainWindow(QMainWindow):
                     source_pair=pair,
                     is_new=False,
                 )
+
+            if sort_state["column"] in (0, 3):
+                _rebuild_table()
 
         reset_btn.clicked.connect(_reset_to_default)
 

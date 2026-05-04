@@ -74,6 +74,8 @@ If the project does not yet have a save path or if you want to save it as anothe
 2. Choose a location
 3. Confirm
 
+If there are unsaved review changes when you close the project, open/create another project, or quit the application, the application asks whether to save, continue without saving, or cancel.
+
 ---
 
 ## 3. Understanding the main window
@@ -391,6 +393,8 @@ When Bipolar is selected:
 
 If some channels cannot be paired automatically, the application display a warning message.
 
+If the raw channel names already look like bipolar derivations, for example `RAI1-RAI2`, the application shows a warning before Bipolar rereferencing. You can cancel or choose **Apply anyway**. When applied anyway, channel labels use explicit derivation names such as `(RAI1-RAI2)-(RAI2-RAI3)`. This helps make second-order derivations visible.
+
 ### Average
 
 To switch to Average:
@@ -463,14 +467,14 @@ Bad channels cannot be used as Channel 1.
 
 ### Change the row order view
 
-The editor includes a filter mode selector.
+The editor table can be reordered from the column headers.
 
-You can switch between:
+Click:
 
-- default ordering
-- **Origin: manual first**
+- **Pair** to sort by bipolar pair label
+- **Origin** to group manual and automatic rows
 
-This helps separate automatic rows from manual overrides.
+Click the same header again to reverse the order.
 
 ### Restore the default automatic montage
 
@@ -489,7 +493,22 @@ When finished:
 
 ## 11. Bipolar validation and warnings
 
-Before applying bipolar edits, the editor checks several rules.
+Before applying bipolar mode or bipolar edits, the application checks several rules.
+
+### Already-bipolar recordings
+
+If the loaded raw channel labels already look bipolar, the Bipolar rereference command asks for confirmation before applying the montage.
+
+Examples that trigger the warning:
+
+- `RAI1-RAI2`
+- `RAI2-RAI3`
+
+Acquisition-style reference suffixes such as `EEG RAI1-G2` are treated as raw monopolar labels, not as already-bipolar derivations.
+
+Choose **Apply anyway** only if you intentionally want to rereference those already-bipolar-looking channels.
+
+When applied anyway, the displayed bipolar pair names include the full source labels, for example `(RAI1-RAI2)-(RAI2-RAI3)`, so they do not look identical to the original channels.
 
 ### Required rules
 
@@ -596,6 +615,10 @@ Notch filter:
 The notch filter uses an FIR notch filtering approach.
 
 ### How to use
+
+Permanent filter controls are hidden by default when a file or project is opened.
+
+To show or hide them, click **Preprocessing > Permanent Filters**.
 
 Enter the desired high-pass and/or low-pass values.
 

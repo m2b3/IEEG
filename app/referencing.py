@@ -7,6 +7,7 @@ from typing import Iterable
 
 _CORE_CONTACT_RE = re.compile(r"([A-Z][A-Z0-9']*?)\s*0*([0-9]+)")
 _TRAILING_REF_RE = re.compile(r"[-\s]*G\d+\s*$")
+_BIPOLAR_SEPARATOR_RE = re.compile("\\s*(?:-|\\u2013|\\u2014)\\s*")
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,53 @@ def parse_channel_label(label: str) -> ParsedChannel | None:
     )
 
 
+def looks_like_bipolar_derivation_label(label: str) -> bool:
+    """Return True for labels that already look like contact-to-contact derivations."""
+    text = normalize_label(label)
+    if text.startswith("EEG "):
+        text = text[4:].strip()
+
+    # Acquisition labels such as EEG RAI1-G2 are monopolar channels with a
+    # reference suffix in this project, not a bipolar derivation.
+    if _TRAILING_REF_RE.search(text):
+        return False
+
+    parts = [part.strip() for part in _BIPOLAR_SEPARATOR_RE.split(text) if part.strip()]
+    if len(parts) != 2:
+        return False
+
+    left = parse_channel_label(parts[0])
+    right = parse_channel_label(parts[1])
+    return left is not None and right is not None
+
+
+def bipolar_pair_display_name(ch1: str, ch2: str) -> str:
+    """Build the displayed label for a bipolar derivation."""
+    ch1_text = str(ch1).strip()
+    ch2_text = str(ch2).strip()
+
+    if (
+        looks_like_bipolar_derivation_label(ch1_text)
+        or looks_like_bipolar_derivation_label(ch2_text)
+    ):
+        return f"({ch1_text})-({ch2_text})"
+
+    ch1_core = extract_core_contact_label(ch1_text) or ch1_text
+    ch2_core = extract_core_contact_label(ch2_text) or ch2_text
+    return f"{ch1_core}-{ch2_core}"
+
+
+def refresh_bipolar_montage_pair_names(montage: BipolarMontage) -> BipolarMontage:
+    """Return a montage with pair names regenerated from their source channels."""
+    return replace(
+        montage,
+        pairs=[
+            replace(pair, name=bipolar_pair_display_name(pair.ch1, pair.ch2))
+            for pair in montage.pairs
+        ],
+    )
+
+
 def build_automatic_bipolar_montage(
     channel_labels: Iterable[str],
     bad_channels: Iterable[str] | None = None,
@@ -143,7 +191,7 @@ def build_automatic_bipolar_montage(
 
             pairs.append(
                 BipolarPair(
-                    name=f"{left.normalized_label}-{right.normalized_label}",
+                    name=bipolar_pair_display_name(left.original_label, right.original_label),
                     ch1=left.original_label,
                     ch2=right.original_label,
                     origin="auto",
@@ -159,12 +207,10 @@ def build_automatic_bipolar_montage(
 
 
 def update_pair_channel2(pair: BipolarPair, new_ch2: str) -> BipolarPair:
-    new_ch2_core = extract_core_contact_label(new_ch2) or new_ch2
-    ch1_core = extract_core_contact_label(pair.ch1) or pair.ch1
     return replace(
         pair,
         ch2=new_ch2,
-        name=f"{ch1_core}-{new_ch2_core}",
+        name=bipolar_pair_display_name(pair.ch1, new_ch2),
         origin="manual",
     )
 
