@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, Slot, Signal, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog,
-    QDialogButtonBox, QLineEdit, QComboBox,
+    QDialogButtonBox, QLineEdit, QComboBox, QSizePolicy,
 )
 
 from app.time_controls import TimeWindowControl
@@ -39,6 +39,11 @@ class ComputationPanel(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        self.setMinimumSize(240, 220)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self._raw: BaseRaw | None = None
         self._picks: np.ndarray | None = None           # abs_idx -> raw_idx
@@ -61,6 +66,11 @@ class ComputationPanel(QWidget):
 
         self.list_channels = QListWidget()
         self.list_channels.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.list_channels.setMinimumHeight(80)
+        self.list_channels.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         ch_layout.addWidget(self.list_channels, 1)
 
         quick_row = QHBoxLayout()
@@ -129,6 +139,11 @@ class ComputationPanel(QWidget):
         p_layout.addLayout(algo_row)
 
         self.plot = pg.PlotWidget()
+        self.plot.setMinimumSize(220, 140)
+        self.plot.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.plot.showGrid(x=True, y=True, alpha=0.15)
         self.plot.setLabel("bottom", "Time (s)")
         self.plot.setLabel("left", "Mean voltage (uV)")

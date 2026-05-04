@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
     QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
     QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTextBrowser, QTabWidget, QTabBar
+    QHeaderView, QTextBrowser, QTabWidget, QTabBar, QSizePolicy
 )
 
 from PySide6.QtCore import Qt
@@ -89,6 +89,13 @@ class MainWindow(QMainWindow):
         self._base_title = "iEEG Tool"
         self.setWindowTitle(self._base_title)
         self.resize(1400, 800)
+        self.setDockNestingEnabled(True)
+        self.setDockOptions(
+            self.dockOptions()
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AnimatedDocks
+        )
 
         # ---- Menu bar ----
         self._act_scalogram: QAction | None = None
@@ -291,6 +298,16 @@ class MainWindow(QMainWindow):
             | Qt.DockWidgetArea.RightDockWidgetArea
             | Qt.DockWidgetArea.BottomDockWidgetArea
         )
+        self.comp_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.comp_dock.setMinimumSize(260, 220)
+        self.comp_dock.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
 
         self.comp_panel = ComputationPanel()
         self.comp_dock.setWidget(self.comp_panel)
@@ -303,7 +320,22 @@ class MainWindow(QMainWindow):
             Qt.DockWidgetArea.LeftDockWidgetArea
             | Qt.DockWidgetArea.RightDockWidgetArea
         )
+        self.anno_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        self.anno_dock.setMinimumSize(220, 180)
+        self.anno_dock.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.anno_list = QListWidget()
+        self.anno_list.setMinimumSize(180, 120)
+        self.anno_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         self.anno_dock.setWidget(self.anno_list)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.anno_dock)
         self.anno_dock.hide()
@@ -1673,11 +1705,23 @@ class MainWindow(QMainWindow):
 
 # ---------------- Computation panel ----------------
 
+    def _resize_visible_dock(self, dock: QDockWidget, *, side_size: int, bottom_size: int) -> None:
+        if dock.isFloating():
+            dock.resize(max(dock.width(), side_size), max(dock.height(), bottom_size))
+            return
+
+        area = self.dockWidgetArea(dock)
+        if area == Qt.DockWidgetArea.BottomDockWidgetArea:
+            self.resizeDocks([dock], [int(bottom_size)], Qt.Orientation.Vertical)
+        else:
+            self.resizeDocks([dock], [int(side_size)], Qt.Orientation.Horizontal)
+
     def _open_computation_panel(self, selected_abs: list[int]) -> None:
         self._sync_comp_panel_context()
         self.comp_panel.set_selected_channels_abs(selected_abs, replace=True)
         self._sync_comp_panel_view_state()
         self.comp_dock.show()
+        self._resize_visible_dock(self.comp_dock, side_size=430, bottom_size=300)
         self.comp_dock.raise_()
 
     def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
@@ -2343,6 +2387,7 @@ class MainWindow(QMainWindow):
 
     def _open_annotations_panel(self) -> None:
         self.anno_dock.show()
+        self._resize_visible_dock(self.anno_dock, side_size=320, bottom_size=240)
         self.anno_dock.raise_()
     
     def _refresh_annotation_list(self):
@@ -2380,6 +2425,7 @@ class MainWindow(QMainWindow):
         # Show dock if there is at least one annotation
         if self.anno_list.count() > 0:
             self.anno_dock.show()
+            self._resize_visible_dock(self.anno_dock, side_size=320, bottom_size=240)
             self.anno_dock.raise_()
 
     def _on_annotation_item_clicked(self, item: QListWidgetItem):
@@ -2490,6 +2536,7 @@ class MainWindow(QMainWindow):
         # Ensure dock is visible when user clicks an annotation
         if self.anno_dock.isHidden():
             self.anno_dock.show()
+            self._resize_visible_dock(self.anno_dock, side_size=320, bottom_size=240)
 
         item = self._anno_items_by_id.get(str(anno_id))
         if item is None:

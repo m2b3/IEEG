@@ -460,3 +460,25 @@ Now:
 - Added rows and reset-to-default rows keep the current header ordering when one is active.
 
 I also updated the user guide section for editing bipolar montage. Verification passed with Python syntax parsing and `git diff --check`.
+## User
+comput pannel is hard to get bigger, i want to be able to change the size of my docks more fluently
+
+## Assistant
+Done. I made the dock layout more flexible and easier to resize.
+
+Changes:
+
+- `app/main_window.py`
+  - Enabled nested/tabbed/animated dock behavior.
+  - Gave Computation and Annotations docks movable, floatable, closable behavior.
+  - Added lower minimum sizes and expanding size policies.
+  - Added a helper that gives docks a useful size when opened.
+  - Computation panel now opens wider by default; annotation dock also opens at a more usable size.
+
+- `app/computation_panel.py`
+  - Added expanding size policies and smaller minimums for the panel, channel list, and plot, so the dock splitter can resize the panel more smoothly.
+
+- `README.md` and `app/docs/user_guide.md`
+  - Updated docs to mention resizable/movable/floating dock panels.
+
+Verification passed: Python syntax parse and `git diff --check`. I did not run an interactive GUI resize test here.

@@ -119,6 +119,8 @@ Depending on your actions, the application may show:
 - a **Computation Panel**
 - a **PSD panel**
 
+Dock panels can be resized by dragging their divider. The Annotations and Computation docks can also be moved to another dock area or floated as separate windows from their title bars.
+
 ---
 
 ## 4. Navigating the recording
@@ -673,6 +675,8 @@ The computation panel uses:
 - the current dataset
 - the current selected channels
 - the current time context
+
+The computation panel opens at a wider default size and can be resized by dragging the divider between the dock and the main signal viewer. It can also be floated or moved to the left, right, or bottom dock area from its title bar.
 
 The panel follows the main viewer time and cursor behavior when “linked” box clicked..
 

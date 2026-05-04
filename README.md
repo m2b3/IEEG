@@ -49,7 +49,7 @@ Rendering is optimized to:
 - Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
 - Save and reopen project state
 - Warn about unsaved review changes before closing
-- Use dedicated computation and PSD panels for selected channels
+- Use resizable computation, annotation, and PSD panels for selected channels
 
 ## Installation
 
