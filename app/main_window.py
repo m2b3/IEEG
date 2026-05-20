@@ -38,6 +38,7 @@ from app.referencing import (
     BipolarPair,
     update_pair_channel2,
     parse_channel_label,
+    extract_core_contact_label,
     looks_like_bipolar_derivation_label,
     bipolar_pair_display_name,
     refresh_bipolar_montage_pair_names,
@@ -53,6 +54,7 @@ from app.filtering import (
     build_filtered_raw_by_group,
     is_filter_active,
 )
+from app.display_theme import DISPLAY_THEME_CHOICES, get_display_theme
 from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 from app.expert_event_grid import ExpertEventGridDialog
 
@@ -113,6 +115,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
 
         # ---- Toolbar (controls) ----
+        self._display_theme_key = "dark"
         self._build_toolbar()
         self.tb.setEnabled(False) 
 
@@ -425,6 +428,8 @@ class MainWindow(QMainWindow):
         self.shortcut_psd_tab.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.shortcut_psd_tab.activated.connect(self.open_psd_panel)
 
+        self._apply_display_theme(self._display_theme_key)
+
     def closeEvent(self, event):
         """Ensure the app quits cleanly when the main window closes."""
         if not self._confirm_close_unsaved_changes("quit"):
@@ -546,6 +551,15 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
+        tb.addWidget(QLabel("Theme:"))
+        self.display_theme = QComboBox()
+        for label, key in DISPLAY_THEME_CHOICES:
+            self.display_theme.addItem(label, userData=key)
+        self.display_theme.currentIndexChanged.connect(self._on_display_theme_changed)
+        tb.addWidget(self.display_theme)
+
+        tb.addSeparator()
+
         # Hidden channels menu button
         self.btn_hidden = QToolButton()
         self.btn_hidden.setText("Hidden...")
@@ -564,6 +578,82 @@ class MainWindow(QMainWindow):
         self.gain.valueChanged.connect(lambda v: self.viewer.set_view_params(gain=v))
         self.gain.valueChanged.connect(lambda v: self.comp_panel.set_main_gain_uv(float(v)))
         self.chan_range.valueChanged.connect(lambda v: self.viewer.set_view_params(chan_range=v))
+
+    def _on_display_theme_changed(self, index: int) -> None:
+        theme_key = self.display_theme.itemData(index)
+        self._apply_display_theme(str(theme_key or "dark"))
+
+    def _apply_display_theme(self, theme_key: str) -> None:
+        theme = get_display_theme(theme_key)
+        self._display_theme_key = theme.key
+
+        toolbar_style = f"""
+            QToolBar {{
+                background-color: {theme.panel_background};
+                border-bottom: 1px solid {theme.border_color};
+                spacing: 4px;
+            }}
+            QToolBar QLabel {{
+                color: {theme.text_color};
+            }}
+            QToolBar QToolButton,
+            QToolBar QComboBox,
+            QToolBar QAbstractSpinBox {{
+                background-color: {theme.input_background};
+                color: {theme.input_text_color};
+                border: 1px solid {theme.border_color};
+                padding: 2px 6px;
+            }}
+            QToolBar QToolButton:hover {{
+                background-color: {theme.button_hover_background};
+            }}
+        """
+        frame_style = f"""
+            QFrame {{
+                background-color: {theme.panel_background};
+                border-bottom: 1px solid {theme.border_color};
+            }}
+            QLabel {{
+                color: {theme.text_color};
+            }}
+            QToolButton,
+            QComboBox,
+            QAbstractSpinBox {{
+                background-color: {theme.input_background};
+                color: {theme.input_text_color};
+                border: 1px solid {theme.border_color};
+                padding: 2px 6px;
+            }}
+        """
+        timeline_style = f"""
+            QFrame {{
+                background-color: {theme.panel_background};
+                border-top: 1px solid {theme.border_color};
+            }}
+            QLabel {{
+                color: {theme.text_color};
+            }}
+        """
+
+        self.tb.setStyleSheet(toolbar_style)
+        self.top_controls.setStyleSheet(frame_style)
+        self.timeline.setStyleSheet(timeline_style)
+        self.filter_summary.setStyleSheet(
+            f"color: {theme.secondary_text_color}; padding-left: 8px;"
+        )
+        self.viewer.set_display_theme(theme.key)
+
+        current_index = self.display_theme.findData(theme.key)
+        if current_index >= 0 and self.display_theme.currentIndex() != current_index:
+            self.display_theme.blockSignals(True)
+            self.display_theme.setCurrentIndex(current_index)
+            self.display_theme.blockSignals(False)
+
+        for window in list(self._scalogram_windows):
+            try:
+                window.set_display_theme(theme.key)
+            except Exception:
+                pass
 
     def _add_presets_button(self, tb: QToolBar, target, values):
         """Small down-arrow button that pops a menu of preset values."""
@@ -2610,6 +2700,7 @@ class MainWindow(QMainWindow):
             context=context,
             signal_uv=signal_uv,
             relative_times_s=rel_times,
+            theme=self._display_theme_key,
             parent=self,
         )
         window.destroyed.connect(lambda *_args, w=window: self._discard_scalogram_window(w))
@@ -2710,7 +2801,7 @@ class MainWindow(QMainWindow):
             self._expert_event_grid_dialog = dlg
 
         self._expert_event_grid_dialog.set_edf_path(self.loaded_file)
-        self._expert_event_grid_dialog.grid.set_raw(self.current_raw)
+        self._expert_event_grid_dialog.grid.set_raw(self.source_raw or self.current_raw)
         self._expert_event_grid_dialog.grid.set_waveform_callback(self._extract_waveform_from_raw)
 
         if self._expert_event_grid_loaded_file != self.loaded_file:
@@ -2864,6 +2955,76 @@ class MainWindow(QMainWindow):
         )
         return expected if expected.exists() else None
 
+    def _channel_match_key(self, label: str) -> str:
+        text = str(label or "").strip()
+        if not text:
+            return ""
+        if looks_like_bipolar_derivation_label(text):
+            return re.sub(r"\s+", "", text).casefold()
+        core = extract_core_contact_label(text)
+        if core:
+            return core.casefold()
+        return re.sub(r"\s+", "", text).casefold()
+
+    def _find_channel_index_by_label(self, names: list[str], channel: str) -> int | None:
+        if not channel:
+            return None
+        if channel in names:
+            return names.index(channel)
+
+        stripped_channel = str(channel).strip()
+        for idx, name in enumerate(names):
+            if str(name).strip() == stripped_channel:
+                return idx
+
+        channel_key = self._channel_match_key(stripped_channel)
+        if not channel_key:
+            return None
+        for idx, name in enumerate(names):
+            if self._channel_match_key(name) == channel_key:
+                return idx
+        return None
+
+    def _split_bipolar_event_label(self, channel: str) -> tuple[str, str] | None:
+        text = str(channel or "").strip()
+        if not looks_like_bipolar_derivation_label(text):
+            return None
+        if text.upper().startswith("EEG "):
+            text = text[4:].strip()
+        parts = [part.strip() for part in re.split(r"\s*(?:-|\u2013|\u2014)\s*", text) if part.strip()]
+        if len(parts) != 2:
+            return None
+        return parts[0], parts[1]
+
+    def _find_display_channel_index_for_expert_channel(self, channel: str) -> int | None:
+        display_names = self.viewer.get_channel_names()
+        idx = self._find_channel_index_by_label(display_names, channel)
+        if idx is not None:
+            return idx
+
+        # If the expert event is a bipolar derivation but the main display is
+        # monopolar, select the first source contact so the jump still lands nearby.
+        pair = self._split_bipolar_event_label(channel)
+        if pair is None:
+            return None
+        return self._find_channel_index_by_label(display_names, pair[0])
+
+    def _resolve_raw_waveform_channels(self, raw: BaseRaw, channel: str) -> tuple[int, int | None] | None:
+        raw_names = list(raw.ch_names)
+        idx = self._find_channel_index_by_label(raw_names, channel)
+        if idx is not None:
+            return idx, None
+
+        pair = self._split_bipolar_event_label(channel)
+        if pair is None:
+            return None
+
+        left_idx = self._find_channel_index_by_label(raw_names, pair[0])
+        right_idx = self._find_channel_index_by_label(raw_names, pair[1])
+        if left_idx is None or right_idx is None:
+            return None
+        return left_idx, right_idx
+
     def _jump_viewer_to_event(self, time_s: float, channel: str) -> None:
         """
         Jump the main viewer to a specific time and optionally highlight a channel.
@@ -2875,19 +3036,17 @@ class MainWindow(QMainWindow):
         if self.current_raw is None:
             return
 
-        # Jump to the event time
-        self.viewer.set_time_start(time_s)
+        view_range = float(getattr(self.viewer, "_time_range", 0.0) or 0.0)
+        target_t0 = max(0.0, float(time_s) - 0.5 * view_range)
+        self.viewer.set_time_start(target_t0)
 
-        # If a channel is specified, try to find and select it
-        if channel:
-            display_names = self.viewer.get_channel_names()
-            if channel in display_names:
-                idx = display_names.index(channel)
-                # Scroll to show this channel
-                self.viewer.set_channel_start(max(0, idx - 5))
+        idx = self._find_display_channel_index_for_expert_channel(channel)
+        if idx is not None:
+            self.viewer.set_channel_start(max(0, idx - 5))
+            self.viewer.set_selected_abs([idx], anchor=idx, emit=True)
 
         # Update time controls
-        self.time_ctl.set_t0(time_s)
+        self.time_ctl.set_t0(self.viewer.time_start())
 
     def _on_expert_event_clicked(self, event) -> None:
         """Handle when an expert event is clicked in the grid."""
@@ -2918,7 +3077,7 @@ class MainWindow(QMainWindow):
             if self._expert_event_grid_dialog is None:
                 return False
 
-        self._expert_event_grid_dialog.grid.set_raw(self.current_raw)
+        self._expert_event_grid_dialog.grid.set_raw(self.source_raw or self.current_raw)
         self._expert_event_grid_dialog.grid.set_waveform_callback(self._extract_waveform_from_raw)
         success = self._expert_event_grid_dialog.load_events_for_edf(self.loaded_file, events_path)
 
@@ -2931,7 +3090,7 @@ class MainWindow(QMainWindow):
 
         return success
 
-    def _extract_waveform_from_raw(self, channel: str, start_s: float, end_s: float) -> np.ndarray:
+    def _extract_waveform_from_raw(self, channel: str, start_s: float, end_s: float) -> tuple[np.ndarray, np.ndarray]:
         """
         Extract waveform data from the raw file for display in the event grid.
 
@@ -2941,37 +3100,41 @@ class MainWindow(QMainWindow):
             end_s: End time in seconds
 
         Returns:
-            Waveform data as numpy array
+            Tuple of waveform data and exact sample times.
         """
-        if self.current_raw is None:
-            return np.array([])
+        raw = self.source_raw or self.current_raw
+        if raw is None:
+            return np.array([]), np.array([])
 
         try:
-            # Find the channel index
-            channel_names = self.current_raw.ch_names
-            if channel not in channel_names:
-                return np.array([])
+            resolved = self._resolve_raw_waveform_channels(raw, channel)
+            if resolved is None:
+                self.console.log(f"Expert event waveform: channel not found in raw data ({channel})")
+                return np.array([]), np.array([])
 
-            ch_idx = channel_names.index(channel)
-
-            # Get the data for this channel and time range
-            start_idx = int(start_s * self.current_raw.info['sfreq'])
-            end_idx = int(end_s * self.current_raw.info['sfreq'])
+            left_idx, right_idx = resolved
+            sfreq = float(raw.info["sfreq"])
+            start_idx = int(np.floor(max(0.0, float(start_s)) * sfreq))
+            end_idx = int(np.ceil(max(float(end_s), float(start_s)) * sfreq))
 
             # Clamp to valid range
             start_idx = max(0, start_idx)
-            end_idx = min(self.current_raw.n_times, end_idx)
+            end_idx = min(raw.n_times, end_idx)
 
             if end_idx <= start_idx:
-                return np.array([])
+                return np.array([]), np.array([])
 
-            # Extract data
-            data, _ = self.current_raw[ch_idx, start_idx:end_idx]
-            return data.flatten()
+            picks = [left_idx] if right_idx is None else [left_idx, right_idx]
+            data, times = raw[picks, start_idx:end_idx]
+            if right_idx is None:
+                waveform = data[0]
+            else:
+                waveform = data[0] - data[1]
+            return np.asarray(waveform, dtype=float).reshape(-1), np.asarray(times, dtype=float).reshape(-1)
 
         except Exception as e:
             self.console.log(f"Error extracting waveform: {e}")
-            return np.array([])
+            return np.array([]), np.array([])
 
     def _mark_channels_bad_from_psd(self, channel_names: list[str]) -> None:
         if self.current_raw is None or not channel_names:

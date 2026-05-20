@@ -482,3 +482,223 @@ Changes:
   - Updated docs to mention resizable/movable/floating dock panels.
 
 Verification passed: Python syntax parse and `git diff --check`. I did not run an interactive GUI resize test here.
+## User
+Goal: improve the expert event grid visualization for reviewing candidate HFO annotations.
+
+Please inspect `app/expert_event_grid.py` first, then implement the following UX improvements with minimal, clean changes.
+
+Context:
+The expert grid is used to review candidate HFO events. The current display is too focused on the isolated event and uses annotation colors too strongly. We want more temporal context, better contrast, and a clearer clinician-facing review workflow.
+
+Requested changes:
+
+1. Add temporal context around each event
+- Instead of displaying only the event interval, display a slightly wider window around each candidate event.
+- Default context should be ±2 ms around the event:
+  - context_start = max(0, event.start - 0.002)
+  - context_end = event.end + 0.002
+- Make this configurable as a constant or parameter, e.g. `CONTEXT_MS = 2`.
+
+2. Mark the original event interval clearly
+- The event itself should be marked within the larger context window.
+- Add a light gray semi-transparent shaded region from `event.start` to `event.end`.
+- Add vertical markers at event onset and event offset.
+- These markers should appear in the zoomed event view and, if feasible, in the grid preview cells as well.
+
+3. Improve visual contrast
+- Do not color the waveform by event/review type.
+- Keep waveform and metadata neutral:
+  - dark mode: waveform/text should remain white or light neutral
+  - light mode: waveform/text should be black or dark neutral
+- Use event/review type color only for:
+  - the cell/card border
+  - a small label/badge
+  - optionally the event interval frame
+- The annotation color should guide the eye but not interfere with waveform interpretation.
+
+4. Improve click/zoom behavior
+- When clicking an event cell, keep the existing behavior that opens the zoomed event view and emits the jump-to-time signal.
+- In the zoomed view, show the context window around the event, not just the event duration.
+- If the app already has access to the raw channel signal, preserve or improve the behavior so that clicking an event allows inspection of the raw signal of the full channel around the event.
+- Ideally, structure the zoomed view as:
+  - main waveform: event ±2 ms with shaded event region
+  - if easy and already supported: wider channel context view, e.g. ±0.5 s or ±1 s, with the event highlighted
+- Do not add major architecture unless necessary.
+
+5. Preserve existing functionality
+- Keep pagination/grid behavior unchanged.
+- Keep event metadata display unchanged except for visual styling.
+- Keep existing signals such as `requestJumpToTime(event.start, event.channel)`.
+- Do not break current callbacks used to retrieve waveform data.
+- If waveform callbacks currently only accept start/end times, adapt them carefully so they request the wider context range while still highlighting the original event interval.
+
+6. Add clean helper methods if useful
+For example:
+- `get_event_context_window(event, context_ms=2)`
+- `add_event_region(plot_widget, start, end)`
+- `get_neutral_waveform_color()`
+- `get_review_border_color(review_label)`
+
+7. Code quality
+- Keep the implementation simple and readable.
+- Add short comments explaining why the event region is gray and why class color is only used on borders/badges.
+- Avoid large refactors.
+- Run a quick syntax check after changes.
+
+Expected result:
+The expert grid should support contextual HFO candidate review:
+- waveform shown with ±2 ms context
+- event interval marked by gray region and onset/offset lines
+- signal remains visually neutral
+- review type appears mainly through borders/badges
+- clicking an event still opens the zoomed viewer and jumps to the event/channel
+
+After implementing, summarize:
+- which file(s) changed
+- what visual behavior changed
+- any assumptions made about waveform callbacks or available raw signal data
+
+## Assistant
+Implemented in `app/expert_event_grid.py`.
+
+What changed:
+
+- Added `CONTEXT_MS = 2` and helper functions for event context windows, neutral waveform color, waveform time axes, and gray event-region overlays.
+- Grid preview cells now request/display the event with ±2 ms context when raw waveform callback data is available.
+- The original event interval is marked in both grid cells and zoomed view with a semi-transparent gray region plus onset/offset vertical markers.
+- Waveforms are now neutral/light instead of review-colored.
+- Review type color is used on the cell border and review badge, not the waveform.
+- Zoomed view now shows:
+  - main event waveform with ±2 ms context
+  - a wider channel context plot using ±0.5 s when the raw callback can provide it
+- Existing pagination and click behavior are preserved, including `requestJumpToTime(event.start, event.channel)`.
+
+Assumptions:
+
+- The existing waveform callback still accepts `(channel_name, start_time, end_time)` and returns waveform samples only, not timestamps.
+- When raw data is available, the grid asks that same callback for the wider time windows. If only CSV-stored waveform snippets exist, the code falls back to the stored event waveform without additional context.
+- The wider channel context uses the app’s current raw/active signal source through the existing callback.
+
+Verification passed: `app/expert_event_grid.py` syntax parse and `git diff --check`. I did not run an interactive GUI review here.
+## User
+what are all the pb in expert event
+
+## Assistant
+I inspected the expert event grid and the waveform callback path. I did not change anything.
+
+Main problems I see:
+- The zoomed view says "click to return to grid", but ZoomedEventView has no mouse click handler. Only Back, Esc/Return, n, and b work.
+- Cell clicking may be unreliable when the click lands on the embedded pyqtgraph widget, because the parent cell owns the click signal but the plot is a child widget that may consume mouse events.
+- The "raw channel context" is only as raw as MainWindow.current_raw. If current_raw has been filtered/altered, the expert grid is showing that active raw object, not necessarily the untouched EDF signal.
+- Channel matching is exact. If expert CSV labels do not exactly match current_raw.ch_names, or the main viewer is showing relabeled/bipolar channel names, waveform extraction and channel jump can silently fail.
+- The main viewer jump uses event.start directly, so the event lands at the left edge of the display instead of being centered with context.
+- The jump-to-channel path scrolls near the channel but does not actually select or visually mark the channel.
+- Waveform fetching is not cached well. _update_grid calls _ensure_event_waveform for every visible event, and _show_zoomed_view refetches again. Paging back and forth can repeatedly slice raw data.
+- The time axis is inferred with linspace(start,end,n). Because the callback returns only samples, not actual sample times, the last point is slightly stretched to the requested end; near file boundaries it can be more wrong because the callback clamps sample indices but the grid still stores the requested end time.
+- If the raw callback fails and only CSV waveform snippets exist, there is no real +/-2 ms context. The stored waveform is treated as event-only, so the gray event region covers essentially the whole waveform.
+- Waveform callback failures are silent. The UI shows a flat placeholder, which can be mistaken for a flat signal instead of "waveform unavailable".
+- The wider context plot is useful, but unlabeled beyond "Channel context" and has no y-axis/unit label, so the two plots can be a little ambiguous clinically.
+- Visual styling is mostly improved, but review color still appears as a light badge background, not strictly only border/badge outline. Also the legend still uses colored text rather than the same border/badge language.
+- The code is hard-coded for dark mode: plot backgrounds and neutral waveform color always assume dark mode.
+- If an events file has no rows matching the EDF name, the loader falls back to showing all events from the file. Useful for some files, but risky because a typo/mismatch can show events from the wrong recording.
+- Minor cleanup: several old imports appear unused after the grid changes.
+
+Biggest ones to fix first would be exact channel-name matching, silent waveform failure, no caching, inaccurate sample-time mapping, and the false "click to return" instruction.## User
+fix those issues
+
+## Assistant
+Fixed the expert-event issues in app/expert_event_grid.py and app/main_window.py.
+
+What changed:
+- Event cells and zoom plots now reliably handle clicks; the zoom view's "click to return" text is true now.
+- Missing waveform data now shows "Waveform unavailable" instead of a misleading flat trace.
+- Waveform fetching is cached per event, including failed fetches, so paging/zooming does not keep slicing the raw data repeatedly.
+- The grid accepts callbacks that return exact sample times, and the main callback now returns them, so event plots are no longer stretched with guessed linspace timing.
+- Expert waveform extraction uses source_raw when available, so the wider context is from the original signal rather than the active filtered view.
+- Channel lookup now tolerates acquisition labels and bipolar labels; if an event is A-B and both contacts exist, the expert grid displays the derived A-B waveform.
+- Clicking an event now centers the main viewer around the event and selects/highlights the matched channel when possible.
+- EDF filtering is safer: if an event file has EDF names and none match the loaded file, it no longer falls back to showing all events from the file.
+- Review colors are kept to borders/badges/legend outlines; waveform and text stay neutral.
+- Zoom plots now label amplitude and time.
+
+Verification: ast parse passed for app/expert_event_grid.py and app/main_window.py, and git diff --check passed. I did not run an interactive GUI session.## User
+those pb : Parameter "padding" is already assigned
+Parameter "padding" is already assigned
+"hideAxis" is not a known attribute of "None"
+"setMouseEnabled" is not a known attribute of "None"
+Cannot access attribute "setMouseEnabled" for class "PlotItem"
+  Attribute "setMouseEnabled" is unknown
+Parameter "padding" is already assigned
+Parameter "padding" is already assigned
+Parameter "padding" is already assigned
+"widget" is not a known attribute of "None"
+
+## Assistant
+Fixed the static-analysis errors in app/expert_event_grid.py by adding typed wrapper helpers around pyqtgraph dynamic calls, replacing direct setXRange/setYRange calls that used padding=0, casting PlotItem access through Any for hideAxis/setMouseEnabled, and guarding takeAt() before calling widget(). Verified with Python AST parse and git diff --check.## User
+actually for the grid i would like a total window of 570 ms with the detected event centered. also when we click on an event and the zoom in window appear, there is a bug rn ( wherever i click it brings me back to the main grid)]
+
+## Assistant
+Updated app/expert_event_grid.py so event previews use a fixed 570 ms centered context window around the detected event. The plotted x-range now stays at that centered window even if the fallback waveform is only an event snippet. Kept the secondary zoom context as a wider 1.0 s window. Removed the zoom-view click-to-back behavior so clicks inside the zoomed view no longer return to the grid; navigation back is through Back to Grid, Esc, or Return. Verified with AST parse and git diff --check.## User
+what hapene to the bipolar montage if i hide or mark as bad after applying it
+
+## Assistant
+Currently, after bipolar mode is applied, hide/bad actions mostly target the displayed bipolar pair labels, not the original source contacts.
+
+If you hide a channel in bipolar mode, the hidden name is the bipolar display name, for example RAI1-RAI2. That pair disappears from the main viewer, but the bipolar montage itself is not rebuilt and the pair still exists inside the montage.
+
+If you mark a channel bad in bipolar mode, the bipolar pair stays visible and is recolored red. The pair is not removed from the montage and its signal is still computed. Bad channels are visible by design in the viewer.
+
+Important edge case: when bad channels change, MainWindow clears _saved_bipolar_montage. So if you had manually edited bipolar pairs, then mark something bad afterward, the active montage stays for the moment, but the saved manual montage is invalidated. If you later leave bipolar mode and apply bipolar again, it may rebuild automatically instead of reusing your manual edit.
+
+Another edge case: if the bad name is a bipolar label like RAI1-RAI2 and you rebuild automatic bipolar later, the parser may interpret that label as source contact RAI1. That means reapplying bipolar could skip pairs involving RAI1, which is probably not the intended behavior.
+
+So the current behavior is: hide = hides displayed bipolar pair; bad = colors displayed bipolar pair red; neither action immediately recomputes the active montage. Reapplying bipolar later can rebuild differently because bad-channel state is used during automatic montage generation.## User
+for the expert grid, the gray part can dont need to be infinite
+
+## Assistant
+Changed app/expert_event_grid.py so the expert-grid event highlight no longer uses pyqtgraph LinearRegionItem/InfiniteLine. The gray event interval is now a finite BarGraphItem bounded to the waveform amplitude range, with finite onset/offset marker lines over the same y-range. Verified with AST parse and git diff --check.
+## User
+isnt it a display problem of our ieeg signal
+
+## Assistant
+Not purely, based on the current code. The main viewer does apply display-only transforms: the amplitude control changes visual scaling, and each channel is vertically offset so traces can be stacked. You can see that in [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:462) and [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:479). The user guide also states that amplitude changes only affect how large the waveform appears on screen, not the data itself in [app/docs/user_guide.md](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/docs/user_guide.md:149).
+
+But the app also has non-display signal transformations before plotting: average, median, common-reference, and bipolar modes all change `data_v` before it is converted to microvolts and drawn, as shown in [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:717), [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:749), and [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:769). So if the issue is just that the waveform looks too big, too flat, or visually crowded, yes, that can be a display problem. If the waveform shape or polarity itself looks wrong, then it is more likely a referencing or preprocessing issue rather than only display.
+
+A quick test is: keep the same time window/channel, switch to monopolar, and vary only the `Amplitude (uV)` control. If only the apparent size changes, that confirms display scaling. If the waveform itself changes when switching reference mode, that is a real signal transformation.
+
+## User
+should we implement a white mode of the display.
+
+## Assistant
+Yes, I think a white mode is worth implementing, but as an optional theme, not a replacement for the current dark viewer.
+
+The current UI is clearly built around a dark display: the main viewer uses white macro traces and light labels in [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:194), the scalogram windows explicitly use black backgrounds in [app/scalogram_viewer.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/scalogram_viewer.py:131), and the top controls are styled dark in [app/main_window.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/main_window.py:126). So a white mode is feasible and probably useful for daylight use, screenshots, and users who prefer paper-like contrast, but it is not a one-line toggle because several colors are hardcoded.
+
+I would recommend doing it only if we treat it as a small theming pass: centralize viewer colors into a light/dark palette, make the main trace/label/selection colors theme-aware, and update the scalogram and toolbar styles at the same time. I would not frame it as the fix for the signal issue, though, because white mode changes readability and contrast, not the underlying signal behavior.
+
+## User
+yeah let s do that
+
+## Assistant
+I implemented a light/dark display theme system for the viewer. There is now a shared palette module in [app/display_theme.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/display_theme.py:1), a new `Theme` selector in the main toolbar in [app/main_window.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/main_window.py:554), and the main signal viewer now updates its background, axes, grid/cursor colors, labels, annotation text, and zoom/scalogram preview outlines through theme-aware values in [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:397).
+
+I also made scalogram windows follow the same theme, including their plot backgrounds and control styling, in [app/scalogram_viewer.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/scalogram_viewer.py:240). New scalogram windows open with the current theme, and open ones update when the toolbar theme changes in [app/main_window.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/main_window.py:586) and [app/main_window.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/main_window.py:2700).
+
+Verification: I syntax-checked the edited files with `ast.parse`. I could not do a runtime import or UI launch here because `pyqtgraph` is not installed in this environment.
+
+## User
+when i open a file the raw signal is not well aligned with the channel labels
+
+## Assistant
+I adjusted the viewer so each visible channel is centered on its display row before plotting, which should fix the label/trace misalignment you see right after opening a file. The change is in [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:488), where `_center_traces_for_display()` subtracts each channel’s per-window median for display only, and [app/plot.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/plot.py:498), where the centered traces are used for drawing.
+
+This is a display-only correction: it does not modify the underlying raw data, saved data, or referencing modes. I syntax-checked the file successfully, but I couldn’t run the full UI here because the environment is missing `pyqtgraph`.
+
+## User
+what are the two vertical red lines i m seeing
+
+## Assistant
+The most likely explanation is that they are interval-boundary markers: one line for the start time and one for the end time of an event/selection. In the expert event waveform view, the app explicitly draws two vertical markers at `start_s` and `end_s` in [app/expert_event_grid.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/expert_event_grid.py:178), inside `add_event_region(...)` in [app/expert_event_grid.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/expert_event_grid.py:156).
+
+Those lines are not part of the raw iEEG signal itself. They are overlay guides showing the selected event window. If you are seeing them in the expert-event waveform panel, that is exactly what they are. If you mean the main viewer instead, send me where you are seeing them and I’ll trace that overlay too, because the main viewer uses a movable cursor line and annotation/selection overlays, but not the same paired event markers.

@@ -10,6 +10,7 @@ from scipy import signal
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
+from app.display_theme import DisplayTheme, get_display_theme
 from app.range_slider import RangeSlider
 
 
@@ -56,10 +57,12 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         context: ScalogramContext,
         signal_uv: np.ndarray,
         relative_times_s: np.ndarray,
+        theme: str = "dark",
         parent: QtWidgets.QWidget | None = None,
     ):
         super().__init__(parent=parent)
         self._context = context
+        self._theme: DisplayTheme = get_display_theme(theme)
         self._signal_uv = np.asarray(signal_uv, dtype=float).reshape(-1)
         self._times_s = np.asarray(relative_times_s, dtype=float).reshape(-1)
         self._nyquist = max(0.0, float(context.sampling_rate) / 2.0)
@@ -83,6 +86,7 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         root.addWidget(self._build_raw_panel(), 1)
         root.addWidget(self._build_scalogram_panel(), 2)
 
+        self._apply_theme()
         self._plot_raw_signal()
         self._compute_scalogram()
         self._apply_frequency_filter()
@@ -129,7 +133,6 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QGroupBox("Raw Signal")
         layout = QtWidgets.QVBoxLayout(box)
         self.raw_plot = ResettablePlotWidget()
-        self.raw_plot.setBackground("k")
         self.raw_plot.showGrid(x=True, y=True, alpha=0.2)
         self.raw_plot.setLabel("left", "Amplitude", units="uV")
         self.raw_plot.setLabel("bottom", "Time", units="s")
@@ -140,7 +143,6 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         box = QtWidgets.QGroupBox("Scalogram")
         layout = QtWidgets.QVBoxLayout(box)
         self.scalogram_plot = ResettablePlotWidget()
-        self.scalogram_plot.setBackground("k")
         self.scalogram_plot.showGrid(x=True, y=True, alpha=0.15)
         self.scalogram_plot.setLabel("left", "Frequency", units="Hz")
         self.scalogram_plot.setLabel("bottom", "Time", units="s")
@@ -173,7 +175,7 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
 
     def _plot_raw_signal(self) -> None:
         self.raw_plot.clear()
-        pen = pg.mkPen((230, 230, 230), width=1.2)
+        pen = pg.mkPen(self._theme.raw_signal_color, width=1.2)
         self.raw_plot.plot(self._times_s, self._signal_uv, pen=pen)
 
         finite_signal = self._signal_uv[np.isfinite(self._signal_uv)]
@@ -234,6 +236,62 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
             self._freq_bins_hz = np.array([], dtype=float)
             self._power = np.empty((0, 0), dtype=float)
             self._scalogram_times_s = np.array([], dtype=float)
+
+    def set_display_theme(self, theme_key: str) -> None:
+        self._theme = get_display_theme(theme_key)
+        self._apply_theme()
+        self._plot_raw_signal()
+        self._apply_frequency_filter()
+
+    def _apply_theme(self) -> None:
+        self.setStyleSheet(
+            f"""
+            QMainWindow {{
+                background-color: {self._theme.window_background};
+            }}
+            QWidget {{
+                color: {self._theme.text_color};
+            }}
+            QGroupBox {{
+                background-color: {self._theme.panel_background};
+                border: 1px solid {self._theme.border_color};
+                border-radius: 4px;
+                margin-top: 10px;
+                padding-top: 8px;
+                font-weight: 600;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 4px 0 4px;
+            }}
+            QPushButton {{
+                background-color: {self._theme.button_background};
+                color: {self._theme.text_color};
+                border: 1px solid {self._theme.border_color};
+                padding: 4px 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {self._theme.button_hover_background};
+            }}
+            """
+        )
+        self.hover_label.setStyleSheet(f"color: {self._theme.secondary_text_color};")
+        self.raw_plot.setBackground(self._theme.viewer_background)
+        self.scalogram_plot.setBackground(self._theme.viewer_background)
+        self._apply_plot_theme(self.raw_plot.getPlotItem())
+        self._apply_plot_theme(self.scalogram_plot.getPlotItem())
+        self.color_bar.axis.setPen(pg.mkPen(self._theme.axis_color, width=1))
+        self.color_bar.axis.setTextPen(pg.mkPen(self._theme.axis_color, width=1))
+
+    def _apply_plot_theme(self, plot_item: pg.PlotItem) -> None:
+        axis_pen = pg.mkPen(self._theme.axis_color, width=1)
+        for axis_name in ("bottom", "left", "right", "top"):
+            axis = plot_item.getAxis(axis_name)
+            if axis is None:
+                continue
+            axis.setPen(axis_pen)
+            axis.setTextPen(axis_pen)
 
     def _update_frequency_label(self, f_min: float, f_max: float) -> None:
         self.freq_range_label.setText(f"Displayed range: {f_min:.1f} Hz - {f_max:.1f} Hz")

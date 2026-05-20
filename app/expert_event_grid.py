@@ -18,19 +18,18 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Any, Optional, Callable, List, cast
 
 import numpy as np
 import pyqtgraph as pg
+from scipy.signal import butter, sosfiltfilt
 
-from PySide6.QtCore import Qt, Signal, QSize
-from PySide6.QtGui import QFont, QColor, QPainter, QPen
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QLabel, QPushButton, QFrame, QScrollArea, QGraphicsView,
-    QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
-    QGraphicsLineItem, QDialog, QDialogButtonBox,
-    QFileDialog, QMessageBox
+    QLabel, QPushButton, QFrame, QScrollArea, QComboBox,
+    QDialog, QFileDialog, QMessageBox
 )
 
 # Review label colors
@@ -43,9 +42,66 @@ GRID_ROWS = 6
 GRID_COLS = 4
 GRID_TOTAL = GRID_ROWS * GRID_COLS
 
+# Candidate HFOs are easier to review in a fixed centered context window.
+EVENT_CONTEXT_WINDOW_SECONDS = 0.570
+
+EVENT_REGION_BRUSH = (185, 185, 185, 55)
+EVENT_MARKER_COLOR = (215, 215, 215, 190)
+NEUTRAL_WAVEFORM_DARK = "#f2f2f2"
+NEUTRAL_WAVEFORM_LIGHT = "#202020"
+
+DISPLAY_FILTERS: dict[str, tuple[float | None, float | None]] = {
+    "Default (unfiltered)": (None, None),
+    "HFO 80-500 Hz": (80.0, 500.0),
+    "Ripple 80-250 Hz": (80.0, 250.0),
+    "Fast ripple 250-500 Hz": (250.0, 500.0),
+}
+DEFAULT_DISPLAY_FILTER = "HFO 80-500 Hz"
+
 
 def _matches_edf_file(value: object, edf_file: str) -> bool:
-    return Path(str(value or "")).name == Path(str(edf_file)).name
+    value_keys = _edf_file_match_keys(value)
+    target_keys = _edf_file_match_keys(edf_file)
+    return bool(value_keys and target_keys and value_keys.intersection(target_keys))
+
+
+def _edf_file_match_keys(value: object) -> set[str]:
+    text = str(value or "").strip().strip("\"'")
+    if not text:
+        return set()
+
+    # Event tables may store a full path, a basename, or just the recording id
+    # without .edf/.bdf. Compare all stable forms case-insensitively.
+    normalized = text.replace("\\", "/")
+    name = Path(normalized).name
+    stem = Path(name).stem if "." in name else name
+    keys = {
+        normalized.casefold(),
+        name.casefold(),
+        stem.casefold(),
+    }
+    return {key for key in keys if key}
+
+
+def _event_edf_value(item: dict) -> object:
+    for key in (
+        "edf_file",
+        "edf_path",
+        "file",
+        "filename",
+        "recording",
+        "recording_file",
+        "raw_file",
+        "source_file",
+        "bids_file",
+        "bids_path",
+        "package_bids_edf_path",
+        "local_raw_edf_path",
+    ):
+        value = item.get(key)
+        if str(value or "").strip():
+            return value
+    return ""
 
 
 def _parse_bool(value: object) -> bool:
@@ -63,6 +119,184 @@ def _as_float(value: object, default: float = 0.0) -> float:
         return float(default)
 
 
+def get_event_context_window(
+    event: "ExpertEvent",
+    window_s: float = EVENT_CONTEXT_WINDOW_SECONDS,
+) -> tuple[float, float]:
+    center_s = (float(event.start) + float(event.end)) / 2.0
+    window_s = max(float(window_s), 1e-6)
+    half_window_s = window_s / 2.0
+    start_s = max(0.0, center_s - half_window_s)
+    end_s = start_s + window_s
+    return start_s, end_s
+
+
+def get_neutral_waveform_color(*, dark_mode: bool = True) -> str:
+    return NEUTRAL_WAVEFORM_DARK if dark_mode else NEUTRAL_WAVEFORM_LIGHT
+
+
+def waveform_y_bounds(waveform: np.ndarray) -> tuple[float, float]:
+    values = np.asarray(waveform, dtype=float).reshape(-1)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return -1.0, 1.0
+
+    y_min = float(np.min(values))
+    y_max = float(np.max(values))
+    span = y_max - y_min
+    if span <= 0.0:
+        pad = max(abs(y_min) * 0.1, 1e-12)
+    else:
+        pad = span * 0.08
+    return y_min - pad, y_max + pad
+
+
+def add_event_region(
+    plot_widget: pg.PlotWidget,
+    start_s: float,
+    end_s: float,
+    y_min: float,
+    y_max: float,
+) -> None:
+    if end_s <= start_s:
+        end_s = start_s + 1e-6
+    if y_max <= y_min:
+        y_max = y_min + 1e-12
+
+    # Gray marks the candidate interval without letting class color bias waveform review.
+    region = pg.BarGraphItem(
+        x0=[float(start_s)],
+        x1=[float(end_s)],
+        y0=[float(y_min)],
+        y1=[float(y_max)],
+        brush=pg.mkBrush(*EVENT_REGION_BRUSH),
+        pen=pg.mkPen(EVENT_MARKER_COLOR, width=1),
+    )
+    region.setZValue(-10)
+    plot_widget.addItem(region)
+
+    for x in (start_s, end_s):
+        marker = pg.PlotDataItem(
+            [float(x), float(x)],
+            [float(y_min), float(y_max)],
+            pen=pg.mkPen(EVENT_MARKER_COLOR, width=1),
+        )
+        marker.setZValue(10)
+        plot_widget.addItem(marker)
+
+
+def waveform_time_axis(waveform: np.ndarray, start_s: float, end_s: float) -> np.ndarray:
+    if end_s <= start_s:
+        end_s = start_s + 1e-6
+    return np.linspace(float(start_s), float(end_s), int(waveform.size), endpoint=False)
+
+
+def set_plot_x_range(plot_widget: pg.PlotWidget, start_s: float, end_s: float) -> None:
+    cast(Any, plot_widget).setXRange(float(start_s), float(end_s), 0)
+
+
+def set_plot_y_range(plot_widget: pg.PlotWidget, low: float, high: float) -> None:
+    cast(Any, plot_widget).setYRange(float(low), float(high), 0)
+
+
+def hide_plot_axes(plot_widget: pg.PlotWidget) -> None:
+    plot_item = cast(Any, plot_widget.getPlotItem())
+    for axis_name in ("bottom", "left", "right", "top"):
+        plot_item.hideAxis(axis_name)
+
+
+def disable_plot_mouse(plot_widget: pg.PlotWidget) -> None:
+    plot_item = cast(Any, plot_widget.getPlotItem())
+    plot_item.setMouseEnabled(x=False, y=False)
+
+
+def add_unavailable_label(plot_widget: pg.PlotWidget, text: str = "Waveform unavailable") -> None:
+    plot_widget.plot([0, 1], [0, 0], pen=pg.mkPen(color="#555555", width=1))
+    label = pg.TextItem(text=text, color="#aaaaaa", anchor=(0.5, 0.5))
+    label.setZValue(20)
+    plot_widget.addItem(label)
+    label.setPos(0.5, 0.0)
+    set_plot_x_range(plot_widget, 0, 1)
+    set_plot_y_range(plot_widget, -1, 1)
+
+
+def _valid_times_for_waveform(times: Optional[np.ndarray], waveform: np.ndarray) -> Optional[np.ndarray]:
+    if times is None:
+        return None
+    times = np.asarray(times, dtype=float).reshape(-1)
+    if times.size != waveform.size:
+        return None
+    return times
+
+
+def _sample_rate_from_times(times: np.ndarray) -> float | None:
+    if times.size < 2:
+        return None
+    diffs = np.diff(np.asarray(times, dtype=float))
+    diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+    if diffs.size == 0:
+        return None
+    median_dt = float(np.median(diffs))
+    if median_dt <= 0.0:
+        return None
+    return 1.0 / median_dt
+
+
+def _filtered_waveform_for_display(
+    waveform: np.ndarray,
+    times: np.ndarray,
+    band: tuple[float | None, float | None],
+) -> np.ndarray:
+    low_hz, high_hz = band
+    if low_hz is None and high_hz is None:
+        return waveform
+
+    sfreq = _sample_rate_from_times(times)
+    if sfreq is None:
+        return waveform
+
+    nyquist = 0.5 * sfreq
+    low = float(low_hz) if low_hz is not None and float(low_hz) > 0.0 else None
+    high = float(high_hz) if high_hz is not None and float(high_hz) > 0.0 else None
+    if high is not None:
+        high = min(high, nyquist * 0.98)
+    if low is not None and low >= nyquist * 0.98:
+        return waveform
+    if low is not None and high is not None and low >= high:
+        return waveform
+
+    if low is not None and high is not None:
+        wn: float | tuple[float, float] = (low / nyquist, high / nyquist)
+        btype = "bandpass"
+    elif low is not None:
+        wn = low / nyquist
+        btype = "highpass"
+    elif high is not None:
+        wn = high / nyquist
+        btype = "lowpass"
+    else:
+        return waveform
+
+    try:
+        sos = butter(4, wn, btype=btype, output="sos")
+        return np.asarray(sosfiltfilt(sos, waveform), dtype=float)
+    except ValueError:
+        return waveform
+
+
+WIDE_CONTEXT_SECONDS = 1.0
+
+
+def get_event_wide_context_window(
+    event: ExpertEvent,
+    context_seconds: float = WIDE_CONTEXT_SECONDS,
+) -> tuple[float, float]:
+    """Return a wider time window centered on the event for raw-channel context."""
+    center = (event.start + event.end) / 2.0
+    half_window = context_seconds / 2.0
+    return max(0.0, center - half_window), center + half_window
+
+
 @dataclass
 class ExpertEvent:
     """
@@ -77,6 +311,9 @@ class ExpertEvent:
         artifact: True if accepted as HFO, False if rejected as artifact
         spike: True if the accepted HFO is spike-associated
         waveform: Optional waveform data array
+        waveform_start: Absolute start time for waveform, if known
+        waveform_end: Absolute end time for waveform, if known
+        waveform_times: Exact sample times for waveform, when callback provides them
     """
     edf_file: str
     channel: str
@@ -86,6 +323,18 @@ class ExpertEvent:
     artifact: bool = False
     spike: bool = False
     waveform: Optional[np.ndarray] = None
+    waveform_start: float | None = None
+    waveform_end: float | None = None
+    waveform_times: Optional[np.ndarray] = None
+    waveform_unavailable: bool = False
+    wide_waveform: Optional[np.ndarray] = None
+    wide_waveform_start: Optional[float] = None
+    wide_waveform_end: Optional[float] = None
+    wide_waveform_times: Optional[np.ndarray] = None
+    wide_waveform_unavailable: bool = False
+
+
+
     
     @property
     def duration(self) -> float:
@@ -163,8 +412,9 @@ def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List
                 except (json.JSONDecodeError, TypeError):
                     pass
             
+            row_edf_file = _event_edf_value(item)
             parsed_event = ExpertEvent(
-                edf_file=item.get('edf_file', edf_file or ""),
+                edf_file=str(row_edf_file or edf_file or ""),
                 channel=channel,
                 start=_as_float(start),
                 end=_as_float(end),
@@ -174,7 +424,7 @@ def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List
                 waveform=waveform
             )
             fallback_events.append(parsed_event)
-            if edf_file is None or _matches_edf_file(item.get('edf_file'), edf_file):
+            if edf_file is None or _matches_edf_file(row_edf_file, edf_file):
                 events.append(parsed_event)
     else:
         # CSV format
@@ -198,8 +448,9 @@ def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List
                     except (json.JSONDecodeError, TypeError):
                         pass
                 
+                row_edf_file = _event_edf_value(row)
                 parsed_event = ExpertEvent(
-                    edf_file=row.get('edf_file', edf_file or ""),
+                    edf_file=str(row_edf_file or edf_file or ""),
                     channel=channel,
                     start=_as_float(start),
                     end=_as_float(end),
@@ -209,7 +460,7 @@ def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List
                     waveform=waveform
                 )
                 fallback_events.append(parsed_event)
-                if edf_file is None or _matches_edf_file(row.get('edf_file'), edf_file):
+                if edf_file is None or _matches_edf_file(row_edf_file, edf_file):
                     events.append(parsed_event)
 
     if not events and fallback_events:
@@ -234,20 +485,21 @@ class EventCellWidget(QFrame):
         self._setup_ui()
     
     def _setup_ui(self):
+        self.setObjectName("eventCell")
         self.setFrameStyle(QFrame.Shape.Box | QFrame.Shadow.Raised)
         self.setLineWidth(1)
         self.setMinimumSize(200, 150)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         
-        # Set border color based on review label
+        # Class color is reserved for the card border and badge outline.
         color = self._event.review_color
         self.setStyleSheet(f"""
-            QFrame {{
+            QFrame#eventCell {{
                 border: 2px solid rgb({color.red()}, {color.green()}, {color.blue()});
                 border-radius: 4px;
                 background-color: #1e1e1e;
             }}
-            QFrame:hover {{
+            QFrame#eventCell:hover {{
                 border: 2px solid white;
             }}
         """)
@@ -260,6 +512,7 @@ class EventCellWidget(QFrame):
         info_label = QLabel(f"{self._event.channel} | {self._event.detector}")
         info_label.setStyleSheet("color: #dddddd; font-size: 10px; font-weight: bold;")
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._forward_clicks_from(info_label)
         layout.addWidget(info_label)
         
         # Waveform plot
@@ -268,20 +521,31 @@ class EventCellWidget(QFrame):
         self._waveform_plot.setMinimumHeight(60)
         self._waveform_plot.setMaximumHeight(80)
         
-        # Hide axes
-        plot_item = self._waveform_plot.getPlotItem()
-        for ax in ("bottom", "left", "right", "top"):
-            plot_item.hideAxis(ax)
-        
-        plot_item.setMouseEnabled(x=False, y=False)
+        hide_plot_axes(self._waveform_plot)
+        disable_plot_mouse(self._waveform_plot)
+        self._forward_clicks_from(self._waveform_plot)
+        if hasattr(self._waveform_plot, "viewport"):
+            self._forward_clicks_from(self._waveform_plot.viewport())
         
         # Plot waveform if available, otherwise show placeholder
         if self._event.waveform is not None and len(self._event.waveform) > 0:
-            pen = pg.mkPen(color=color, width=1)
-            self._waveform_plot.plot(self._event.waveform, pen=pen)
+            waveform = np.asarray(self._event.waveform, dtype=float).reshape(-1)
+            start_s = float(self._event.waveform_start if self._event.waveform_start is not None else self._event.start)
+            end_s = float(self._event.waveform_end if self._event.waveform_end is not None else self._event.end)
+            times = _valid_times_for_waveform(self._event.waveform_times, waveform)
+            if times is None:
+                times = waveform_time_axis(waveform, start_s, end_s)
+            plot_start_s, plot_end_s = get_event_context_window(self._event)
+            y_min, y_max = waveform_y_bounds(waveform)
+            add_event_region(self._waveform_plot, self._event.start, self._event.end, y_min, y_max)
+            self._waveform_plot.plot(
+                times,
+                waveform,
+                pen=pg.mkPen(color=get_neutral_waveform_color(dark_mode=True), width=1),
+            )
+            set_plot_x_range(self._waveform_plot, plot_start_s, plot_end_s)
         else:
-            # Show a flat line as placeholder
-            self._waveform_plot.plot([0, 1], [0, 0], pen=pg.mkPen(color='#666666', width=1))
+            add_unavailable_label(self._waveform_plot)
         
         layout.addWidget(self._waveform_plot)
         
@@ -289,28 +553,36 @@ class EventCellWidget(QFrame):
         time_label = QLabel(f"{self._event.start:.3f}s - {self._event.end:.3f}s")
         time_label.setStyleSheet("color: #aaaaaa; font-size: 9px;")
         time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._forward_clicks_from(time_label)
         layout.addWidget(time_label)
-        
-        # Duration bar
-        duration_bar = QFrame()
-        duration_bar.setFixedHeight(8)
-        duration_bar.setStyleSheet(f"""
-            QFrame {{
-                background-color: rgb({color.red()}, {color.green()}, {color.blue()});
-                border-radius: 4px;
-            }}
-        """)
-        layout.addWidget(duration_bar)
         
         # Review label
         review_label = QLabel(self._event.review_label)
         review_label.setStyleSheet(f"""
-            color: rgb({color.red()}, {color.green()}, {color.blue()});
+            color: #f5f5f5;
             font-size: 9px;
             font-weight: bold;
+            border: 1px solid rgb({color.red()}, {color.green()}, {color.blue()});
+            border-radius: 3px;
+            padding: 2px 4px;
+            background-color: transparent;
         """)
         review_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._forward_clicks_from(review_label)
         layout.addWidget(review_label)
+
+    def _forward_clicks_from(self, widget: QWidget) -> None:
+        widget.setCursor(Qt.CursorShape.PointingHandCursor)
+        widget.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if (
+            event.type() == QEvent.Type.MouseButtonPress
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self.clicked.emit(self._event)
+            return True
+        return super().eventFilter(watched, event)
     
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -348,31 +620,41 @@ class ZoomedEventView(QWidget):
         self._header.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
         self._header.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._header)
+
+        self._review_badge = QLabel()
+        self._review_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self._review_badge)
         
         # Time info
         self._time_info = QLabel()
         self._time_info.setStyleSheet("color: #aaaaaa; font-size: 12px;")
         self._time_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._time_info)
-        
-        # Large waveform plot
-        self._waveform_plot = pg.PlotWidget()
-        self._waveform_plot.setBackground("#2b2b2b")
-        self._waveform_plot.setMinimumHeight(300)
-        
-        # Show axes
-        self._waveform_plot.showGrid(x=True, y=True, alpha=0.3)
-        
-        layout.addWidget(self._waveform_plot)
-        self._refresh_event()
-        
-        # Instructions
-        instructions = QLabel("Press 'n' for next, 'b' for previous, or click to return to grid")
-        instructions.setStyleSheet("color: #888888; font-size: 11px;")
-        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(instructions)
-        
-        # Back button
+
+        filter_row = QHBoxLayout()
+        filter_row.addStretch()
+        filter_label = QLabel("Display band:")
+        filter_label.setStyleSheet("color: #dddddd; font-size: 12px;")
+        filter_row.addWidget(filter_label)
+
+        self._display_filter = QComboBox()
+        self._display_filter.addItems(list(DISPLAY_FILTERS.keys()))
+        self._display_filter.setCurrentText(DEFAULT_DISPLAY_FILTER)
+        self._display_filter.setStyleSheet("""
+            QComboBox {
+                background-color: #3a3a3a;
+                color: #ffffff;
+                border: 1px solid #666666;
+                border-radius: 4px;
+                padding: 4px 8px;
+                min-width: 150px;
+            }
+            QComboBox:hover { border-color: #888888; }
+        """)
+        self._display_filter.currentTextChanged.connect(lambda _text: self._refresh_event())
+        filter_row.addWidget(self._display_filter)
+        filter_row.addStretch()
+
         self._back_btn = QPushButton("Back to Grid")
         self._back_btn.setStyleSheet("""
             QPushButton {
@@ -388,7 +670,26 @@ class ZoomedEventView(QWidget):
             }
         """)
         self._back_btn.clicked.connect(self.backClicked.emit)
-        layout.addWidget(self._back_btn)
+        filter_row.addWidget(self._back_btn)
+        layout.addLayout(filter_row)
+        
+        # Large waveform plot
+        self._waveform_plot = pg.PlotWidget()
+        self._waveform_plot.setBackground("#2b2b2b")
+        self._waveform_plot.setMinimumHeight(400)
+        
+        # Show axes
+        self._waveform_plot.showGrid(x=True, y=True, alpha=0.3)
+        
+        layout.addWidget(self._waveform_plot, 1)
+
+        self._refresh_event()
+        
+        # Instructions
+        instructions = QLabel("Press 'n' for next, 'b' for previous, or Esc/Return to go back")
+        instructions.setStyleSheet("color: #888888; font-size: 11px;")
+        instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(instructions)
     
     def set_event(self, event: ExpertEvent):
         """Update the displayed event."""
@@ -398,17 +699,27 @@ class ZoomedEventView(QWidget):
     def _refresh_event(self):
         self._header.setText(
             f"Channel: {self._event.channel} | "
-            f"Detector: {self._event.detector} | "
-            f"Review: {self._event.review_label}"
+            f"Detector: {self._event.detector}"
         )
+        color = self._event.review_color
+        self._review_badge.setText(self._event.review_label)
+        self._review_badge.setStyleSheet(f"""
+            color: #ffffff;
+            font-size: 12px;
+            font-weight: bold;
+            border: 1px solid rgb({color.red()}, {color.green()}, {color.blue()});
+            border-radius: 4px;
+            padding: 3px 8px;
+            background-color: transparent;
+        """)
         self._time_info.setText(
             f"Start: {self._event.start:.6f}s | "
             f"End: {self._event.end:.6f}s | "
-            f"Duration: {self._event.duration*1000:.2f}ms"
+            f"Duration: {self._event.duration*1000:.2f}ms | "
+            f"Window: {EVENT_CONTEXT_WINDOW_SECONDS * 1000:.0f}ms centered"
         )
 
         self._waveform_plot.clear()
-        color = self._event.review_color
         start_s = float(self._event.start)
         end_s = float(self._event.end)
         if end_s <= start_s:
@@ -416,14 +727,32 @@ class ZoomedEventView(QWidget):
 
         if self._event.waveform is not None and len(self._event.waveform) > 0:
             waveform = np.asarray(self._event.waveform, dtype=float).reshape(-1)
-            times = np.linspace(start_s, end_s, waveform.size)
-            self._waveform_plot.plot(times, waveform, pen=pg.mkPen(color=color, width=2))
+            waveform_start = float(self._event.waveform_start if self._event.waveform_start is not None else start_s)
+            waveform_end = float(self._event.waveform_end if self._event.waveform_end is not None else end_s)
+            times = _valid_times_for_waveform(self._event.waveform_times, waveform)
+            if times is None:
+                times = waveform_time_axis(waveform, waveform_start, waveform_end)
+            band_name = str(self._display_filter.currentText())
+            display_waveform = _filtered_waveform_for_display(
+                waveform,
+                times,
+                DISPLAY_FILTERS.get(band_name, DISPLAY_FILTERS["Default (unfiltered)"]),
+            )
+            plot_start_s, plot_end_s = get_event_context_window(self._event)
+            y_min, y_max = waveform_y_bounds(display_waveform)
+            add_event_region(self._waveform_plot, start_s, end_s, y_min, y_max)
+            self._waveform_plot.plot(
+                times,
+                display_waveform,
+                pen=pg.mkPen(color=get_neutral_waveform_color(dark_mode=True), width=2),
+            )
+            set_plot_x_range(self._waveform_plot, plot_start_s, plot_end_s)
         else:
-            self._waveform_plot.plot([start_s, end_s], [0, 0], pen=pg.mkPen(color='#666666', width=1))
+            add_unavailable_label(self._waveform_plot)
 
-        self._waveform_plot.setXRange(start_s, end_s, padding=0)
         self._waveform_plot.setLabel("bottom", "Time", units="s")
-    
+        self._waveform_plot.setLabel("left", "Amplitude", units="V")
+
     def keyPressEvent(self, event):
         key = event.key()
         if key == Qt.Key.Key_N:
@@ -558,10 +887,15 @@ class ExpertEventGrid(QWidget):
         self._update_navigation()
     
     def _create_legend_item(self, text: str, color: QColor) -> QLabel:
-        label = QLabel(f"* {text}")
+        label = QLabel(text)
         label.setStyleSheet(f"""
-            color: rgb({color.red()}, {color.green()}, {color.blue()});
+            color: #dddddd;
             font-size: 11px;
+            font-weight: bold;
+            border: 1px solid rgb({color.red()}, {color.green()}, {color.blue()});
+            border-radius: 3px;
+            padding: 2px 6px;
+            background-color: transparent;
         """)
         return label
     
@@ -614,34 +948,120 @@ class ExpertEventGrid(QWidget):
         Set a callback function to fetch waveform data from raw.
         
         The callback should accept (channel_name, start_time, end_time)
-        and return a numpy array of waveform samples.
+        and return either waveform samples or (waveform_samples, sample_times).
         """
         self._get_waveform_callback = callback
-    
-    def _get_waveform(self, event: ExpertEvent) -> Optional[np.ndarray]:
-        """Get waveform for an event, either from stored data or via callback."""
-        if event.waveform is not None:
-            return event.waveform
-        
+
+    def _coerce_waveform_result(self, result) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        if result is None:
+            return None, None
+
+        times = None
+        waveform = result
+        if isinstance(result, dict):
+            waveform = result.get("waveform", result.get("data"))
+            times = result.get("times")
+        elif isinstance(result, tuple) and len(result) == 2:
+            waveform, times = result
+
+        if waveform is None:
+            return None, None
+
+        waveform = np.asarray(waveform, dtype=float).reshape(-1)
+        if waveform.size == 0:
+            return None, None
+
+        return waveform, _valid_times_for_waveform(times, waveform)
+
+    def _fetch_waveform_window(
+        self,
+        event: ExpertEvent,
+        start_s: float,
+        end_s: float,
+    ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         if self._get_waveform_callback and self._raw is not None:
             try:
-                return self._get_waveform_callback(
-                    event.channel,
-                    event.start,
-                    event.end
-                )
+                result = self._get_waveform_callback(event.channel, start_s, end_s)
+                return self._coerce_waveform_result(result)
             except Exception:
                 pass
-        
-        return None
+
+        return None, None
+
+    def _has_waveform_covering(
+        self,
+        waveform: Optional[np.ndarray],
+        waveform_start: float | None,
+        waveform_end: float | None,
+        start_s: float,
+        end_s: float,
+    ) -> bool:
+        if waveform is None or len(waveform) == 0:
+            return False
+        if waveform_start is None or waveform_end is None:
+            return False
+        eps = 1e-9
+        return float(waveform_start) <= float(start_s) + eps and float(waveform_end) >= float(end_s) - eps
+
+    def _ensure_event_waveform(self, event: ExpertEvent, *, include_wide: bool = False) -> None:
+        """Populate waveform fields using context-aware callback requests."""
+        context_start, context_end = get_event_context_window(event)
+
+        if event.waveform is not None and event.waveform_start is None:
+            event.waveform = np.asarray(event.waveform, dtype=float).reshape(-1)
+            event.waveform_start = float(event.start)
+            event.waveform_end = float(event.end)
+            event.waveform_times = None
+
+        if not self._has_waveform_covering(
+            event.waveform,
+            event.waveform_start,
+            event.waveform_end,
+            context_start,
+            context_end,
+        ) and not event.waveform_unavailable:
+            # Prefer raw callback data because CSV waveforms are usually event-only snippets.
+            waveform, times = self._fetch_waveform_window(event, context_start, context_end)
+            if waveform is not None:
+                event.waveform = waveform
+                event.waveform_start = context_start
+                event.waveform_end = context_end
+                event.waveform_times = times
+            else:
+                event.waveform_unavailable = True
+
+        if not include_wide:
+            return
+
+        wide_start, wide_end = get_event_wide_context_window(event)
+        if self._has_waveform_covering(
+            event.wide_waveform,
+            event.wide_waveform_start,
+            event.wide_waveform_end,
+            wide_start,
+            wide_end,
+        ) or event.wide_waveform_unavailable:
+            return
+
+        wide_waveform, wide_times = self._fetch_waveform_window(event, wide_start, wide_end)
+        if wide_waveform is not None:
+            event.wide_waveform = wide_waveform
+            event.wide_waveform_start = wide_start
+            event.wide_waveform_end = wide_end
+            event.wide_waveform_times = wide_times
+        else:
+            event.wide_waveform_unavailable = True
     
     def _update_grid(self):
         """Update the grid display with events for the current page."""
         # Clear existing cells
         while self._grid_layout.count():
             item = self._grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         
         # Get events for this page
         start_idx = self._current_page * GRID_TOTAL
@@ -652,8 +1072,7 @@ class ExpertEventGrid(QWidget):
         for i, event in enumerate(page_events):
             row = i // GRID_COLS
             col = i % GRID_COLS
-            if event.waveform is None:
-                event.waveform = self._get_waveform(event)
+            self._ensure_event_waveform(event, include_wide=False)
             
             cell = EventCellWidget(event)
             cell.clicked.connect(self._on_event_clicked)
@@ -682,6 +1101,7 @@ class ExpertEventGrid(QWidget):
     def _show_zoomed_view(self, event: ExpertEvent):
         """Show the zoomed view for a single event."""
         self._is_zoomed = True
+        self._ensure_event_waveform(event, include_wide=False)
         
         # Hide grid, show zoomed view
         self._grid_scroll.setVisible(False)

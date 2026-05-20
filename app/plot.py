@@ -15,6 +15,7 @@ from app.annotations import (
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
     ANNOTATION_TYPES,
 )
+from app.display_theme import DisplayTheme, get_display_theme
 from app.referencing import BipolarMontage, BipolarPair
 
 class AnnotationRect(QtWidgets.QGraphicsRectItem):
@@ -172,8 +173,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._label_vb.setXRange(0.0, 100.0, padding=0)
         self._label_vb.enableAutoRange(axis=pg.ViewBox.XAxis, enable=False)
 
-        self.signal_plot.showGrid(x=True, y=True, alpha=0.15)
-
         # Scene mouse click -> channel selection
         scene = cast(GraphicsScene, self.scene())
         scene.sigMouseClicked.connect(self._on_mouse_clicked)
@@ -189,12 +188,15 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hidden_channels: set[str] = set()
         self._bad_channels: set[str] = set()
 
+        # display theme
+        self._theme: DisplayTheme = get_display_theme("dark")
+
         # colors of micro channel
         self._channel_groups: dict[str, str] = {}
-        self._micro_trace_color = (79, 195, 247)   # cyan / light blue
-        self._micro_label_color = (79, 195, 247)
-        self._macro_trace_color = (255, 255, 255)
-        self._macro_label_color = (180, 180, 180)
+        self._micro_trace_color = self._theme.micro_trace_color
+        self._micro_label_color = self._theme.micro_label_color
+        self._macro_trace_color = self._theme.macro_trace_color
+        self._macro_label_color = self._theme.macro_label_color
 
         # row->channel mapping for the last render (needed for right-click)
         self._last_visible_ch_indices: list[int] = []
@@ -239,6 +241,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._scalogram_drag_abs: int | None = None
         self._scalogram_preview: QtWidgets.QGraphicsRectItem | None = None
         self._min_scalogram_duration_s: float = 0.05
+
+        self.set_display_theme("dark")
 
     def reset_empty(self) -> None:
         """Reset viewer to an empty state."""
@@ -390,6 +394,30 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def time_start(self) -> float:
         return float(self._t_start)
 
+    def set_display_theme(self, theme_key: str) -> None:
+        self._theme = get_display_theme(theme_key)
+        self._micro_trace_color = self._theme.micro_trace_color
+        self._micro_label_color = self._theme.micro_label_color
+        self._macro_trace_color = self._theme.macro_trace_color
+        self._macro_label_color = self._theme.macro_label_color
+        self.setBackground(self._theme.viewer_background)
+        self._apply_plot_theme(self.signal_plot)
+        self._apply_plot_theme(self.label_plot)
+        self.signal_plot.showGrid(x=True, y=True, alpha=0.15)
+        self.render()
+
+    def display_theme(self) -> str:
+        return self._theme.key
+
+    def _apply_plot_theme(self, plot_item: pg.PlotItem) -> None:
+        axis_pen = pg.mkPen(self._theme.axis_color, width=1)
+        for axis_name in ("bottom", "left", "right", "top"):
+            axis = plot_item.getAxis(axis_name)
+            if axis is None:
+                continue
+            axis.setPen(axis_pen)
+            axis.setTextPen(axis_pen)
+
     def channel_start(self) -> int:
         return int(self._ch_start)
 
@@ -456,13 +484,24 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 self.signal_plot.addItem(item)
         except Exception:
             pass
+
+    def _center_traces_for_display(self, seg_ds_uv: np.ndarray) -> np.ndarray:
+        """Center each visible channel on its display row without changing source data."""
+        arr = np.asarray(seg_ds_uv, dtype=float)
+        if arr.ndim != 2 or arr.size == 0:
+            return arr
+
+        centers = np.nanmedian(arr, axis=1, keepdims=True)
+        centers = np.where(np.isfinite(centers), centers, 0.0)
+        return arr - centers
     
     def _draw_traces(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, visible_abs: list[int]):
         correction_factor = 0.01
         gain_factor = 1.0 / max(1e-9, (self._gain_uv * correction_factor))
         display_names = self.get_channel_names()
+        centered_seg_ds_uv = self._center_traces_for_display(seg_ds_uv)
 
-        n_vis = min(seg_ds_uv.shape[0], len(visible_abs))
+        n_vis = min(centered_seg_ds_uv.shape[0], len(visible_abs))
         for row in range(n_vis):
             abs_idx = visible_abs[row]
             ch_name = display_names[abs_idx] if abs_idx < len(display_names) else str(abs_idx)
@@ -476,7 +515,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 pen = pg.mkPen(self._macro_trace_color, width=1)
 
             plot_row = (n_vis - 1 - row)
-            y = (seg_ds_uv[row] * gain_factor) + plot_row * self._spacing
+            y = (centered_seg_ds_uv[row] * gain_factor) + plot_row * self._spacing
 
             curve = self.signal_plot.plot(t_ds, y, pen=pen)
             self._curves.append(curve)
@@ -581,6 +620,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         for x in xs:
             ln = pg.InfiniteLine(pos=float(x), angle=90, movable=False)
             ln.setZValue(-10)
+            ln.setPen(pg.mkPen(self._theme.time_grid_color, width=1))
             self.signal_plot.addItem(ln)
             self._time_lines.append(ln)
 
@@ -593,6 +633,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._cursor_line = pg.InfiniteLine(angle=90, movable=True)
         self._cursor_line.setPos(self._cursor_x)
+        self._cursor_line.setPen(pg.mkPen(self._theme.cursor_color, width=1))
         self.signal_plot.addItem(self._cursor_line)
 
         self._cursor_line.sigPositionChanged.connect(self._on_cursor_moved)
@@ -610,7 +651,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             txt = pg.TextItem(
                 text=f"+/-{self._gain_uv:.0f} uV",
                 anchor=(0.5, 0.5),
-                color=(160, 160, 160),
+                color=self._theme.minmax_text_color,
             )
             txt.setPos(x_left, y_center)
             self.signal_plot.addItem(txt)
@@ -984,7 +1025,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             group = self.get_channel_group(ch_name)
 
             if abs_idx in self._selected_abs_set:
-                self._labels[row].setColor((255, 255, 0))
+                self._labels[row].setColor(self._theme.selected_label_color)
             else:
                 base_color = (
                     self._micro_label_color
@@ -1609,7 +1650,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         # Note label (displayed next to annotation)
         label_txt = a.note if a.note else ""
-        txt_item = pg.TextItem(text=label_txt, color=(255, 255, 255), anchor=(0, 1))
+        txt_item = pg.TextItem(
+            text=label_txt,
+            color=self._theme.annotation_text_color,
+            anchor=(0, 1),
+        )
         txt_item.setZValue(-4)
         self.signal_plot.addItem(txt_item)
         self._anno_labels[a.id] = txt_item
@@ -1864,7 +1909,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._scalogram_preview is None:
             rect = QtWidgets.QGraphicsRectItem()
-            rect.setPen(pg.mkPen((255, 255, 255), width=2))
+            rect.setPen(pg.mkPen(self._theme.preview_outline_color, width=2))
             rect.setBrush(pg.mkBrush(0, 0, 0, 0))
             rect.setZValue(25)
             self.signal_plot.addItem(rect)
@@ -1900,7 +1945,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._zoom_preview is None:
             rect = QtWidgets.QGraphicsRectItem()
-            rect.setPen(pg.mkPen((255, 255, 255), width=2))
+            rect.setPen(pg.mkPen(self._theme.preview_outline_color, width=2))
             rect.setBrush(pg.mkBrush(0, 0, 0, 0))
             rect.setZValue(20)
             self.signal_plot.addItem(rect)
