@@ -10,7 +10,7 @@ from scipy import signal
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
-from app.display_theme import DisplayTheme, get_display_theme
+from app.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
 from app.range_slider import RangeSlider
 
 
@@ -57,7 +57,7 @@ class ScalogramViewerWindow(QtWidgets.QMainWindow):
         context: ScalogramContext,
         signal_uv: np.ndarray,
         relative_times_s: np.ndarray,
-        theme: str = "dark",
+        theme: str = DEFAULT_DISPLAY_THEME,
         parent: QtWidgets.QWidget | None = None,
     ):
         super().__init__(parent=parent)

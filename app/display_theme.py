@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+DEFAULT_DISPLAY_THEME = "light"
+
 
 @dataclass(frozen=True, slots=True)
 class DisplayTheme:
@@ -84,10 +86,10 @@ DISPLAY_THEMES: dict[str, DisplayTheme] = {
 }
 
 DISPLAY_THEME_CHOICES: tuple[tuple[str, str], ...] = (
-    ("Dark", "dark"),
     ("Light", "light"),
+    ("Dark", "dark"),
 )
 
 
 def get_display_theme(theme_key: str) -> DisplayTheme:
-    return DISPLAY_THEMES.get(str(theme_key).strip().lower(), DISPLAY_THEMES["dark"])
+    return DISPLAY_THEMES.get(str(theme_key).strip().lower(), DISPLAY_THEMES[DEFAULT_DISPLAY_THEME])

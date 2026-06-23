@@ -227,11 +227,17 @@ class PSDPanel(QWidget):
             top.addWidget(right_box, 1)
 
             plot = ResettablePlotWidget()
+            plot.setBackground("#ffffff")
             plot.showGrid(x=True, y=True, alpha=0.2)
             plot.setLabel("bottom", "Frequency (Hz)")
             plot.setLabel("left", "Power Spectral Density (dB/Hz)")
             plot.setMenuEnabled(False)
             plot.getViewBox().setMouseEnabled(x=True, y=True)
+            for axis_name in ("bottom", "left", "right", "top"):
+                axis = plot.getPlotItem().getAxis(axis_name)
+                if axis is not None:
+                    axis.setPen(pg.mkPen((60, 60, 60), width=1))
+                    axis.setTextPen(pg.mkPen((60, 60, 60), width=1))
 
             box_layout.addLayout(top, 1)
             box_layout.addWidget(plot, 2)
@@ -591,11 +597,11 @@ class PSDPanel(QWidget):
             if is_selected and is_bad:
                 curve.setPen(pg.mkPen("r", width=3))
             elif is_selected:
-                curve.setPen(pg.mkPen("y", width=3))
+                curve.setPen(pg.mkPen((176, 95, 0), width=3))
             elif is_bad:
                 curve.setPen(pg.mkPen("r", width=1))
             else:
-                curve.setPen(pg.mkPen(width=1))
+                curve.setPen(pg.mkPen((32, 32, 32), width=1))
 
         for widget in self._current_lists(group):
             for i in range(widget.count()):
@@ -609,7 +615,7 @@ class PSDPanel(QWidget):
                 if ch_name in self._bad_names:
                     item.setForeground(QColor("red"))
                 else:
-                    item.setForeground(QColor("white"))
+                    item.setForeground(QColor("#222222"))
 
     def _sync_selection_to_lists(self) -> None:
         for group in self.GROUPS:

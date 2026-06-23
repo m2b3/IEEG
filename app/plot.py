@@ -15,7 +15,7 @@ from app.annotations import (
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
     ANNOTATION_TYPES,
 )
-from app.display_theme import DisplayTheme, get_display_theme
+from app.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
 from app.referencing import BipolarMontage, BipolarPair
 
 class AnnotationRect(QtWidgets.QGraphicsRectItem):
@@ -87,6 +87,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     requestEditAnnotation = Signal(str)  # anno_id
     annotationSelected = QtCore.Signal(str)  # emitted when user clicks an annotation in the plot
     requestOpenAnnotationsPanel = Signal()
+    requestEditChannelGroups = Signal()
     #  Saving data
     hiddenChannelsChanged = Signal()
     badChannelsChanged = Signal()
@@ -120,7 +121,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         # Vertical stacking
         self._spacing: float = 200.0  # y spacing in "display units"
-        self._vertical_margin_factor: float = 0.75
+        self._vertical_margin_factor: float = 1.10
+        self._vertical_view_margin_fraction: float = 0.12
+        self._fit_visible_traces: bool = False
 
         # ---- Render caches ----
         self._visible_abs: np.ndarray = np.array([], dtype=int)  # abs indices in displayed channel list
@@ -189,7 +192,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._bad_channels: set[str] = set()
 
         # display theme
-        self._theme: DisplayTheme = get_display_theme("dark")
+        self._theme: DisplayTheme = get_display_theme(DEFAULT_DISPLAY_THEME)
 
         # colors of micro channel
         self._channel_groups: dict[str, str] = {}
@@ -217,7 +220,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._anno_drag_active: bool = False
         self._anno_drag_start_t: float | None = None
         self._anno_drag_y: float | None = None
-        self._anno_preview: pg.RectROI | None = None
+        self._anno_preview: QtWidgets.QGraphicsRectItem | None = None
 
         #  Montage 
         self._cached_bipolar_data_key = None
@@ -242,7 +245,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._scalogram_preview: QtWidgets.QGraphicsRectItem | None = None
         self._min_scalogram_duration_s: float = 0.05
 
-        self.set_display_theme("dark")
+        self.set_display_theme(DEFAULT_DISPLAY_THEME)
 
     def reset_empty(self) -> None:
         """Reset viewer to an empty state."""
@@ -391,6 +394,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self.render()
 
+    def set_fit_visible_traces(self, enabled: bool) -> None:
+        self._fit_visible_traces = bool(enabled)
+        self.render()
+
     def time_start(self) -> float:
         return float(self._t_start)
 
@@ -458,7 +465,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_labels(n_vis)
         self._draw_annotations(n_vis)
 
-        self._set_ranges(t_ds, n_vis)
+        self._set_ranges(t_ds, n_vis, seg_ds_uv)
         self._draw_time_lines(t_ds)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
@@ -494,10 +501,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         centers = np.nanmedian(arr, axis=1, keepdims=True)
         centers = np.where(np.isfinite(centers), centers, 0.0)
         return arr - centers
+
+    def _display_gain_factor(self) -> float:
+        correction_factor = 0.01
+        return 1.0 / max(1e-9, (self._gain_uv * correction_factor))
     
     def _draw_traces(self, seg_ds_uv: np.ndarray, t_ds: np.ndarray, visible_abs: list[int]):
-        correction_factor = 0.01
-        gain_factor = 1.0 / max(1e-9, (self._gain_uv * correction_factor))
+        gain_factor = self._display_gain_factor()
         display_names = self.get_channel_names()
         centered_seg_ds_uv = self._center_traces_for_display(seg_ds_uv)
 
@@ -594,10 +604,32 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(rect)
             self._annotation_items.append(rect)
                             
-    def _set_ranges(self, t_ds: np.ndarray, n_vis: int):
-        ypad = float(self._vertical_margin_factor) * float(self._spacing)
+    def _set_ranges(self, t_ds: np.ndarray, n_vis: int, seg_ds_uv: np.ndarray | None = None):
+        spacing = float(self._spacing)
+        data_height = max(spacing, float(max(0, n_vis - 1)) * spacing)
+        ypad = max(
+            float(self._vertical_margin_factor) * spacing,
+            float(self._vertical_view_margin_fraction) * data_height,
+        )
         y0 = -ypad
-        y1 = (n_vis - 1) * float(self._spacing) + ypad
+        y1 = (n_vis - 1) * spacing + ypad
+
+        trace_margin = 0.20 * spacing
+        if self._fit_visible_traces and seg_ds_uv is not None:
+            centered = self._center_traces_for_display(seg_ds_uv)
+            if centered.ndim == 2 and centered.shape[0] > 0 and centered.shape[1] > 0:
+                n_rows = min(int(n_vis), int(centered.shape[0]))
+                displayed_rows: list[np.ndarray] = []
+                gain_factor = self._display_gain_factor()
+                for row in range(n_rows):
+                    plot_row = n_vis - 1 - row
+                    displayed_rows.append(centered[row] * gain_factor + plot_row * spacing)
+
+                displayed_y = np.concatenate(displayed_rows) if displayed_rows else np.asarray([])
+                finite_y = displayed_y[np.isfinite(displayed_y)]
+                if finite_y.size:
+                    y0 = min(y0, float(np.nanmin(finite_y)) - trace_margin)
+                    y1 = max(y1, float(np.nanmax(finite_y)) + trace_margin)
 
         t0 = float(t_ds[0])
         t1 = float(t_ds[-1])
@@ -727,6 +759,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         return usable
 
+    def _read_raw_segment(
+        self,
+        raw: BaseRaw,
+        picks,
+        start_samp: int | None = None,
+        end_samp: int | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if start_samp is None or end_samp is None:
+            data = raw.get_data(picks=picks)
+            times = np.asarray(raw.times, dtype=float)
+        else:
+            data = raw.get_data(picks=picks, start=int(start_samp), stop=int(end_samp))
+            times = np.asarray(raw.times[int(start_samp):int(end_samp)], dtype=float)
+        return np.asarray(data, dtype=float), times
+
     def _get_visible_data_for_abs(
         self,
         raw: BaseRaw,
@@ -742,7 +789,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._reference_mode == "monopolar":
             raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = raw[raw_ch_picks, start_samp:end_samp]
+            data_v, times = self._read_raw_segment(raw, raw_ch_picks, start_samp, end_samp)
 
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
@@ -755,12 +802,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 return None, None
 
             ref_raw_picks = picks[np.asarray(ref_abs, dtype=int)]
-            ref_data, times = raw[ref_raw_picks, start_samp:end_samp]
+            ref_data, times = self._read_raw_segment(raw, ref_raw_picks, start_samp, end_samp)
             ref_data = np.asarray(ref_data, dtype=float)
             times = np.asarray(times, dtype=float)
 
             vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, _ = raw[vis_raw_picks, start_samp:end_samp]
+            data_v, _ = self._read_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
             data_v = np.asarray(data_v, dtype=float)
 
             # Exclude manually annotated bad segments from the reference computation
@@ -791,11 +838,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ref_raw_pick = int(picks[ref_abs])
 
             vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = raw[vis_raw_picks, start_samp:end_samp]
+            data_v, times = self._read_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
 
-            ref_data, _ = raw[[ref_raw_pick], start_samp:end_samp]
+            ref_data, _ = self._read_raw_segment(raw, [ref_raw_pick], start_samp, end_samp)
             ref_data = np.asarray(ref_data, dtype=float)
 
             if ref_data.ndim != 2 or ref_data.shape[0] == 0:
@@ -899,10 +946,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._raw is None or self._visible_abs.size == 0:
             return False
 
-        if not self._sig_vb.sceneBoundingRect().contains(scene_pos):
+        in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
+        in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
+        if not (in_label or in_signal):
             return False
 
-        data_point = self._sig_vb.mapSceneToView(scene_pos)
+        vb = self._label_vb if in_label else self._sig_vb
+        data_point = vb.mapSceneToView(scene_pos)
         y = float(data_point.y())
         abs_idx = self._abs_channel_from_y(y)
         if abs_idx is None:
@@ -918,6 +968,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         menu = QtWidgets.QMenu()
         act_open_panel = menu.addAction("Open Computation Panel")
         act_open_annos = menu.addAction("Open Annotations Panel")
+        act_edit_groups = menu.addAction("Edit Channel Groups...")
         menu.addSeparator()
         act_hide = menu.addAction(f"Hide ({len(selected_names)})")
 
@@ -929,6 +980,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.requestOpenComputationPanel.emit(selected_abs)
         elif chosen == act_open_annos:
             self.requestOpenAnnotationsPanel.emit()
+        elif chosen == act_edit_groups:
+            self.requestEditChannelGroups.emit()
         elif chosen == act_hide:
             self._hide_channels(selected_names)
         elif chosen == act_bad:
@@ -1266,8 +1319,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             if raw_idx_1 is None or raw_idx_2 is None:
                 continue
 
-            d1, _ = raw[[int(raw_idx_1)], :]
-            d2, _ = raw[[int(raw_idx_2)], :]
+            d1, _ = self._read_raw_segment(raw, [int(raw_idx_1)])
+            d2, _ = self._read_raw_segment(raw, [int(raw_idx_2)])
 
             d1_arr = np.asarray(d1, dtype=float)
             d2_arr = np.asarray(d2, dtype=float)
@@ -1312,7 +1365,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._reference_mode == "monopolar":
             raw_pick = int(self._picks[int(abs_idx)])
-            data_v, _ = raw[[raw_pick], start_samp:stop_samp]
+            data_v, _ = self._read_raw_segment(raw, [raw_pick], start_samp, stop_samp)
             signal_v = np.asarray(data_v, dtype=float)[0]
 
         elif self._reference_mode in ("average", "median"):
@@ -1320,7 +1373,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             if not usable_abs:
                 return None
             ref_picks = self._picks[np.asarray(usable_abs, dtype=int)]
-            ref_data, _ = raw[ref_picks, start_samp:stop_samp]
+            ref_data, _ = self._read_raw_segment(raw, ref_picks, start_samp, stop_samp)
             ref_data = np.asarray(ref_data, dtype=float)
             bad_mask = self._build_bad_segment_mask_for_abs(usable_abs, times)
             if bad_mask.shape == ref_data.shape:
@@ -1334,7 +1387,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ref = np.where(np.isnan(ref), 0.0, ref)
 
             raw_pick = int(self._picks[int(abs_idx)])
-            data_v, _ = raw[[raw_pick], start_samp:stop_samp]
+            data_v, _ = self._read_raw_segment(raw, [raw_pick], start_samp, stop_samp)
             signal_v = np.asarray(data_v, dtype=float)[0] - ref
 
         elif self._reference_mode == "common":
@@ -1343,8 +1396,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             raw_pick = int(self._picks[int(abs_idx)])
             ref_abs = self._channel_names.index(self._common_ref_name)
             ref_pick = int(self._picks[ref_abs])
-            data_v, _ = raw[[raw_pick], start_samp:stop_samp]
-            ref_v, _ = raw[[ref_pick], start_samp:stop_samp]
+            data_v, _ = self._read_raw_segment(raw, [raw_pick], start_samp, stop_samp)
+            ref_v, _ = self._read_raw_segment(raw, [ref_pick], start_samp, stop_samp)
             signal_v = np.asarray(data_v, dtype=float)[0] - np.asarray(ref_v, dtype=float)[0]
 
         elif self._reference_mode == "bipolar":
@@ -1392,6 +1445,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._pending_kind = str(kind)
         self._pending_note = str(note or "")
         self._pending_scope = str(scope)
+        self.setCursor(Qt.CursorShape.CrossCursor)
 
     def stop_annotation_mode(self) -> None:
         self._annotation_mode = False
@@ -1406,6 +1460,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             except Exception:
                 pass
             self._anno_preview = None
+        self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def get_annotations(self) -> list[Annotation]:
         return list(self._annotations)
@@ -1595,22 +1650,20 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         h = 0.90 * float(self._spacing)
         y0 = yc - h / 2.0
+        pen = pg.mkPen(rgb[0], rgb[1], rgb[2], width=2.5)
+        pen.setCosmetic(True)
+        brush = pg.mkBrush(rgb[0], rgb[1], rgb[2], 45)
 
         if self._anno_preview is None:
-            self._anno_preview = pg.RectROI(
-                [x0, y0],
-                [max(1e-6, x1 - x0), h],
-                pen=pg.mkPen(rgb[0], rgb[1], rgb[2], width=2),
-                movable=False,
-            )
-            self._anno_preview.setZValue(30)
+            self._anno_preview = QtWidgets.QGraphicsRectItem()
+            self._anno_preview.setZValue(100)
             self.signal_plot.addItem(self._anno_preview)
         else:
             self._ensure_signal_item(self._anno_preview)
 
-        self._anno_preview.setPos([x0, y0])
-        self._anno_preview.setSize([max(1e-6, x1 - x0), h])
-        self._anno_preview.setBrush(pg.mkBrush(0, 0, 0, 0)) # type: ignore
+        self._anno_preview.setPen(pen)
+        self._anno_preview.setBrush(brush)
+        self._anno_preview.setRect(x0, y0, max(1e-6, x1 - x0), h)
 
     def _add_annotation_items(self, a: Annotation) -> None:
         rgb = ANNOTATION_STYLES.get(a.kind, (0, 200, 0))
@@ -1906,17 +1959,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         x0, x1 = (t0, t1) if t0 <= t1 else (t1, t0)
         height = 0.8 * float(self._spacing)
         y0 = y_center - height / 2.0
+        outline = tuple(int(v) for v in self._theme.preview_outline_color)
+        pen = pg.mkPen(outline, width=2.5)
+        pen.setCosmetic(True)
+        brush = pg.mkBrush(outline[0], outline[1], outline[2], 35)
 
         if self._scalogram_preview is None:
             rect = QtWidgets.QGraphicsRectItem()
-            rect.setPen(pg.mkPen(self._theme.preview_outline_color, width=2))
-            rect.setBrush(pg.mkBrush(0, 0, 0, 0))
-            rect.setZValue(25)
+            rect.setZValue(100)
             self.signal_plot.addItem(rect)
             self._scalogram_preview = rect
         else:
             self._ensure_signal_item(self._scalogram_preview)
 
+        self._scalogram_preview.setPen(pen)
+        self._scalogram_preview.setBrush(brush)
         self._scalogram_preview.setRect(x0, y0, max(1e-6, x1 - x0), height)
 
     def reset_zoom_to_base(self) -> None:
@@ -2103,7 +2160,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 if self._scene_pos_hits_annotation(scene_pos):
                     return super().eventFilter(obj, ev)
 
-                if self._sig_vb.sceneBoundingRect().contains(scene_pos):
+                in_label = self._label_vb.sceneBoundingRect().contains(scene_pos)
+                in_signal = self._sig_vb.sceneBoundingRect().contains(scene_pos)
+                if in_label or in_signal:
                     self._context_menu_active = True
 
                     if self._show_context_menu_for_scene_pos(scene_pos):

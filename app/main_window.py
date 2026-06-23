@@ -13,7 +13,7 @@ from mne.io import BaseRaw
 from PySide6.QtWidgets import (
     QApplication, QAbstractSpinBox, QDoubleSpinBox, QFrame,
     QHBoxLayout, QLabel, QMainWindow, QMenu, QMessageBox, QDialog, QDialogButtonBox,
-    QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
+    QCheckBox, QComboBox, QLineEdit, QFormLayout, QSpinBox, QToolBar, QToolButton, QVBoxLayout,
     QWidget, QDockWidget, QListWidget, QListWidgetItem, QTableWidget, QTableWidgetItem,
     QHeaderView, QTextBrowser, QTabWidget, QTabBar, QSizePolicy
 )
@@ -54,7 +54,7 @@ from app.filtering import (
     build_filtered_raw_by_group,
     is_filter_active,
 )
-from app.display_theme import DISPLAY_THEME_CHOICES, get_display_theme
+from app.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICES, get_display_theme
 from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 from app.expert_event_grid import ExpertEventGridDialog
 
@@ -115,7 +115,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(False)
 
         # ---- Toolbar (controls) ----
-        self._display_theme_key = "dark"
+        self._display_theme_key = DEFAULT_DISPLAY_THEME
         self._build_toolbar()
         self.tb.setEnabled(False) 
 
@@ -313,9 +313,15 @@ class MainWindow(QMainWindow):
         )
 
         self.comp_panel = ComputationPanel()
+        self.comp_panel.set_ei_montage_callbacks(
+            current_montage=self._current_montage_for_ei,
+            switch_to_bipolar=self._switch_to_bipolar_for_ei,
+        )
+        self.comp_panel.set_ei_data_callback(self._get_ei_data_for_computation)
         self.comp_dock.setWidget(self.comp_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.comp_dock)
         self.comp_dock.hide()
+        self._comp_dock_default_size_applied = False
 
         # ---- Annotations dock ----
         self.anno_dock = QDockWidget("Annotations", self)
@@ -354,6 +360,7 @@ class MainWindow(QMainWindow):
         self.viewer.requestChanRangeDelta.connect(self._zoom_chan_range)
         self.viewer.requestAmpRangeDelta.connect(self._zoom_amp_range)
         self.viewer.requestOpenComputationPanel.connect(self._open_computation_panel)
+        self.viewer.requestEditChannelGroups.connect(self.on_edit_channel_groups)
 
         # Timeline sync
         self.viewer.timeWindowChanged.connect(self._sync_time_from_viewer)
@@ -367,6 +374,7 @@ class MainWindow(QMainWindow):
         
         #Channel selection updated 
         self.comp_panel.panelSelectionChanged.connect(self._on_comp_panel_selection_changed)
+        self.comp_panel.settingsChanged.connect(self._mark_project_dirty)
         
         # Make computation panel follow the viewer cursor (instead of window start)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
@@ -549,6 +557,10 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.gain)
         self._add_presets_button(tb, self.gain, [10, 50, 100, 200, 400, 800])
 
+        self.fit_traces = QCheckBox("Fit traces")
+        self.fit_traces.setChecked(False)
+        tb.addWidget(self.fit_traces)
+
         tb.addSeparator()
 
         tb.addWidget(QLabel("Theme:"))
@@ -578,15 +590,59 @@ class MainWindow(QMainWindow):
         self.gain.valueChanged.connect(lambda v: self.viewer.set_view_params(gain=v))
         self.gain.valueChanged.connect(lambda v: self.comp_panel.set_main_gain_uv(float(v)))
         self.chan_range.valueChanged.connect(lambda v: self.viewer.set_view_params(chan_range=v))
+        self.fit_traces.toggled.connect(lambda checked: self.viewer.set_fit_visible_traces(checked))
 
     def _on_display_theme_changed(self, index: int) -> None:
         theme_key = self.display_theme.itemData(index)
-        self._apply_display_theme(str(theme_key or "dark"))
+        self._apply_display_theme(str(theme_key or DEFAULT_DISPLAY_THEME))
 
     def _apply_display_theme(self, theme_key: str) -> None:
         theme = get_display_theme(theme_key)
         self._display_theme_key = theme.key
 
+        popup_style = f"""
+            QMenuBar {{
+                background-color: {theme.panel_background};
+                color: {theme.text_color};
+            }}
+            QMenuBar::item:selected {{
+                background-color: {theme.button_hover_background};
+            }}
+            QMenu {{
+                background-color: {theme.input_background};
+                color: {theme.input_text_color};
+                border: 1px solid {theme.border_color};
+            }}
+            QMenu::item {{
+                padding: 4px 24px;
+            }}
+            QMenu::item:selected {{
+                background-color: {theme.button_hover_background};
+                color: {theme.input_text_color};
+            }}
+            QMenu::indicator,
+            QMenu::indicator:non-exclusive:unchecked,
+            QMenu::indicator:exclusive:unchecked {{
+                width: 13px;
+                height: 13px;
+                margin-left: 4px;
+                border: 1px solid {theme.border_color};
+                background-color: {theme.input_background};
+            }}
+            QMenu::indicator:checked,
+            QMenu::indicator:non-exclusive:checked,
+            QMenu::indicator:exclusive:checked {{
+                background-color: {theme.selected_label_color};
+                border: 1px solid {theme.selected_label_color};
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {theme.input_background};
+                color: {theme.input_text_color};
+                border: 1px solid {theme.border_color};
+                selection-background-color: {theme.button_hover_background};
+                selection-color: {theme.input_text_color};
+            }}
+        """
         toolbar_style = f"""
             QToolBar {{
                 background-color: {theme.panel_background};
@@ -598,14 +654,32 @@ class MainWindow(QMainWindow):
             }}
             QToolBar QToolButton,
             QToolBar QComboBox,
+            QToolBar QCheckBox,
             QToolBar QAbstractSpinBox {{
                 background-color: {theme.input_background};
                 color: {theme.input_text_color};
                 border: 1px solid {theme.border_color};
                 padding: 2px 6px;
             }}
+            QToolBar QCheckBox::indicator {{
+                width: 13px;
+                height: 13px;
+                border: 1px solid {theme.border_color};
+                background-color: {theme.input_background};
+            }}
+            QToolBar QCheckBox::indicator:checked {{
+                background-color: {theme.selected_label_color};
+                border: 1px solid {theme.selected_label_color};
+            }}
             QToolBar QToolButton:hover {{
                 background-color: {theme.button_hover_background};
+            }}
+            QToolBar QComboBox QAbstractItemView {{
+                background-color: {theme.input_background};
+                color: {theme.input_text_color};
+                border: 1px solid {theme.border_color};
+                selection-background-color: {theme.button_hover_background};
+                selection-color: {theme.input_text_color};
             }}
         """
         frame_style = f"""
@@ -624,6 +698,13 @@ class MainWindow(QMainWindow):
                 border: 1px solid {theme.border_color};
                 padding: 2px 6px;
             }}
+            QComboBox QAbstractItemView {{
+                background-color: {theme.input_background};
+                color: {theme.input_text_color};
+                border: 1px solid {theme.border_color};
+                selection-background-color: {theme.button_hover_background};
+                selection-color: {theme.input_text_color};
+            }}
         """
         timeline_style = f"""
             QFrame {{
@@ -635,6 +716,7 @@ class MainWindow(QMainWindow):
             }}
         """
 
+        self.setStyleSheet(popup_style)
         self.tb.setStyleSheet(toolbar_style)
         self.top_controls.setStyleSheet(frame_style)
         self.timeline.setStyleSheet(timeline_style)
@@ -1032,6 +1114,10 @@ class MainWindow(QMainWindow):
         if not isinstance(review, dict):
             review = {}
 
+        computation = payload.get("computation")
+        if not isinstance(computation, dict):
+            computation = {}
+
         annos = review.get("annotations", [])
         hidden_raw = review.get("hidden_channels", [])
         bad_raw = review.get("bad_channels", [])
@@ -1057,6 +1143,7 @@ class MainWindow(QMainWindow):
                 if isinstance(saved_montage_raw, dict)
                 else None
             )
+            self.comp_panel.restore_project_state(computation)
         finally:
             self._restoring_project = False
 
@@ -1240,19 +1327,20 @@ class MainWindow(QMainWindow):
 
         def _sort_by_header(column: int) -> None:
             nonlocal sort_column, sort_order
-            if sort_column == int(column):
+            current_sort_column = int(column)
+            if sort_column == current_sort_column:
                 sort_order = (
                     Qt.SortOrder.DescendingOrder
                     if sort_order == Qt.SortOrder.AscendingOrder
                     else Qt.SortOrder.AscendingOrder
                 )
             else:
-                sort_column = int(column)
+                sort_column = current_sort_column
                 sort_order = Qt.SortOrder.AscendingOrder
 
             table.horizontalHeader().setSortIndicatorShown(True)
-            table.horizontalHeader().setSortIndicator(sort_column, sort_order)
-            table.sortItems(sort_column, sort_order)
+            table.horizontalHeader().setSortIndicator(current_sort_column, sort_order)
+            table.sortItems(current_sort_column, sort_order)
 
         def _set_selected_group(group: str) -> None:
             selected_rows = sorted({idx.row() for idx in table.selectionModel().selectedRows()})
@@ -1379,6 +1467,7 @@ class MainWindow(QMainWindow):
             self.current_picks,
             displayed_names,
             channel_groups=display_channel_groups,
+            bad_names=self.viewer.get_bad_channels(),
         )
         
     def _sync_comp_panel_view_state(self, t0: float | None = None) -> None:
@@ -1409,21 +1498,50 @@ class MainWindow(QMainWindow):
         self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))
 
     def _update_montage_label(self) -> None:
+        self.montage_label.setText(f"Montage: {self._current_montage_for_ei()}")
+
+    def _current_montage_for_ei(self) -> str:
         mode = self.viewer.reference_mode()
 
         if mode == "bipolar":
-            pretty = "Bipolar"
+            return "Bipolar"
         elif mode == "average":
-            pretty = "Average"
+            return "Average"
         elif mode == "median":
-            pretty = "Median"
+            return "Median"
         elif mode == "common":
             ref_name = self.viewer.common_reference_name() or "?"
-            pretty = f"Common ({ref_name})"
+            return f"Common ({ref_name})"
         else:
-            pretty = "Monopolar"
+            return "Monopolar"
 
-        self.montage_label.setText(f"Montage: {pretty}")
+    def _switch_to_bipolar_for_ei(self) -> tuple[bool, str]:
+        if self.current_raw is None:
+            return False, "Load a dataset first."
+        if self.viewer.reference_mode() == "bipolar":
+            return True, ""
+
+        channel_names = self.viewer.get_raw_channel_names()
+        montage = self._saved_bipolar_montage
+
+        if montage is None or not montage.pairs:
+            montage = build_automatic_bipolar_montage(
+                channel_names,
+                bad_channels=self.viewer.get_bad_channels(),
+            )
+
+        montage = refresh_bipolar_montage_pair_names(montage)
+
+        if not montage.pairs:
+            return False, "No valid bipolar pairs could be generated automatically."
+
+        self.viewer.set_bipolar_mode(montage)
+        self._refresh_display_name_dependent_ui()
+        self.btn_edit_bipolar.setEnabled(True)
+        self._update_montage_label()
+        self._mark_project_dirty()
+        self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
+        return True, ""
 
     def _capture_reference_state(self) -> dict:
         mode = self.viewer.reference_mode()
@@ -1811,8 +1929,121 @@ class MainWindow(QMainWindow):
         self.comp_panel.set_selected_channels_abs(selected_abs, replace=True)
         self._sync_comp_panel_view_state()
         self.comp_dock.show()
-        self._resize_visible_dock(self.comp_dock, side_size=430, bottom_size=300)
+        if not self._comp_dock_default_size_applied:
+            self._resize_visible_dock(self.comp_dock, side_size=430, bottom_size=300)
+            self._comp_dock_default_size_applied = True
         self.comp_dock.raise_()
+
+    def _get_ei_data_for_computation(
+        self,
+        selected_abs: list[int],
+        start_s: float,
+        stop_s: float,
+    ) -> tuple[np.ndarray, float, list[str]]:
+        raw = self.source_raw if self.source_raw is not None else self.current_raw
+        if raw is None or self.current_picks is None:
+            raise RuntimeError("Load a dataset before running EI.")
+
+        display_names = self.viewer.get_channel_names()
+        fs = float(raw.info["sfreq"])
+        t0 = float(min(start_s, stop_s))
+        t1 = float(max(start_s, stop_s))
+        if t1 <= t0:
+            raise RuntimeError("Invalid EI data window.")
+
+        start_samp = max(0, min(int(np.floor(t0 * fs)), raw.n_times - 1))
+        stop_samp = max(start_samp + 1, min(int(np.ceil(t1 * fs)), raw.n_times))
+        picks = np.asarray(self.current_picks, dtype=int)
+        mode = self.viewer.reference_mode()
+        bad_names = set(self.viewer.get_bad_channels())
+
+        def read_raw_segment(channel_picks: list[int] | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            data = raw.get_data(picks=channel_picks, start=start_samp, stop=stop_samp)
+            times = np.asarray(raw.times[start_samp:stop_samp], dtype=float)
+            return np.asarray(data, dtype=float), times
+
+        def raw_index_for_channel(ch_name: str) -> int | None:
+            try:
+                abs_idx = list(raw.ch_names).index(str(ch_name))
+            except ValueError:
+                return None
+            if not (0 <= abs_idx < len(picks)):
+                return None
+            return int(picks[abs_idx])
+
+        rows: list[np.ndarray] = []
+        names: list[str] = []
+
+        if mode == "bipolar":
+            montage = self.viewer.get_bipolar_montage()
+            pair_by_name = {
+                pair.name: pair
+                for pair in getattr(montage, "pairs", [])
+            }
+            for abs_idx in selected_abs:
+                idx = int(abs_idx)
+                if not (0 <= idx < len(display_names)):
+                    continue
+                display_name = str(display_names[idx])
+                pair = pair_by_name.get(display_name)
+                if pair is None:
+                    continue
+                ch1_pick = raw_index_for_channel(pair.ch1)
+                ch2_pick = raw_index_for_channel(pair.ch2)
+                if ch1_pick is None or ch2_pick is None:
+                    continue
+                data_v, _ = read_raw_segment([ch1_pick, ch2_pick])
+                rows.append(np.asarray(data_v[0] - data_v[1], dtype=float) * 1e6)
+                names.append(display_name)
+        else:
+            selected = [
+                int(abs_idx)
+                for abs_idx in selected_abs
+                if 0 <= int(abs_idx) < len(display_names) and int(abs_idx) < len(picks)
+            ]
+            if not selected:
+                raise RuntimeError("No selected channels are available for EI.")
+
+            selected_picks = picks[np.asarray(selected, dtype=int)]
+            selected_data, _ = read_raw_segment(selected_picks)
+            selected_data = np.asarray(selected_data, dtype=float)
+
+            ref = None
+            if mode in {"average", "median"}:
+                ref_abs = [
+                    i for i, name in enumerate(raw.ch_names)
+                    if str(name) not in bad_names and i < len(picks)
+                ]
+                if ref_abs:
+                    ref_picks = picks[np.asarray(ref_abs, dtype=int)]
+                    ref_data, _ = read_raw_segment(ref_picks)
+                    ref_data = np.asarray(ref_data, dtype=float)
+                    ref = (
+                        np.nanmean(ref_data, axis=0)
+                        if mode == "average"
+                        else np.nanmedian(ref_data, axis=0)
+                    )
+            elif mode == "common":
+                ref_name = self.viewer.common_reference_name()
+                if ref_name:
+                    ref_pick = raw_index_for_channel(ref_name)
+                    if ref_pick is not None:
+                        ref_data, _ = read_raw_segment([ref_pick])
+                        ref = np.asarray(ref_data[0], dtype=float)
+
+            for row_index, abs_idx in enumerate(selected):
+                signal = np.asarray(selected_data[row_index], dtype=float)
+                if ref is not None:
+                    signal = signal - ref
+                rows.append(signal * 1e6)
+                names.append(str(display_names[abs_idx]))
+
+        if not rows or min(row.size for row in rows) < 2:
+            raise RuntimeError("Could not extract enough selected channel data for EI.")
+
+        min_len = min(row.size for row in rows)
+        data = np.vstack([row[:min_len] for row in rows])
+        return data, fs, names
 
     def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
         # Highlight the same channels in main viewer (and treat it as selection)
@@ -2780,6 +3011,9 @@ class MainWindow(QMainWindow):
         if self._is_psd_tab_open():
             self.psd_panel.update_bad_names(self.viewer.get_bad_channels())
 
+        if self.current_raw is not None:
+            self._sync_comp_panel_context()
+
     # ---------------- Expert Event Grid -------------
 
     def open_expert_event_grid(self) -> None:
@@ -3125,7 +3359,8 @@ class MainWindow(QMainWindow):
                 return np.array([]), np.array([])
 
             picks = [left_idx] if right_idx is None else [left_idx, right_idx]
-            data, times = raw[picks, start_idx:end_idx]
+            data = raw.get_data(picks=picks, start=start_idx, stop=end_idx)
+            times = np.asarray(raw.times[start_idx:end_idx], dtype=float)
             if right_idx is None:
                 waveform = data[0]
             else:
