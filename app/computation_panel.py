@@ -2,23 +2,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import numpy as np
 import pyqtgraph as pg
 from mne.io import BaseRaw
 
-from PySide6.QtCore import Qt, Slot, Signal, QTimer
+from PySide6.QtCore import Qt, Slot, Signal, QTimer, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog,
     QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTabWidget,
+    QHeaderView, QTabWidget, QComboBox, QSpinBox, QSplitter,
 )
 
 from app.time_controls import TimeWindowControl
-from app.EI_algorithm import EIComputationResult, compute_ei_for_gui, validate_gui_ei_timing
+from app.EI_algorithm import (
+    EIChannelResult,
+    EIComputationResult,
+    compute_ei_for_gui,
+    validate_gui_ei_timing,
+)
 
 
 @dataclass
@@ -34,6 +39,16 @@ class PanelState:
     baseline_end_s: float = 0.0
     ictal_start_s: float = 0.0
     ictal_end_s: float = 0.0
+
+
+@dataclass
+class EIHeatmapRow:
+    original_idx: int
+    channel_name: str
+    ei_score: float
+    recruitment_delay: float
+    peak_hfer: float
+    mean_hfer: float
 
 
 class ComputationPanel(QWidget):
@@ -64,6 +79,9 @@ class ComputationPanel(QWidget):
         self._switch_to_bipolar_callback: Callable[[], tuple[bool, str]] | None = None
         self._ei_data_callback: Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]] | None = None
         self.ei_result_metadata: dict | None = None
+        self._last_ei_result: EIComputationResult | None = None
+        self._ei_summary_dialog: QDialog | None = None
+        self._ei_heatmap_dialog: QDialog | None = None
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
 
@@ -273,24 +291,24 @@ class ComputationPanel(QWidget):
 
         root.addWidget(self.gb_t, 0)
 
-        # --- Plot ---
+        # --- Output actions ---
         gb_p = QGroupBox("Output")
         p_layout = QVBoxLayout(gb_p)
 
         self.btn_run = QPushButton("Run computation")
         p_layout.addWidget(self.btn_run)
 
-        self.output_tabs = QTabWidget()
-        p_layout.addWidget(self.output_tabs, 1)
+        self.btn_open_ei_summary = QPushButton("Open EI summary")
+        self.btn_open_ei_summary.setEnabled(False)
+        p_layout.addWidget(self.btn_open_ei_summary)
 
-        self.mean_output_tab = QWidget()
-        mean_output_layout = QVBoxLayout(self.mean_output_tab)
-        mean_output_layout.setContentsMargins(0, 0, 0, 0)
-        mean_output_layout.setSpacing(8)
+        self.btn_open_ei_heatmap = QPushButton("Open EI heatmap")
+        self.btn_open_ei_heatmap.setEnabled(False)
+        p_layout.addWidget(self.btn_open_ei_heatmap)
 
         self.chk_match_main = QCheckBox("Match main display scaling")
         self.chk_match_main.setChecked(True)
-        mean_output_layout.addWidget(self.chk_match_main)
+        p_layout.addWidget(self.chk_match_main)
 
         self.plot = pg.PlotWidget()
         self.plot.setMinimumSize(220, 140)
@@ -302,51 +320,10 @@ class ComputationPanel(QWidget):
         self.plot.setLabel("bottom", "Time (s)")
         self.plot.setLabel("left", "Mean voltage (uV)")
         self.curve = self.plot.plot([], [])
-        mean_output_layout.addWidget(self.plot, 1)
-        self._mean_tab_index = self.output_tabs.addTab(self.mean_output_tab, "Mean plot")
+        p_layout.addWidget(self.plot, 1)
 
-        self.ei_summary_tab = QWidget()
-        ei_summary_layout = QVBoxLayout(self.ei_summary_tab)
-        ei_summary_layout.setContentsMargins(0, 0, 0, 0)
-        ei_summary_layout.setSpacing(8)
+        root.addWidget(gb_p, 2)
 
-        self.ei_summary_table = QTableWidget(0, 5)
-        self.ei_summary_table.setHorizontalHeaderLabels(
-            ["Channel", "Group", "EI score", "Rank", "EI onset vs seizure onset"]
-        )
-        self.ei_summary_table.verticalHeader().setVisible(False)
-        self.ei_summary_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.ei_summary_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.ei_summary_table.setAlternatingRowColors(True)
-        self.ei_summary_table.setSortingEnabled(True)
-        self.ei_summary_table.setMinimumHeight(220)
-        header = self.ei_summary_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        ei_summary_layout.addWidget(self.ei_summary_table, 1)
-        self._ei_summary_tab_index = self.output_tabs.addTab(self.ei_summary_tab, "EI summary")
-
-        self.ei_heatmap_tab = QWidget()
-        ei_heatmap_layout = QVBoxLayout(self.ei_heatmap_tab)
-        ei_heatmap_layout.setContentsMargins(0, 0, 0, 0)
-        ei_heatmap_layout.setSpacing(8)
-
-        self.heatmap_plot = pg.PlotWidget()
-        self.heatmap_plot.setMinimumSize(260, 220)
-        self.heatmap_plot.showGrid(x=True, y=True, alpha=0.15)
-        self.heatmap_plot.setLabel("bottom", "Time (s)")
-        self.heatmap_plot.setLabel("left", "Channel")
-        self.heatmap_image = pg.ImageItem()
-        self.heatmap_plot.addItem(self.heatmap_image)
-        ei_heatmap_layout.addWidget(self.heatmap_plot, 1)
-        self._ei_heatmap_tab_index = self.output_tabs.addTab(self.ei_heatmap_tab, "EI heatmap")
-        self.output_tabs.setTabVisible(self._ei_summary_tab_index, False)
-        self.output_tabs.setTabVisible(self._ei_heatmap_tab_index, False)
-
-        root.addWidget(gb_p, 3)
 
         # --- Wiring ---
         self.btn_add.clicked.connect(self._open_add_channels_dialog)
@@ -371,6 +348,8 @@ class ComputationPanel(QWidget):
         ):
             spin.valueChanged.connect(self._sync_ei_windows_from_ui)
         self.btn_run.clicked.connect(self._run_computation)
+        self.btn_open_ei_summary.clicked.connect(self._open_ei_summary_dialog)
+        self.btn_open_ei_heatmap.clicked.connect(self._open_ei_heatmap_dialog)
 
         self.btn_sel_all.clicked.connect(self._select_all_channels)
         self.btn_sel_macro.clicked.connect(lambda: self._select_group_channels("macro"))
@@ -408,7 +387,7 @@ class ComputationPanel(QWidget):
         # keep only still-valid selections after channel list changes
         self.state.selected_abs = [
             idx for idx in self.state.selected_abs
-            if 0 <= idx < len(self._ch_names_displayed)
+            if 0 <= idx < len(self._ch_names_displayed) and not self._is_bad_abs_idx(idx)
         ]
 
         self._refresh_channel_list_titles()
@@ -421,7 +400,15 @@ class ComputationPanel(QWidget):
             self._request_update_plot()
         
     def set_selected_channels_abs(self, selected_abs: list[int], *, replace: bool = True) -> None:
-        cleaned = sorted({int(i) for i in selected_abs if int(i) >= 0})
+        cleaned = sorted(
+            {
+                int(i)
+                for i in selected_abs
+                if int(i) >= 0
+                and int(i) < len(self._ch_names_displayed)
+                and not self._is_bad_abs_idx(int(i))
+            }
+        )
 
         if replace:
             self.state.selected_abs = cleaned
@@ -574,6 +561,16 @@ class ComputationPanel(QWidget):
             return self._ch_names_displayed[abs_idx]
         return f"ch[{abs_idx}]"
 
+    def _is_bad_abs_idx(self, abs_idx: int) -> bool:
+        return self._abs_to_display_name(abs_idx) in self._bad_names
+
+    def _available_channel_abs(self) -> list[int]:
+        return [
+            abs_idx
+            for abs_idx in range(len(self._ch_names_displayed))
+            if not self._is_bad_abs_idx(abs_idx)
+        ]
+
     def _refresh_channel_list_titles(self) -> None:
         for row in range(self.list_channels.count()):
             item = self.list_channels.item(row)
@@ -609,7 +606,8 @@ class ComputationPanel(QWidget):
 
     def _open_add_channels_dialog(self) -> None:
         """Open a searchable multi-select dialog listing all displayed channels."""
-        if not self._ch_names_displayed:
+        available_abs = self._available_channel_abs()
+        if not available_abs:
             return
 
         dlg = QDialog(self)
@@ -627,8 +625,8 @@ class ComputationPanel(QWidget):
         lst.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         layout.addWidget(lst, 1)
 
-        for abs_idx, name in enumerate(self._ch_names_displayed):
-            item = QListWidgetItem(name)
+        for abs_idx in available_abs:
+            item = QListWidgetItem(self._abs_to_display_name(abs_idx))
             item.setData(Qt.ItemDataRole.UserRole, int(abs_idx))
             lst.addItem(item)
 
@@ -734,12 +732,12 @@ class ComputationPanel(QWidget):
 
         self.mean_time_widget.setVisible(self.gb_t.isChecked() and not is_ei)
         self.ei_time_widget.setVisible(self.gb_t.isChecked() and is_ei)
-        self.output_tabs.setTabVisible(self._mean_tab_index, not is_ei)
-        self.output_tabs.setTabVisible(self._ei_summary_tab_index, is_ei)
-        self.output_tabs.setTabVisible(self._ei_heatmap_tab_index, is_ei)
-        self.output_tabs.setCurrentIndex(
-            self._ei_summary_tab_index if is_ei else self._mean_tab_index
-        )
+        self.plot.setVisible(not is_ei)
+        self.chk_match_main.setVisible(not is_ei)
+
+        self.btn_open_ei_summary.setVisible(is_ei)
+        self.btn_open_ei_heatmap.setVisible(is_ei)
+
         self.btn_run.setText("Run EI" if is_ei else "Run computation")
 
         if is_ei:
@@ -1062,57 +1060,466 @@ class ComputationPanel(QWidget):
         }
 
     def _clear_ei_outputs(self) -> None:
-        self.ei_summary_table.setRowCount(0)
-        self.heatmap_image.setVisible(False)
+        self._last_ei_result = None
+        self.ei_result_metadata = None
+
+        if hasattr(self, "btn_open_ei_summary"):
+            self.btn_open_ei_summary.setEnabled(False)
+
+        if hasattr(self, "btn_open_ei_heatmap"):
+            self.btn_open_ei_heatmap.setEnabled(False)
 
     def _show_ei_result(self, result: EIComputationResult) -> None:
-        self.ei_summary_table.setSortingEnabled(False)
-        self.ei_summary_table.setRowCount(0)
-        metadata = result.metadata or {}
-        seizure_onset = metadata.get("seizure_onset_s")
-        ictal_window = metadata.get("ictal_window_s")
-        ictal_start = float(ictal_window[0]) if isinstance(ictal_window, list) and ictal_window else 0.0
+        self._last_ei_result = result
+        self.ei_result_metadata = result.metadata
 
-        for channel_result in result.channels:
-            row = self.ei_summary_table.rowCount()
-            self.ei_summary_table.insertRow(row)
-            if isinstance(seizure_onset, (int, float)):
-                onset_delta = (
-                    ictal_start
-                    + float(channel_result.onset_sec_in_ictal_window)
-                    - float(seizure_onset)
-                )
-                onset_text = f"{onset_delta:+.3f} s"
-            else:
-                onset_text = f"{channel_result.onset_sec_in_ictal_window:.3f} s"
-            values = [
-                channel_result.channel,
-                channel_result.group.capitalize(),
-                f"{channel_result.ei:.4f}",
-                str(channel_result.rank),
-                onset_text,
+        self.btn_open_ei_summary.setEnabled(True)
+        self.btn_open_ei_heatmap.setEnabled(bool(result.heatmap.size))
+
+        self._open_ei_summary_dialog()
+
+    def _compute_recruitment_delay(
+        self,
+        channel_result: EIChannelResult,
+        metadata: dict | None,
+    ) -> tuple[float, bool]:
+        result_metadata = metadata if isinstance(metadata, dict) else {}
+        seizure_onset = result_metadata.get("seizure_onset_s")
+        ictal_window = result_metadata.get("ictal_window_s")
+        if (
+            not isinstance(seizure_onset, (int, float))
+            or not isinstance(ictal_window, (list, tuple))
+            or len(ictal_window) < 1
+            or not isinstance(ictal_window[0], (int, float))
+        ):
+            return float(channel_result.onset_sec_in_ictal_window), False
+
+        recruitment_delay = (
+            float(ictal_window[0])
+            + float(channel_result.onset_sec_in_ictal_window)
+            - float(seizure_onset)
+        )
+        return recruitment_delay, True
+
+    def _open_ei_summary_dialog(self) -> None:
+        result = self._last_ei_result
+        if result is None:
+            QMessageBox.information(self, "EI summary", "Run EI first.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("EI summary")
+        dialog.resize(720, 420)
+
+        layout = QVBoxLayout(dialog)
+
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(
+            [
+                "Channel",
+                "EI score",
+                "Rank",
+                "EI onset from ictal start (s)",
+                "Recruitment delay (s)",
             ]
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col in {2, 3, 4}:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.ei_summary_table.setItem(row, col, item)
+        )
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.setSortingEnabled(False)
 
-        self.ei_summary_table.setSortingEnabled(True)
-        self.output_tabs.setCurrentIndex(self._ei_summary_tab_index)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, 5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
-        if result.heatmap.size:
-            heatmap = np.asarray(result.heatmap, dtype=float)
-            self.heatmap_image.setImage(heatmap, autoLevels=True)
-            self.heatmap_image.setVisible(True)
-            self.heatmap_plot.setXRange(
-                float(result.heatmap_times[0]) if result.heatmap_times.size else 0.0,
-                float(result.heatmap_times[-1]) if result.heatmap_times.size else 1.0,
+        metadata = result.metadata or {}
+        summary_rows: list[dict[str, float | int | str]] = []
+        for original_order, channel_result in enumerate(result.channels):
+            recruitment_delay, has_delay_metadata = self._compute_recruitment_delay(
+                channel_result,
+                metadata,
             )
-            self.heatmap_plot.setYRange(-0.5, max(0.5, heatmap.shape[0] - 0.5))
+            summary_rows.append(
+                {
+                    "original_order": int(original_order),
+                    "channel": str(channel_result.channel),
+                    "channel_sort": str(channel_result.channel).casefold(),
+                    "ei_score": float(channel_result.ei),
+                    "rank": int(channel_result.rank),
+                    "ei_onset": float(channel_result.onset_sec_in_ictal_window),
+                    "recruitment_delay": (
+                        float(recruitment_delay) if has_delay_metadata else float("inf")
+                    ),
+                    "recruitment_delay_text": (
+                        f"{recruitment_delay:+.3f}" if has_delay_metadata else ""
+                    ),
+                }
+            )
+
+        def populate_summary_table(rows: list[dict[str, float | int | str]]) -> None:
+            table.setSortingEnabled(False)
+            table.setRowCount(0)
+            for row_data in rows:
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+
+                values = [
+                    str(row_data["channel"]),
+                    f"{float(row_data['ei_score']):.4f}",
+                    str(int(row_data["rank"])),
+                    f"{float(row_data['ei_onset']):.3f}",
+                    str(row_data["recruitment_delay_text"]),
+                ]
+
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if col in {1, 2, 3, 4}:
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    table.setItem(row_idx, col, item)
+            table.setSortingEnabled(False)
+
+        sort_state = {
+            "column": -1,
+            "order": Qt.SortOrder.AscendingOrder,
+            "channel_mode": "display_order",
+        }
+
+        def sort_summary_table(column: int) -> None:
+            if column == 0:
+                if sort_state["channel_mode"] == "display_order":
+                    sort_state["channel_mode"] = "alphabetical"
+                    sorted_rows = sorted(
+                        summary_rows,
+                        key=lambda row: str(row["channel_sort"]),
+                    )
+                    header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+                else:
+                    sort_state["channel_mode"] = "display_order"
+                    sorted_rows = sorted(
+                        summary_rows,
+                        key=lambda row: int(row["original_order"]),
+                    )
+                    header.setSortIndicator(0, Qt.SortOrder.DescendingOrder)
+                sort_state["column"] = 0
+                populate_summary_table(sorted_rows)
+                return
+
+            if sort_state["column"] == column:
+                sort_state["order"] = (
+                    Qt.SortOrder.DescendingOrder
+                    if sort_state["order"] == Qt.SortOrder.AscendingOrder
+                    else Qt.SortOrder.AscendingOrder
+                )
+            else:
+                sort_state["order"] = (
+                    Qt.SortOrder.DescendingOrder
+                    if column == 1
+                    else Qt.SortOrder.AscendingOrder
+                )
+            sort_state["column"] = column
+            sort_state["channel_mode"] = "display_order"
+
+            key_map = {
+                1: "ei_score",
+                2: "rank",
+                3: "ei_onset",
+                4: "recruitment_delay",
+            }
+            key_name = key_map.get(column, "original_order")
+            reverse = sort_state["order"] == Qt.SortOrder.DescendingOrder
+            sorted_rows = sorted(
+                summary_rows,
+                key=lambda row: row[key_name],
+                reverse=reverse,
+            )
+            header.setSortIndicator(column, sort_state["order"])
+            populate_summary_table(sorted_rows)
+
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(sort_summary_table)
+        populate_summary_table(summary_rows)
+        layout.addWidget(table)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+        self._ei_summary_dialog = dialog
+
+    def _open_ei_heatmap_dialog(self) -> None:
+        result = self._last_ei_result
+        if result is None:
+            QMessageBox.information(self, "EI heatmap", "Run EI first.")
+            return
+
+        if not result.heatmap.size:
+            QMessageBox.information(self, "EI heatmap", "No heatmap data available.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("EI heatmap")
+        dialog.resize(980, 620)
+
+        layout = QVBoxLayout(dialog)
+
+        controls_row = QHBoxLayout()
+        controls_row.addWidget(QLabel("Sort channels by:"))
+        sort_combo = QComboBox()
+        sort_combo.addItem("EI score", userData="ei_score")
+        sort_combo.addItem("Recruitment delay", userData="recruitment_delay")
+        sort_combo.addItem("Peak HFER activity", userData="peak_hfer")
+        sort_combo.addItem("Mean HFER activity", userData="mean_hfer")
+        sort_combo.addItem("Original channel order", userData="original")
+        sort_combo.addItem("Channel name", userData="channel_name")
+        controls_row.addWidget(sort_combo)
+
+        controls_row.addSpacing(16)
+        controls_row.addWidget(QLabel("Show top N channels:"))
+        top_n_spin = QSpinBox()
+        max_channels = max(1, min(len(result.heatmap_channels), int(result.heatmap.shape[0])))
+        top_n_spin.setRange(1, max_channels)
+        top_n_spin.setValue(min(30, max_channels))
+        controls_row.addWidget(top_n_spin)
+        controls_row.addStretch(1)
+        layout.addLayout(controls_row)
+
+        score_plot = pg.PlotWidget()
+        score_plot.setMinimumWidth(120)
+        score_plot.showGrid(x=True, y=False, alpha=0.15)
+        score_plot.setLabel("bottom", "EI score")
+        score_plot.hideAxis("left")
+
+        heatmap_plot = pg.PlotWidget()
+        heatmap_plot.showGrid(x=True, y=True, alpha=0.15)
+        heatmap_plot.setLabel("bottom", "Time (s)")
+        heatmap_plot.setLabel("left", "Channel")
+        heatmap_plot.getAxis("left").setWidth(140)
+        heatmap_plot.getViewBox().invertY(True)
+        score_plot.setYLink(heatmap_plot)
+        score_plot.getViewBox().invertY(True)
+
+        heatmap_image = pg.ImageItem()
+        heatmap_plot.addItem(heatmap_image)
+        color_map = pg.colormap.get("viridis")
+        color_bar: pg.ColorBarItem | None = None
+        if color_map is not None:
+            lookup_table = np.asarray(color_map.getLookupTable(), dtype=np.float64)
+            heatmap_image.setLookupTable(lookup_table)
+            color_bar = pg.ColorBarItem(
+                values=(0.0, 1.0),
+                colorMap=color_map,
+                label="log10 HFER",
+                interactive=False,
+            )
+            color_bar.setImageItem(heatmap_image, insert_in=heatmap_plot)
+        onset_line = pg.InfiniteLine(
+            pos=0.0,
+            angle=90,
+            pen=pg.mkPen((230, 230, 230), width=1.2, style=Qt.PenStyle.DashLine),
+        )
+        heatmap_plot.addItem(onset_line)
+        heatmap_view_box = heatmap_plot.getViewBox()
+        score_view_box = score_plot.getViewBox()
+        plot_splitter = QSplitter(Qt.Orientation.Horizontal)
+        plot_splitter.setChildrenCollapsible(False)
+        plot_splitter.addWidget(score_plot)
+        plot_splitter.addWidget(heatmap_plot)
+        plot_splitter.setStretchFactor(0, 0)
+        plot_splitter.setStretchFactor(1, 1)
+        plot_splitter.setSizes([160, 760])
+        layout.addWidget(plot_splitter, 1)
+
+        warned_missing_recruitment_metadata = {"shown": False}
+
+        def redraw_heatmap() -> None:
+            sort_mode = str(sort_combo.currentData() or "ei_score")
+            top_n = int(top_n_spin.value())
+            view = self._prepare_ei_heatmap_view(result, sort_mode=sort_mode, top_n=top_n)
+            if view is None:
+                return
+
+            heatmap_data, times, channel_names, ei_scores, missing_delay_metadata = view
+            if missing_delay_metadata and sort_mode == "recruitment_delay":
+                if not warned_missing_recruitment_metadata["shown"]:
+                    QMessageBox.warning(
+                        dialog,
+                        "EI heatmap",
+                        "Recruitment delay metadata is incomplete. Falling back to "
+                        "EI onset from ictal start for sorting.",
+                    )
+                    warned_missing_recruitment_metadata["shown"] = True
+
+            log_heatmap = np.log10(np.maximum(heatmap_data, 1e-6))
+            heatmap_image.setImage(log_heatmap, autoLevels=True)
+            if color_bar is not None:
+                heatmap_min = float(np.nanmin(log_heatmap))
+                heatmap_max = float(np.nanmax(log_heatmap))
+                if np.isfinite(heatmap_min) and np.isfinite(heatmap_max):
+                    if heatmap_max <= heatmap_min:
+                        heatmap_max = heatmap_min + 1.0
+                    color_bar.setLevels((heatmap_min, heatmap_max))
+
+            n_rows = int(heatmap_data.shape[0])
+            if times.size >= 2:
+                dt = float(np.median(np.diff(times)))
+                x_start = float(times[0]) - (0.5 * dt)
+                width = float(times[-1] - times[0] + dt)
+                heatmap_view_box.setRange(
+                    xRange=(float(times[0]), float(times[-1])),
+                    padding=0.0,
+                )
+            elif times.size == 1:
+                dt = 1.0
+                x_start = float(times[0]) - 0.5
+                width = 1.0
+                heatmap_view_box.setRange(
+                    xRange=(float(times[0]) - 0.5, float(times[0]) + 0.5),
+                    padding=0.0,
+                )
+            else:
+                dt = 1.0
+                x_start = -0.5
+                width = 1.0
+                heatmap_view_box.setRange(
+                    xRange=(0.0, 1.0),
+                    padding=0.0,
+                )
+
+            heatmap_image.setRect(QRectF(x_start, -0.5, width, max(1.0, float(n_rows))))
+            heatmap_view_box.setRange(
+                yRange=(-0.5, max(0.5, float(n_rows) - 0.5)),
+                padding=0.0,
+            )
+            heatmap_plot.getAxis("left").setTicks(
+                [[(row_idx, channel_name) for row_idx, channel_name in enumerate(channel_names)]]
+            )
+
+            score_plot.clear()
+            y_positions = np.arange(n_rows, dtype=float)
+            score_bars = pg.BarGraphItem(
+                x0=np.zeros(n_rows, dtype=float),
+                x1=np.asarray(ei_scores, dtype=float),
+                y0=y_positions - 0.4,
+                y1=y_positions + 0.4,
+                brush=pg.mkBrush(86, 156, 214, 220),
+                pen=pg.mkPen(None),
+            )
+            score_plot.addItem(score_bars)
+            score_view_box.setRange(
+                yRange=(-0.5, max(0.5, float(n_rows) - 0.5)),
+                padding=0.0,
+            )
+            max_score = float(np.max(ei_scores)) if ei_scores.size else 1.0
+            score_view_box.setRange(
+                xRange=(0.0, max(1.0, max_score * 1.05)),
+                padding=0.0,
+            )
+
+        sort_combo.currentIndexChanged.connect(lambda _idx: redraw_heatmap())
+        top_n_spin.valueChanged.connect(lambda _value: redraw_heatmap())
+        redraw_heatmap()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+        self._ei_heatmap_dialog = dialog
+
+    def _prepare_ei_heatmap_view(
+        self,
+        result: EIComputationResult,
+        *,
+        sort_mode: str,
+        top_n: int,
+    ) -> tuple[np.ndarray, np.ndarray, list[str], np.ndarray, bool] | None:
+        heatmap = np.asarray(result.heatmap, dtype=float)
+        if heatmap.ndim != 2 or heatmap.size == 0:
+            return None
+
+        times = np.asarray(result.heatmap_times, dtype=float)
+        channel_names = list(result.heatmap_channels or [])
+        n_rows = min(int(heatmap.shape[0]), len(channel_names))
+        if n_rows <= 0:
+            return None
+
+        heatmap = heatmap[:n_rows, :]
+        channel_names = channel_names[:n_rows]
+
+        channel_info = {str(row.channel): row for row in result.channels}
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        has_recruitment_metadata = False
+
+        rows: list[EIHeatmapRow] = []
+        for original_idx, channel_name in enumerate(channel_names):
+            channel_result = cast(EIChannelResult | None, channel_info.get(str(channel_name)))
+            onset_sec = (
+                float(channel_result.onset_sec_in_ictal_window)
+                if channel_result is not None
+                else 0.0
+            )
+            ei_score = float(channel_result.ei) if channel_result is not None else 0.0
+            if channel_result is not None:
+                recruitment_delay, row_has_delay_metadata = self._compute_recruitment_delay(
+                    channel_result,
+                    metadata,
+                )
+                has_recruitment_metadata = has_recruitment_metadata or row_has_delay_metadata
+            else:
+                recruitment_delay = onset_sec
+                row_has_delay_metadata = False
+
+            row_heatmap = np.asarray(heatmap[original_idx], dtype=float)
+            rows.append(
+                EIHeatmapRow(
+                    original_idx=int(original_idx),
+                    channel_name=str(channel_name),
+                    ei_score=float(ei_score),
+                    recruitment_delay=float(recruitment_delay),
+                    peak_hfer=float(np.max(row_heatmap)) if row_heatmap.size else 0.0,
+                    mean_hfer=float(np.mean(row_heatmap)) if row_heatmap.size else 0.0,
+                )
+            )
+
+        if sort_mode == "ei_score":
+            rows.sort(key=lambda row: row.ei_score, reverse=True)
+        elif sort_mode == "recruitment_delay":
+            rows.sort(key=lambda row: row.recruitment_delay)
+        elif sort_mode == "peak_hfer":
+            rows.sort(key=lambda row: row.peak_hfer, reverse=True)
+        elif sort_mode == "mean_hfer":
+            rows.sort(key=lambda row: row.mean_hfer, reverse=True)
+        elif sort_mode == "channel_name":
+            rows.sort(key=lambda row: row.channel_name.lower())
         else:
-            self.heatmap_image.setVisible(False)
+            rows.sort(key=lambda row: row.original_idx)
+
+        top_n = max(1, min(int(top_n), len(rows)))
+        rows = rows[:top_n]
+
+        selected_indices = np.asarray([row.original_idx for row in rows], dtype=int)
+        selected_names = [row.channel_name for row in rows]
+        selected_scores = np.asarray([row.ei_score for row in rows], dtype=float)
+
+        return (
+            heatmap[selected_indices, :],
+            times,
+            selected_names,
+            selected_scores,
+            not has_recruitment_metadata,
+        )
 
     # ---------- Internals : plotting ----------
 
@@ -1207,7 +1614,7 @@ class ComputationPanel(QWidget):
         self.gb_ch.setTitle(f"Channels ({len(self.state.selected_abs)})")
 
     def _select_all_channels(self) -> None:
-        all_abs = list(range(len(self._ch_names_displayed)))
+        all_abs = self._available_channel_abs()
         self.set_selected_channels_abs(all_abs, replace=True)
 
     def _select_group_channels(self, group: str) -> None:
@@ -1216,7 +1623,8 @@ class ComputationPanel(QWidget):
             return
 
         chosen = []
-        for abs_idx, ch_name in enumerate(self._ch_names_displayed):
+        for abs_idx in self._available_channel_abs():
+            ch_name = self._ch_names_displayed[abs_idx]
             ch_group = str(self._channel_groups.get(ch_name, "macro")).strip().lower()
             if ch_group == group:
                 chosen.append(abs_idx)
@@ -1224,11 +1632,14 @@ class ComputationPanel(QWidget):
         self.set_selected_channels_abs(chosen, replace=True)
 
     def _update_group_button_titles(self) -> None:
-        n_all = len(self._ch_names_displayed)
+        n_all = 0
         n_macro = 0
         n_micro = 0
 
-        for ch_name in self._ch_names_displayed:
+        for abs_idx, ch_name in enumerate(self._ch_names_displayed):
+            if self._is_bad_abs_idx(abs_idx):
+                continue
+            n_all += 1
             group = str(self._channel_groups.get(ch_name, "macro")).strip().lower()
             if group == "micro":
                 n_micro += 1

@@ -6,6 +6,7 @@ from numpy.typing import NDArray
 
 Array = NDArray[np.float64]
 
+
 @dataclass
 class EIChannelResult:
     channel: str
@@ -15,6 +16,7 @@ class EIChannelResult:
     onset_sample_in_ictal_window: int
     onset_sec_in_ictal_window: float
 
+
 @dataclass
 class EIComputationResult:
     channels: list[EIChannelResult]
@@ -23,11 +25,24 @@ class EIComputationResult:
     heatmap_channels: list[str]
     metadata: dict[str, Any]
 
+
 def compute_hfer(
     target_data: Array,
     base_data: Array,
     fs: float,
 ) -> tuple[Array, Array]: ...
+
+
+def bandpass_hf(data: Array, fs: float) -> Array: ...
+
+
+def compute_ei_from_windows(
+    data: np.ndarray,
+    fs: float,
+    baseline_samples: tuple[int, int],
+    ictal_samples: tuple[int, int],
+) -> tuple[Array, Array, Array]: ...
+
 
 def validate_gui_ei_timing(
     *,
@@ -37,6 +52,7 @@ def validate_gui_ei_timing(
     ictal_window_s: tuple[float, float],
     recording_duration_s: float | None = None,
 ) -> None: ...
+
 
 def compute_ei_for_gui(
     data: np.ndarray,

@@ -598,7 +598,9 @@ Permanent filters are applied at the application level and affect the active sig
 
 Signal flow: raw data → reference choice → filters → viewer + PSD + computation panel
 
-This means the viewer, PSD panel, and computation panel all use the same filtered signal.
+This means the viewer, PSD panel, and mean computation use the same filtered signal.
+
+The EI workflow is different: it starts from the current montage, ignores the display filter, excludes confirmed bad channels, then applies its own internal 70-140 Hz zero-phase Butterworth bandpass before computing EI.
 
 ### Available filters
 
@@ -674,7 +676,7 @@ The computation panel uses:
 
 - the current dataset
 - the current selected channels
-- the current time context
+- the current montage
 
 The computation panel opens at a wider default size and can be resized by dragging the divider between the dock and the main signal viewer. It can also be floated or moved to the left, right, or bottom dock area from its title bar.
 
@@ -684,11 +686,133 @@ The panel follows the main viewer time and cursor behavior when “linked” box
 
 The computation panel provides quick selection buttons:
 
-- **All**: select all channels
-- **Macro**: select all macro channels
-- **Micro**: select all micro channels
+- **All**: select all displayed channels
+- **Macro**: select all displayed macro channels
+- **Micro**: select all displayed micro channels
 
-This allows rapid setup of computations without manual selection.
+This allows rapid setup of computations without manual channel picking.
+
+### Mean mode
+
+In Mean mode, the panel can follow the main viewer time window when the link option is enabled.
+
+The mean output plot can optionally match the main viewer display scaling.
+
+### EI mode
+
+EI mode is designed for manual seizure-window entry and delayed execution.
+
+The EI time section contains:
+
+- **Seizure onset (s)**
+- **Seizure offset (s)**
+- **Baseline start / end**
+- **Ictal start / end**
+
+Default EI windows are derived from seizure onset:
+
+- baseline start = seizure onset - 70 s
+- baseline end = seizure onset - 10 s
+- ictal start = seizure onset - 5 s
+- ictal end = seizure onset + 20 s
+
+These defaults can be restored with **Use default windows** and can then be edited manually.
+
+### EI validation rules
+
+EI runs only if all timing inputs are coherent.
+
+Current checks include:
+
+- seizure offset must be after seizure onset
+- seizure duration must be more than 20 seconds
+- baseline end must be after baseline start
+- ictal end must be after ictal start
+- baseline must end at or before seizure onset
+- ictal must start at or before seizure onset
+- ictal must end at or before seizure offset
+- windows must remain inside the recording when recording duration is available
+
+If any check fails, the software shows a warning and EI is not run.
+
+### EI montage recommendation
+
+EI shows a small information button with the recommendation that bipolar montage is preferred.
+
+When you click **Run EI**:
+
+- if the current montage is bipolar, EI runs directly
+- if the montage is not bipolar or is unknown, the software shows a warning dialog
+
+From that dialog you can:
+
+- **Switch to Bipolar**
+- **Run Anyway**
+- **Cancel**
+
+If you switch to bipolar successfully, the software stops there and asks you to review the channels and run EI again.
+
+### EI preprocessing
+
+The current implementation uses fixed EI preprocessing:
+
+- input data taken from the current montage
+- confirmed bad channels excluded
+- display filter ignored
+- internal 70-140 Hz zero-phase 4th-order Butterworth bandpass applied
+- no automatic notch filter
+- no automatic common-average reference
+
+### EI advanced parameters
+
+The **Advanced parameters** button opens a separate non-docked window.
+
+At present, this window is informational. It shows the current EI assumptions and preprocessing settings, while baseline and ictal windows remain editable in the main EI section.
+
+### EI outputs
+
+After a successful run, the panel enables two output windows:
+
+- **Open EI summary**
+- **Open EI heatmap**
+
+The EI summary shows:
+
+- channel
+- EI score
+- rank
+- EI onset from ictal start
+- recruitment delay
+
+Recruitment delay is computed relative to the manually entered seizure onset.
+
+The EI heatmap shows:
+
+- log-scaled HFER activity
+- channel names on the y-axis
+- a dashed vertical line at time 0
+- EI score side bars
+- sorting controls
+- top-N channel display control
+
+Available heatmap sorting modes:
+
+- EI score
+- Recruitment delay
+- Peak HFER activity
+- Mean HFER activity
+- Original channel order
+- Channel name
+
+### Saved project state
+
+When you save a project, the computation panel preserves its current state, including:
+
+- selected algorithm
+- selected channels
+- seizure onset and seizure offset
+- baseline and ictal windows
+- last EI result metadata when available
 
 ---
 

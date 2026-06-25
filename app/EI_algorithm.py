@@ -211,7 +211,18 @@ def bandpass_hf(data: Array, fs: float) -> Array:
         raise ValueError(f"Sampling rate too low for 70 Hz high-frequency bandpass: fs={fs}")
 
     high = min(140, nyquist - 1)
-    b_raw, a_raw = signal.butter(4, [70, high], "bandpass", fs=fs)
+    ba_coefficients = cast(
+        tuple[Array, Array],
+        signal.butter(
+            N=4,
+            Wn=[70.0, float(high)],
+            btype="bandpass",
+            analog=False,
+            output="ba",
+            fs=float(fs),
+        ),
+    )
+    b_raw, a_raw = ba_coefficients
     b = cast(Array, np.asarray(b_raw, dtype=np.float64))
     a = cast(Array, np.asarray(a_raw, dtype=np.float64))
     filtered = signal.filtfilt(b, a, np.asarray(data, dtype=np.float64), axis=1)
@@ -253,8 +264,6 @@ def validate_gui_ei_timing(
         raise ValueError("Baseline end must be after baseline start.")
     if ictal_end_s <= ictal_start_s:
         raise ValueError("Ictal end must be after ictal start.")
-    if abs((baseline_end_s - baseline_start_s) - 60.0) > 1e-6:
-        raise ValueError("Baseline window must be exactly 60 seconds long.")
     if baseline_end_s > seizure_onset_s:
         raise ValueError("Baseline window must end at or before seizure onset.")
     if ictal_start_s > seizure_onset_s:

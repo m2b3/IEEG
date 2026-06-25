@@ -1,6 +1,6 @@
 # iEEG Tool
 
-A desktop application for reviewing intracranial EEG (iEEG) recordings with interactive visualization, rereferencing tools, annotation support, scalogram review, and project-based workflows.
+A desktop application for reviewing intracranial EEG (iEEG) recordings with interactive visualization, rereferencing tools, annotation support, scalogram review, computation/PSD tools, and project-based workflows.
 
 Built with **PySide6**, **PyQtGraph**, **MNE**, NumPy, and SciPy.
 
@@ -47,6 +47,9 @@ Rendering is optimized to:
 - Open scalogram windows from a selected channel/time interval and filter displayed frequencies
 - Apply permanent filters from a collapsible control strip
 - Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
+- Run computation-panel workflows for channel mean traces and Epileptogenicity Index (EI)
+- Enter seizure onset/offset and baseline/ictal windows manually for EI runs
+- Review EI results in a sortable summary table and heatmap
 - Save and reopen project state
 - Warn about unsaved review changes before closing
 - Use resizable computation, annotation, and PSD panels for selected channels
@@ -72,12 +75,20 @@ From the project root folder:
 pip install -r requirements.txt
 ```
 
+The project is typically run from the local virtual environment in `.venv`.
+
 ## Running
 
 From the project root folder:
 
 ```bash
 python main.py
+```
+
+If you are using the project virtual environment on Windows:
+
+```bash
+.\.venv\Scripts\python.exe main.py
 ```
 
 ## User Guide
