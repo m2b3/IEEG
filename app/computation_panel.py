@@ -1083,23 +1083,7 @@ class ComputationPanel(QWidget):
         channel_result: EIChannelResult,
         metadata: dict | None,
     ) -> tuple[float, bool]:
-        result_metadata = metadata if isinstance(metadata, dict) else {}
-        seizure_onset = result_metadata.get("seizure_onset_s")
-        ictal_window = result_metadata.get("ictal_window_s")
-        if (
-            not isinstance(seizure_onset, (int, float))
-            or not isinstance(ictal_window, (list, tuple))
-            or len(ictal_window) < 1
-            or not isinstance(ictal_window[0], (int, float))
-        ):
-            return float(channel_result.onset_sec_in_ictal_window), False
-
-        recruitment_delay = (
-            float(ictal_window[0])
-            + float(channel_result.onset_sec_in_ictal_window)
-            - float(seizure_onset)
-        )
-        return recruitment_delay, True
+        return float(channel_result.onset_sec_from_seizure_onset), True
 
     def _open_ei_summary_dialog(self) -> None:
         result = self._last_ei_result
@@ -1119,7 +1103,7 @@ class ComputationPanel(QWidget):
                 "Channel",
                 "EI score",
                 "Rank",
-                "EI onset from ictal start (s)",
+                "EI onset from seizure onset (s)",
                 "Recruitment delay (s)",
             ]
         )
@@ -1148,7 +1132,7 @@ class ComputationPanel(QWidget):
                     "channel_sort": str(channel_result.channel).casefold(),
                     "ei_score": float(channel_result.ei),
                     "rank": int(channel_result.rank),
-                    "ei_onset": float(channel_result.onset_sec_in_ictal_window),
+                    "ei_onset": float(channel_result.onset_sec_from_seizure_onset),
                     "recruitment_delay": (
                         float(recruitment_delay) if has_delay_metadata else float("inf")
                     ),
@@ -1300,14 +1284,14 @@ class ComputationPanel(QWidget):
 
         heatmap_plot = pg.PlotWidget()
         heatmap_plot.showGrid(x=True, y=True, alpha=0.15)
-        heatmap_plot.setLabel("bottom", "Time (s)")
+        heatmap_plot.setLabel("bottom", "Time from seizure onset (s)")
         heatmap_plot.setLabel("left", "Channel")
         heatmap_plot.getAxis("left").setWidth(140)
         heatmap_plot.getViewBox().invertY(True)
         score_plot.setYLink(heatmap_plot)
         score_plot.getViewBox().invertY(True)
 
-        heatmap_image = pg.ImageItem()
+        heatmap_image = pg.ImageItem(axisOrder="row-major")
         heatmap_plot.addItem(heatmap_image)
         color_map = pg.colormap.get("viridis")
         color_bar: pg.ColorBarItem | None = None
@@ -1320,7 +1304,7 @@ class ComputationPanel(QWidget):
                 label="log10 HFER",
                 interactive=False,
             )
-            color_bar.setImageItem(heatmap_image, insert_in=heatmap_plot)
+            color_bar.setImageItem(heatmap_image, insert_in=heatmap_plot.getPlotItem())
         onset_line = pg.InfiniteLine(
             pos=0.0,
             angle=90,
@@ -1348,13 +1332,29 @@ class ComputationPanel(QWidget):
                 return
 
             heatmap_data, times, channel_names, ei_scores, missing_delay_metadata = view
+            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+            seizure_onset = metadata.get("seizure_onset_s")
+            ictal_window = metadata.get("ictal_window_s")
+            time_bounds: tuple[float, float] | None = None
+            if (
+                isinstance(seizure_onset, (int, float))
+                and isinstance(ictal_window, (list, tuple))
+                and len(ictal_window) >= 2
+                and isinstance(ictal_window[0], (int, float))
+                and isinstance(ictal_window[1], (int, float))
+            ):
+                relative_ictal_start = float(ictal_window[0]) - float(seizure_onset)
+                relative_ictal_end = float(ictal_window[1]) - float(seizure_onset)
+                times = times + relative_ictal_start
+                if relative_ictal_end > relative_ictal_start:
+                    time_bounds = (relative_ictal_start, relative_ictal_end)
             if missing_delay_metadata and sort_mode == "recruitment_delay":
                 if not warned_missing_recruitment_metadata["shown"]:
                     QMessageBox.warning(
                         dialog,
                         "EI heatmap",
                         "Recruitment delay metadata is incomplete. Falling back to "
-                        "EI onset from ictal start for sorting.",
+                        "EI onset from seizure onset for sorting.",
                     )
                     warned_missing_recruitment_metadata["shown"] = True
 
@@ -1369,7 +1369,14 @@ class ComputationPanel(QWidget):
                     color_bar.setLevels((heatmap_min, heatmap_max))
 
             n_rows = int(heatmap_data.shape[0])
-            if times.size >= 2:
+            if time_bounds is not None:
+                x_start = float(time_bounds[0])
+                width = float(time_bounds[1] - time_bounds[0])
+                heatmap_view_box.setRange(
+                    xRange=time_bounds,
+                    padding=0.0,
+                )
+            elif times.size >= 2:
                 dt = float(np.median(np.diff(times)))
                 x_start = float(times[0]) - (0.5 * dt)
                 width = float(times[-1] - times[0] + dt)
@@ -1466,7 +1473,7 @@ class ComputationPanel(QWidget):
         for original_idx, channel_name in enumerate(channel_names):
             channel_result = cast(EIChannelResult | None, channel_info.get(str(channel_name)))
             onset_sec = (
-                float(channel_result.onset_sec_in_ictal_window)
+                float(channel_result.onset_sec_from_seizure_onset)
                 if channel_result is not None
                 else 0.0
             )

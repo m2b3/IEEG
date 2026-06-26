@@ -72,7 +72,7 @@ class EIChannelResult:
     ei: float
     rank: int
     onset_sample_in_ictal_window: int
-    onset_sec_in_ictal_window: float
+    onset_sec_from_seizure_onset: float
 
 
 @dataclass
@@ -364,6 +364,7 @@ def compute_ei_for_gui(
 
     ranks = np.asarray(np.asarray(ei).argsort()[::-1].argsort() + 1, dtype=int)
     groups = channel_groups or {}
+    onset_time_shift_s = float(ictal_start_s) - float(seizure_onset_s)
     rows = [
         EIChannelResult(
             channel=name,
@@ -371,7 +372,9 @@ def compute_ei_for_gui(
             ei=float(ei[idx]),
             rank=int(ranks[idx]),
             onset_sample_in_ictal_window=int(channel_onset_samples[idx]),
-            onset_sec_in_ictal_window=float(channel_onset_samples[idx]) / float(fs),
+            onset_sec_from_seizure_onset=(
+                float(channel_onset_samples[idx]) / float(fs) + onset_time_shift_s
+            ),
         )
         for idx, name in enumerate(kept_names)
     ]

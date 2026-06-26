@@ -783,12 +783,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Open EEG error", "Could not build active raw.")
             return False
 
-        t0 = float(self.viewer.time_start())
-        ch0 = int(self.viewer.channel_start())
-
-        time_range = float(self.viewer._time_range)
-        chan_range = int(self.viewer._chan_range)
-        gain = float(self.viewer._gain_uv)
+        time_range = float(self.time_range.value())
+        chan_range = int(self.chan_range.value())
+        gain = float(self.gain.value())
 
         self.viewer.set_raw(self.current_raw, self.current_picks)
         self.viewer.set_channel_groups(self.channel_groups)
@@ -803,8 +800,8 @@ class MainWindow(QMainWindow):
             gain=gain,
         )
 
-        self.viewer.set_time_start(t0)
-        self.viewer.set_channel_start(ch0)
+        self.viewer.set_time_start(0.0)
+        self.viewer.set_channel_start(0)
 
         self._saved_bipolar_montage = None
         self._update_montage_label()
@@ -1404,7 +1401,7 @@ class MainWindow(QMainWindow):
         self.viewer.show()
         self.viewer.update()
         self._update_time_slider_range()
-        self._sync_time_from_viewer(0.0)
+        self._sync_time_from_viewer(self.viewer.time_start())
 
         for m in getattr(self, "_menus_disabled_until_loaded", []):
             m.setEnabled(True)

@@ -854,18 +854,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             if self._bipolar_montage is None or not self._bipolar_montage.pairs:
                 return None, None
 
-            full_data = self._get_or_compute_bipolar_data()
-            if full_data is None:
+            data_v = self._get_bipolar_segment_for_abs_indices(
+                visible_abs,
+                start_samp,
+                end_samp,
+            )
+            if data_v is None:
                 return None, None
 
-            valid_visible_abs = [
-                abs_idx for abs_idx in visible_abs
-                if 0 <= abs_idx < full_data.shape[0]
-            ]
-            if not valid_visible_abs:
-                return None, None
-
-            data_v = full_data[np.asarray(valid_visible_abs, dtype=int), start_samp:end_samp]
             times = np.asarray(raw.times[start_samp:end_samp], dtype=float)
 
         else:
@@ -1338,6 +1334,49 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cached_bipolar_data = full_data
         return full_data
 
+    def _get_bipolar_segment_for_abs_indices(
+        self,
+        abs_indices: list[int],
+        start_samp: int,
+        stop_samp: int,
+    ) -> np.ndarray | None:
+        if self._raw is None or self._picks.size == 0:
+            return None
+        if self._bipolar_montage is None or not self._bipolar_montage.pairs:
+            return None
+
+        raw = self._raw
+        picks = self._picks
+        name_to_pick_idx = {
+            self._channel_names[i]: int(picks[i])
+            for i in range(len(self._channel_names))
+        }
+
+        rows: list[np.ndarray] = []
+        for abs_idx in abs_indices:
+            if not (0 <= int(abs_idx) < len(self._bipolar_pairs)):
+                continue
+
+            pair = self._bipolar_pairs[int(abs_idx)]
+            raw_idx_1 = name_to_pick_idx.get(pair.ch1)
+            raw_idx_2 = name_to_pick_idx.get(pair.ch2)
+            if raw_idx_1 is None or raw_idx_2 is None:
+                continue
+
+            d1, _ = self._read_raw_segment(raw, [int(raw_idx_1)], start_samp, stop_samp)
+            d2, _ = self._read_raw_segment(raw, [int(raw_idx_2)], start_samp, stop_samp)
+
+            d1_arr = np.asarray(d1, dtype=float)
+            d2_arr = np.asarray(d2, dtype=float)
+            if d1_arr.ndim != 2 or d2_arr.ndim != 2 or d1_arr.shape[0] == 0 or d2_arr.shape[0] == 0:
+                continue
+
+            rows.append(d1_arr[0, :] - d2_arr[0, :])
+
+        if not rows:
+            return None
+        return np.vstack(rows).astype(float, copy=False)
+
     def get_channel_segment(
         self,
         abs_idx: int,
@@ -1401,10 +1440,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             signal_v = np.asarray(data_v, dtype=float)[0] - np.asarray(ref_v, dtype=float)[0]
 
         elif self._reference_mode == "bipolar":
-            full_data = self._get_or_compute_bipolar_data()
-            if full_data is None or not (0 <= int(abs_idx) < full_data.shape[0]):
+            signal_data = self._get_bipolar_segment_for_abs_indices(
+                [int(abs_idx)],
+                start_samp,
+                stop_samp,
+            )
+            if signal_data is None or signal_data.shape[0] == 0:
                 return None
-            signal_v = np.asarray(full_data[int(abs_idx), start_samp:stop_samp], dtype=float)
+            signal_v = np.asarray(signal_data[0, :], dtype=float)
 
         else:
             return None

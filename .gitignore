@@ -5,6 +5,11 @@
 __pycache__/
 *.pyc
 
+# Local manual stress-test utilities and generated recordings
+scripts/
+tools/
+synthetic_long_recordings/
+
 # OS / editor
 .DS_Store
 .vscode/

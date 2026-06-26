@@ -14,7 +14,7 @@ class EIChannelResult:
     ei: float
     rank: int
     onset_sample_in_ictal_window: int
-    onset_sec_in_ictal_window: float
+    onset_sec_from_seizure_onset: float
 
 
 @dataclass

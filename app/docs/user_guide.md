@@ -781,7 +781,7 @@ The EI summary shows:
 - channel
 - EI score
 - rank
-- EI onset from ictal start
+- EI onset from seizure onset
 - recruitment delay
 
 Recruitment delay is computed relative to the manually entered seizure onset.
@@ -789,8 +789,9 @@ Recruitment delay is computed relative to the manually entered seizure onset.
 The EI heatmap shows:
 
 - log-scaled HFER activity
+- time on the x-axis relative to seizure onset
 - channel names on the y-axis
-- a dashed vertical line at time 0
+- a dashed vertical line at seizure onset, time 0
 - EI score side bars
 - sorting controls
 - top-N channel display control
