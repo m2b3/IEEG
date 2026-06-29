@@ -125,6 +125,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._display_names: List[str] = []
         self._monopolar_abs_to_pick_idx: list[int] = []
         self._bipolar_pairs: list[BipolarPair] = []
+        self._display_order_override_abs: list[int] | None = None
 
         # ---- View params ----
         self._t_start: float = 0.0
@@ -155,6 +156,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_onset_s: float | None = None
         self._seizure_offset_s: float | None = None
         self._seizure_marker_lines: list[pg.InfiniteLine] = []
+        self._seizure_marker_labels: list[pg.TextItem] = []
+        self._recruitment_marker_times: dict[str, float] = {}
+        self._recruitment_marker_items: list[Any] = []
         self._context_menu_active = False
 
         # ---- Layout: label plot (left) + signal plot (right) ----
@@ -276,6 +280,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._display_names = []
         self._monopolar_abs_to_pick_idx = []
         self._bipolar_pairs = []
+        self._display_order_override_abs = None
 
         self._common_ref_name = None
 
@@ -292,6 +297,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_onset_s = None
         self._seizure_offset_s = None
         self._seizure_marker_lines = []
+        self._seizure_marker_labels = []
+        self._recruitment_marker_times = {}
+        self._recruitment_marker_items = []
         self._visible_abs = np.array([], dtype=int)
         self._last_visible_abs = []
         self._last_visible_ch_indices = []
@@ -361,6 +369,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._display_names = list(self._channel_names)
         self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
         self._bipolar_pairs = []
+        self._display_order_override_abs = None
 
         # Reset view
         self._t_start = 0.0
@@ -368,6 +377,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_onset_s = None
         self._seizure_offset_s = None
         self._seizure_marker_lines = []
+        self._seizure_marker_labels = []
+        self._recruitment_marker_times = {}
+        self._recruitment_marker_items = []
         self._selected_abs_set.clear()   
 
         # Reset per-dataset annotations (do NOT carry across datasets)
@@ -492,6 +504,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._set_ranges(t_ds, n_vis, seg_ds_uv)
         self._draw_time_lines(t_ds)
         self._draw_seizure_markers(t_ds)
+        self._draw_recruitment_markers(t_ds, visible_abs)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
 
@@ -508,6 +521,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._time_lines = []
         self._cursor_line = None
         self._seizure_marker_lines = []
+        self._seizure_marker_labels = []
+        self._recruitment_marker_items = []
         self._minmax_items = []
 
     def _ensure_signal_item(self, item) -> None:
@@ -657,6 +672,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     y0 = min(y0, float(np.nanmin(finite_y)) - trace_margin)
                     y1 = max(y1, float(np.nanmax(finite_y)) + trace_margin)
 
+        if self._seizure_onset_s is not None or self._seizure_offset_s is not None:
+            y1 += 0.45 * spacing
+
         t0 = float(t_ds[0])
         t1 = float(t_ds[-1])
         xpad = 0.06 * max(1e-9, (t1 - t0))
@@ -699,22 +717,100 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         t0 = float(t_arr[0])
         t1 = float(t_arr[-1])
+        y_min, y_max = self._sig_vb.viewRange()[1]
+        top_trace_y = max(0.0, float(len(getattr(self, "_last_visible_abs", [])) - 1)) * float(self._spacing)
+        label_band = max(1e-9, float(y_max) - top_trace_y)
+        x_span = max(1e-9, float(t1) - float(t0))
+        label_y = float(y_max) - 0.18 * label_band
         markers = (
-            (self._seizure_onset_s, Qt.PenStyle.DashLine),
-            (self._seizure_offset_s, Qt.PenStyle.DashLine),
+            (self._seizure_onset_s, "Seizure onset", Qt.PenStyle.DashLine),
+            (self._seizure_offset_s, "Seizure offset", Qt.PenStyle.DashLine),
         )
-        for marker_s, style in markers:
+        for marker_s, label_text, style in markers:
             if marker_s is None or not np.isfinite(float(marker_s)):
                 continue
             if not (t0 <= float(marker_s) <= t1):
                 continue
+            marker_x = float(marker_s)
             line = pg.InfiniteLine(pos=float(marker_s), angle=90, movable=False)
             line.setZValue(20)
-            pen = pg.mkPen((145, 230, 170, 220), width=1.2, style=style)
+            pen = pg.mkPen((45, 160, 85, 235), width=2.0, style=style)
             pen.setDashPattern([5, 4])
             line.setPen(pen)
             self.signal_plot.addItem(line)
             self._seizure_marker_lines.append(line)
+
+            label_x_offset = 0.008 * x_span
+            label_anchor = (0.0, 0.0)
+            label_x = marker_x + label_x_offset
+            if label_x > t1:
+                label_x = marker_x - label_x_offset
+                label_anchor = (1.0, 0.0)
+            label = pg.TextItem(
+                text=label_text,
+                color=(35, 135, 70, 255),
+                anchor=label_anchor,
+            )
+            label.setZValue(21)
+            label.setPos(label_x, label_y)
+            self.signal_plot.addItem(label)
+            self._seizure_marker_labels.append(label)
+
+    def set_recruitment_markers(self, markers: dict[str, float] | None) -> None:
+        cleaned: dict[str, float] = {}
+        if isinstance(markers, dict):
+            for channel_name, time_s in markers.items():
+                try:
+                    value = float(time_s)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(value):
+                    cleaned[str(channel_name)] = value
+        self._recruitment_marker_times = cleaned
+        if self._raw is not None:
+            self.render()
+
+    def _draw_recruitment_markers(
+        self,
+        t_ds: np.ndarray,
+        visible_abs: list[int],
+    ) -> None:
+        if not self._recruitment_marker_times:
+            return
+
+        t_arr = np.asarray(t_ds, dtype=float).reshape(-1)
+        if t_arr.size < 2:
+            return
+
+        t0 = float(t_arr[0])
+        t1 = float(t_arr[-1])
+        display_names = self.get_channel_names()
+        tick_half_height = 0.22 * float(self._spacing)
+
+        tick_pen = pg.mkPen((245, 174, 58, 245), width=3)
+
+        for visible_row, abs_idx in enumerate(list(visible_abs)):
+            abs_idx = int(abs_idx)
+            if not (0 <= abs_idx < len(display_names)):
+                continue
+
+            marker_time = self._recruitment_marker_times.get(str(display_names[abs_idx]))
+            if marker_time is None:
+                continue
+            marker_time = float(marker_time)
+            if not (t0 <= marker_time <= t1):
+                continue
+
+            y_center = (len(visible_abs) - 1 - visible_row) * float(self._spacing)
+            y0 = y_center - tick_half_height
+            y1 = y_center + tick_half_height
+            x_values = [marker_time, marker_time]
+            y_values = [y0, y1]
+
+            tick = pg.PlotDataItem(x_values, y_values, pen=tick_pen)
+            tick.setZValue(24)
+            self.signal_plot.addItem(tick)
+            self._recruitment_marker_items.append(tick)
 
     def _draw_cursor(self, t_ds: np.ndarray):
         t0 = float(np.asarray(t_ds).reshape(-1)[0].item())
@@ -931,7 +1027,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         names = self.get_channel_names()
         visible: list[int] = []
 
-        for abs_idx, ch_name in enumerate(names):
+        ordered_abs = self._display_order_override_abs
+        if ordered_abs is None:
+            ordered_abs = list(range(len(names)))
+
+        for abs_idx in ordered_abs:
+            if not (0 <= int(abs_idx) < len(names)):
+                continue
+            ch_name = names[int(abs_idx)]
             raw_name = self._channel_names[abs_idx] if abs_idx < len(self._channel_names) else ch_name
 
             # Hidden channels disappear from the main viewer
@@ -1221,6 +1324,41 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
     def get_raw_channel_names(self) -> list[str]:
         return list(self._channel_names)
+
+    def set_display_order_by_channel_names(self, ordered_names: list[str] | None) -> None:
+        names = self.get_channel_names()
+        if not ordered_names:
+            self.clear_display_order_override()
+            return
+
+        name_to_abs = {str(name): idx for idx, name in enumerate(names)}
+        ordered_abs: list[int] = []
+        seen: set[int] = set()
+        for channel_name in ordered_names:
+            idx = name_to_abs.get(str(channel_name))
+            if idx is None or idx in seen:
+                continue
+            ordered_abs.append(int(idx))
+            seen.add(int(idx))
+
+        for idx in range(len(names)):
+            if idx not in seen:
+                ordered_abs.append(int(idx))
+
+        self._display_order_override_abs = ordered_abs
+        self._ch_start = 0
+        self._clamp_ch_start()
+        self.render()
+        self.channelWindowChanged.emit(self._ch_start)
+
+    def clear_display_order_override(self) -> None:
+        if self._display_order_override_abs is None:
+            return
+        self._display_order_override_abs = None
+        self._ch_start = 0
+        self._clamp_ch_start()
+        self.render()
+        self.channelWindowChanged.emit(self._ch_start)
 
     def _display_name_for_abs(self, abs_idx: int) -> str:
         names = self.get_channel_names()

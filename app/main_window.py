@@ -375,6 +375,10 @@ class MainWindow(QMainWindow):
         self.comp_panel.settingsChanged.connect(self._mark_project_dirty)
         self.comp_panel.seizureMarkersChanged.connect(self._on_ei_markers_changed)
         self.comp_panel.seizureMarkerEdited.connect(self._on_ei_marker_edited)
+        self.comp_panel.recruitmentMarkersChanged.connect(self._on_ei_recruitment_markers_changed)
+        self.comp_panel.eiSummaryChannelActivated.connect(self._on_ei_summary_channel_activated)
+        self.comp_panel.eiSummaryOrderChanged.connect(self._on_ei_summary_order_changed)
+        self.comp_dock.visibilityChanged.connect(self._on_computation_dock_visibility_changed)
         
         # Make computation panel follow the viewer cursor (instead of window start)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
@@ -1779,11 +1783,23 @@ class MainWindow(QMainWindow):
             self.console.log(f"Selected channel: {abs_idx}")
             return
 
-        raw_idx = int(self.current_picks[abs_idx])
-        ch_name = self.current_raw.ch_names[raw_idx]
-        ch_type = self.current_raw.get_channel_types(picks=[raw_idx])[0]
+        display_names = self.viewer.get_channel_names()
+        display_name = (
+            str(display_names[int(abs_idx)])
+            if 0 <= int(abs_idx) < len(display_names)
+            else str(abs_idx)
+        )
+        self.comp_panel.highlight_ei_summary_channel(display_name)
+
+        raw_idx = int(self.current_picks[abs_idx]) if 0 <= int(abs_idx) < len(self.current_picks) else None
+        ch_name = self.current_raw.ch_names[raw_idx] if raw_idx is not None else display_name
+        ch_type = (
+            self.current_raw.get_channel_types(picks=[raw_idx])[0]
+            if raw_idx is not None
+            else self.viewer.reference_mode()
+        )
         self.console.log(
-            f"Selected: {ch_name} (shown idx {abs_idx}, raw idx {raw_idx}, type: {ch_type})"
+            f"Selected: {display_name} (shown idx {abs_idx}, raw: {ch_name}, type: {ch_type})"
         )
 
     def _show_hidden_channels_menu(self):
@@ -1830,6 +1846,24 @@ class MainWindow(QMainWindow):
         self.viewer.set_time_start(target - 0.5 * view_range)
         self.viewer.set_cursor_x(target)
         self.time_ctl.set_t0(self.viewer.time_start())
+
+    def _on_ei_recruitment_markers_changed(self, markers: dict) -> None:
+        self.viewer.set_recruitment_markers(markers if isinstance(markers, dict) else {})
+
+    def _on_ei_summary_order_changed(self, ordered_channel_names: list) -> None:
+        if self.current_raw is None:
+            return
+        names = [str(name) for name in ordered_channel_names]
+        self.viewer.set_display_order_by_channel_names(names)
+
+    def _on_computation_dock_visibility_changed(self, visible: bool) -> None:
+        if visible:
+            return
+        if self.viewer is None:
+            return
+        self.viewer.set_seizure_markers(None, None)
+        self.viewer.set_recruitment_markers({})
+        self.viewer.clear_display_order_override()
 
     def _refresh_display_name_dependent_ui(self) -> None:
         self._sync_comp_panel_context()
@@ -2105,6 +2139,14 @@ class MainWindow(QMainWindow):
     def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
         # Highlight the same channels in main viewer (and treat it as selection)
         self.viewer.set_selected_abs(selected_abs, anchor=(selected_abs[-1] if selected_abs else None), emit=True)
+
+    def _on_ei_summary_channel_activated(self, channel_name: str) -> None:
+        display_names = self.viewer.get_channel_names()
+        idx = self._find_channel_index_by_label(display_names, str(channel_name))
+        if idx is None:
+            return
+        self.viewer.center_channel_on(int(idx))
+        self.viewer.set_selected_abs([int(idx)], anchor=int(idx), emit=True)
 
 # ---------------- Referencing  -------------
  

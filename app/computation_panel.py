@@ -63,6 +63,9 @@ class ComputationPanel(QWidget):
     settingsChanged = Signal()
     seizureMarkersChanged = Signal(object, object)  # onset_s, offset_s
     seizureMarkerEdited = Signal(str, object)  # "onset" | "offset", value_s
+    recruitmentMarkersChanged = Signal(dict)  # display channel name -> absolute time_s
+    eiSummaryChannelActivated = Signal(str)
+    eiSummaryOrderChanged = Signal(list)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -84,6 +87,8 @@ class ComputationPanel(QWidget):
         self._last_ei_result: EIComputationResult | None = None
         self._ei_summary_dialog: QDialog | None = None
         self._ei_heatmap_dialog: QDialog | None = None
+        self._ei_summary_table: QTableWidget | None = None
+        self._ei_summary_row_by_channel: dict[str, int] = {}
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
 
@@ -791,6 +796,7 @@ class ComputationPanel(QWidget):
 
     def _on_ei_onset_text_changed(self, _text: str) -> None:
         self.state.seizure_onset_s = self._parse_float_text(self.edit_seizure_onset)
+        self._clear_ei_outputs()
         self.seizureMarkersChanged.emit(
             self.state.seizure_onset_s,
             self.state.seizure_offset_s,
@@ -801,6 +807,7 @@ class ComputationPanel(QWidget):
 
     def _on_ei_offset_text_changed(self, _text: str) -> None:
         self.state.seizure_offset_s = self._parse_float_text(self.edit_seizure_offset)
+        self._clear_ei_outputs()
         self.seizureMarkersChanged.emit(
             self.state.seizure_onset_s,
             self.state.seizure_offset_s,
@@ -1078,6 +1085,9 @@ class ComputationPanel(QWidget):
     def _clear_ei_outputs(self) -> None:
         self._last_ei_result = None
         self.ei_result_metadata = None
+        self.recruitmentMarkersChanged.emit({})
+        self._ei_summary_table = None
+        self._ei_summary_row_by_channel = {}
 
         if hasattr(self, "btn_open_ei_summary"):
             self.btn_open_ei_summary.setEnabled(False)
@@ -1088,11 +1098,33 @@ class ComputationPanel(QWidget):
     def _show_ei_result(self, result: EIComputationResult) -> None:
         self._last_ei_result = result
         self.ei_result_metadata = result.metadata
+        self.recruitmentMarkersChanged.emit(
+            self._recruitment_markers_from_result(result)
+        )
 
         self.btn_open_ei_summary.setEnabled(True)
         self.btn_open_ei_heatmap.setEnabled(bool(result.heatmap.size))
 
         self._open_ei_summary_dialog()
+
+    def _recruitment_markers_from_result(
+        self,
+        result: EIComputationResult,
+    ) -> dict[str, float]:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        seizure_onset = metadata.get("seizure_onset_s", self.state.seizure_onset_s)
+        if not isinstance(seizure_onset, (int, float)):
+            return {}
+
+        markers: dict[str, float] = {}
+        for channel_result in result.channels:
+            recruitment_time = (
+                float(seizure_onset)
+                + float(channel_result.onset_sec_from_seizure_onset)
+            )
+            if np.isfinite(recruitment_time):
+                markers[str(channel_result.channel)] = float(recruitment_time)
+        return markers
 
     def _compute_recruitment_delay(
         self,
@@ -1133,6 +1165,8 @@ class ComputationPanel(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         for col in range(1, 5):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        self._ei_summary_table = table
+        self._ei_summary_row_by_channel = {}
 
         metadata = result.metadata or {}
         hfer_activity_by_channel: dict[str, float] = {}
@@ -1192,12 +1226,15 @@ class ComputationPanel(QWidget):
         def populate_summary_table(rows: list[dict[str, float | int | str]]) -> None:
             table.setSortingEnabled(False)
             table.setRowCount(0)
+            self._ei_summary_row_by_channel = {}
             for row_data in rows:
                 row_idx = table.rowCount()
                 table.insertRow(row_idx)
+                channel_name = str(row_data["channel"])
+                self._ei_summary_row_by_channel[channel_name] = int(row_idx)
 
                 values = [
-                    str(row_data["channel"]),
+                    channel_name,
                     f"{float(row_data['ei_score']):.4f}",
                     str(int(row_data["rank"])),
                     str(row_data["hfer_activity_text"]),
@@ -1206,6 +1243,7 @@ class ComputationPanel(QWidget):
 
                 for col, value in enumerate(values):
                     item = QTableWidgetItem(value)
+                    item.setData(Qt.ItemDataRole.UserRole, channel_name)
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     if col in {1, 2, 3, 4}:
                         item.setTextAlignment(
@@ -1213,6 +1251,18 @@ class ComputationPanel(QWidget):
                         )
                     table.setItem(row_idx, col, item)
             table.setSortingEnabled(False)
+            self.eiSummaryOrderChanged.emit(
+                [str(row["channel"]) for row in rows]
+            )
+
+        def activate_summary_row(row: int, _column: int) -> None:
+            item = table.item(int(row), 0)
+            if item is None:
+                return
+            channel_name = item.data(Qt.ItemDataRole.UserRole)
+            if channel_name is None:
+                channel_name = item.text()
+            self.eiSummaryChannelActivated.emit(str(channel_name))
 
         sort_state = {
             "column": -1,
@@ -1273,6 +1323,7 @@ class ComputationPanel(QWidget):
 
         header.setSortIndicatorShown(True)
         header.sectionClicked.connect(sort_summary_table)
+        table.cellClicked.connect(activate_summary_row)
         populate_summary_table(summary_rows)
         layout.addWidget(table)
 
@@ -1285,6 +1336,20 @@ class ComputationPanel(QWidget):
         dialog.activateWindow()
 
         self._ei_summary_dialog = dialog
+
+    def highlight_ei_summary_channel(self, channel_name: str) -> bool:
+        table = self._ei_summary_table
+        if table is None:
+            return False
+        row = self._ei_summary_row_by_channel.get(str(channel_name))
+        if row is None:
+            return False
+        if not (0 <= int(row) < table.rowCount()):
+            return False
+        table.setCurrentCell(int(row), 0)
+        table.selectRow(int(row))
+        table.scrollToItem(table.item(int(row), 0))
+        return True
 
     def _open_ei_heatmap_dialog(self) -> None:
         result = self._last_ei_result
