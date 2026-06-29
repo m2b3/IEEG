@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+import sys
 from typing import Optional, List, cast, Any
 
 import numpy as np
@@ -16,6 +18,14 @@ from app.annotations import (
     ANNOTATION_TYPES,
 )
 from app.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
+from app.filtering import (
+    FilterProfiles,
+    FilterSettings,
+    apply_settings_to_array,
+    is_filter_active,
+    profiles_padding_seconds,
+    profiles_signature,
+)
 from app.referencing import BipolarMontage, BipolarPair
 
 class AnnotationRect(QtWidgets.QGraphicsRectItem):
@@ -105,6 +115,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._fs: float = 1.0
         self._picks: np.ndarray = np.array([], dtype=int)
         self._channel_names: List[str] = []
+        self._display_filter_profiles = FilterProfiles()
+        self._filtered_segment_cache: OrderedDict[tuple, tuple[np.ndarray, int, int]] = OrderedDict()
+        self._filtered_segment_cache_bytes = 0
+        self._filtered_segment_cache_limit_bytes = 128 * 1024 * 1024
 
         self._reference_mode: str = "monopolar"
         self._bipolar_montage: BipolarMontage | None = None
@@ -138,6 +152,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cursor_line: Optional[pg.InfiniteLine] = None
         self._cursor_x: Optional[float] = None
         self._time_lines: list[pg.InfiniteLine] = []
+        self._seizure_onset_s: float | None = None
+        self._seizure_offset_s: float | None = None
+        self._seizure_marker_lines: list[pg.InfiniteLine] = []
         self._context_menu_active = False
 
         # ---- Layout: label plot (left) + signal plot (right) ----
@@ -272,6 +289,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._t_start = 0.0
         self._ch_start = 0
+        self._seizure_onset_s = None
+        self._seizure_offset_s = None
+        self._seizure_marker_lines = []
         self._visible_abs = np.array([], dtype=int)
         self._last_visible_abs = []
         self._last_visible_ch_indices = []
@@ -334,6 +354,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._channel_names = [raw.ch_names[i] for i in self._picks.tolist()]
         self._channel_groups = {str(ch): "macro" for ch in self._channel_names}
+        self._clear_filtered_segment_cache()
         
         self._reference_mode = "monopolar"
         self._bipolar_montage = None
@@ -344,6 +365,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         # Reset view
         self._t_start = 0.0
         self._ch_start = 0
+        self._seizure_onset_s = None
+        self._seizure_offset_s = None
+        self._seizure_marker_lines = []
         self._selected_abs_set.clear()   
 
         # Reset per-dataset annotations (do NOT carry across datasets)
@@ -467,6 +491,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._set_ranges(t_ds, n_vis, seg_ds_uv)
         self._draw_time_lines(t_ds)
+        self._draw_seizure_markers(t_ds)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
 
@@ -482,6 +507,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._labels = []
         self._time_lines = []
         self._cursor_line = None
+        self._seizure_marker_lines = []
         self._minmax_items = []
 
     def _ensure_signal_item(self, item) -> None:
@@ -656,6 +682,40 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self.signal_plot.addItem(ln)
             self._time_lines.append(ln)
 
+    def set_seizure_markers(
+        self,
+        onset_s: float | None = None,
+        offset_s: float | None = None,
+    ) -> None:
+        self._seizure_onset_s = float(onset_s) if onset_s is not None else None
+        self._seizure_offset_s = float(offset_s) if offset_s is not None else None
+        if self._raw is not None:
+            self.render()
+
+    def _draw_seizure_markers(self, t_ds: np.ndarray) -> None:
+        t_arr = np.asarray(t_ds, dtype=float).reshape(-1)
+        if t_arr.size < 2:
+            return
+
+        t0 = float(t_arr[0])
+        t1 = float(t_arr[-1])
+        markers = (
+            (self._seizure_onset_s, Qt.PenStyle.DashLine),
+            (self._seizure_offset_s, Qt.PenStyle.DashLine),
+        )
+        for marker_s, style in markers:
+            if marker_s is None or not np.isfinite(float(marker_s)):
+                continue
+            if not (t0 <= float(marker_s) <= t1):
+                continue
+            line = pg.InfiniteLine(pos=float(marker_s), angle=90, movable=False)
+            line.setZValue(20)
+            pen = pg.mkPen((145, 230, 170, 220), width=1.2, style=style)
+            pen.setDashPattern([5, 4])
+            line.setPen(pen)
+            self.signal_plot.addItem(line)
+            self._seizure_marker_lines.append(line)
+
     def _draw_cursor(self, t_ds: np.ndarray):
         t0 = float(np.asarray(t_ds).reshape(-1)[0].item())
         t1 = float(np.asarray(t_ds).reshape(-1)[-1].item())
@@ -696,6 +756,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 g = str(group).lower()
                 if g in {"macro", "micro"}:
                     self._channel_groups[str(ch_name)] = g
+        self._clear_filtered_segment_cache()
+        self.render()
+
+    def set_display_filter_profiles(self, profiles: FilterProfiles | None) -> None:
+        self._display_filter_profiles = profiles or FilterProfiles()
+        self._clear_filtered_segment_cache()
         self.render()
 
     def get_channel_group(self, ch_name: str) -> str:
@@ -717,6 +783,138 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 return "macro"
 
         return "macro"
+
+    def _display_filter_active(self) -> bool:
+        return (
+            is_filter_active(self._display_filter_profiles.macro)
+            or is_filter_active(self._display_filter_profiles.micro)
+        )
+
+    def _filter_settings_for_raw_pick(self, raw: BaseRaw, raw_pick: int) -> FilterSettings:
+        try:
+            ch_name = str(raw.ch_names[int(raw_pick)])
+        except Exception:
+            ch_name = ""
+        group = str(self._channel_groups.get(ch_name, "macro")).lower()
+        return self._display_filter_profiles.micro if group == "micro" else self._display_filter_profiles.macro
+
+    def _raw_file_identity(self, raw: BaseRaw) -> tuple:
+        filenames = getattr(raw, "filenames", None)
+        if filenames:
+            return tuple(str(path) for path in filenames if path is not None)
+        return (id(raw),)
+
+    def _clear_filtered_segment_cache(self) -> None:
+        self._filtered_segment_cache.clear()
+        self._filtered_segment_cache_bytes = 0
+
+    def _store_filtered_segment_cache(
+        self,
+        key: tuple,
+        data: np.ndarray,
+        start_samp: int,
+        end_samp: int,
+    ) -> None:
+        arr = np.asarray(data, dtype=float)
+        item_bytes = int(arr.nbytes)
+        if item_bytes > self._filtered_segment_cache_limit_bytes:
+            return
+
+        if key in self._filtered_segment_cache:
+            old, _old_start, _old_end = self._filtered_segment_cache.pop(key)
+            self._filtered_segment_cache_bytes -= int(old.nbytes)
+
+        self._filtered_segment_cache[key] = (arr, int(start_samp), int(end_samp))
+        self._filtered_segment_cache_bytes += item_bytes
+
+        while (
+            self._filtered_segment_cache
+            and self._filtered_segment_cache_bytes > self._filtered_segment_cache_limit_bytes
+        ):
+            _old_key, (old_data, _start, _end) = self._filtered_segment_cache.popitem(last=False)
+            self._filtered_segment_cache_bytes -= int(old_data.nbytes)
+
+    def _read_display_raw_segment(
+        self,
+        raw: BaseRaw,
+        picks,
+        start_samp: int,
+        end_samp: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        raw_picks = tuple(int(pick) for pick in np.asarray(picks, dtype=int).reshape(-1))
+        if not self._display_filter_active():
+            return self._read_raw_segment(raw, raw_picks, start_samp, end_samp)
+
+        pad_samp = int(round(profiles_padding_seconds(self._display_filter_profiles) * float(self._fs)))
+        padded_start = max(0, int(start_samp) - pad_samp)
+        padded_end = min(int(raw.n_times), int(end_samp) + pad_samp)
+        row_signatures = tuple(
+            filter_signature
+            for filter_signature in (
+                (
+                    "micro"
+                    if self._filter_settings_for_raw_pick(raw, raw_pick)
+                    is self._display_filter_profiles.micro
+                    else "macro"
+                )
+                for raw_pick in raw_picks
+            )
+        )
+        key = (
+            self._raw_file_identity(raw),
+            raw_picks,
+            int(start_samp),
+            int(end_samp),
+            int(padded_start),
+            int(padded_end),
+            profiles_signature(self._display_filter_profiles),
+            row_signatures,
+        )
+
+        cached = self._filtered_segment_cache.get(key)
+        if cached is not None:
+            filtered, cached_start, _cached_end = cached
+            self._filtered_segment_cache.move_to_end(key)
+            rel_start = int(start_samp) - int(cached_start)
+            rel_end = rel_start + (int(end_samp) - int(start_samp))
+            times = np.asarray(raw.times[int(start_samp):int(end_samp)], dtype=float)
+            return np.asarray(filtered[:, rel_start:rel_end], dtype=float), times
+
+        padded_data, _ = self._read_raw_segment(raw, raw_picks, padded_start, padded_end)
+        filtered = np.asarray(padded_data, dtype=float).copy()
+
+        macro_rows: list[int] = []
+        micro_rows: list[int] = []
+        for row_idx, raw_pick in enumerate(raw_picks):
+            settings = self._filter_settings_for_raw_pick(raw, raw_pick)
+            if settings is self._display_filter_profiles.micro:
+                micro_rows.append(row_idx)
+            else:
+                macro_rows.append(row_idx)
+
+        try:
+            if macro_rows and is_filter_active(self._display_filter_profiles.macro):
+                filtered[np.asarray(macro_rows, dtype=int), :] = apply_settings_to_array(
+                    filtered[np.asarray(macro_rows, dtype=int), :],
+                    float(self._fs),
+                    self._display_filter_profiles.macro,
+                )
+            if micro_rows and is_filter_active(self._display_filter_profiles.micro):
+                filtered[np.asarray(micro_rows, dtype=int), :] = apply_settings_to_array(
+                    filtered[np.asarray(micro_rows, dtype=int), :],
+                    float(self._fs),
+                    self._display_filter_profiles.micro,
+                )
+        except Exception as exc:
+            print(f"Warning: display window filtering failed: {exc}", file=sys.stderr)
+            return self._read_raw_segment(raw, raw_picks, start_samp, end_samp)
+
+        self._store_filtered_segment_cache(key, filtered, padded_start, padded_end)
+
+        rel_start = int(start_samp) - int(padded_start)
+        rel_end = rel_start + (int(end_samp) - int(start_samp))
+        times = np.asarray(raw.times[int(start_samp):int(end_samp)], dtype=float)
+        return np.asarray(filtered[:, rel_start:rel_end], dtype=float), times
     
     # ---------------- Visible data & window helpers ---------------
    
@@ -789,7 +987,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._reference_mode == "monopolar":
             raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = self._read_raw_segment(raw, raw_ch_picks, start_samp, end_samp)
+            data_v, times = self._read_display_raw_segment(raw, raw_ch_picks, start_samp, end_samp)
 
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
@@ -802,12 +1000,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 return None, None
 
             ref_raw_picks = picks[np.asarray(ref_abs, dtype=int)]
-            ref_data, times = self._read_raw_segment(raw, ref_raw_picks, start_samp, end_samp)
+            ref_data, times = self._read_display_raw_segment(raw, ref_raw_picks, start_samp, end_samp)
             ref_data = np.asarray(ref_data, dtype=float)
             times = np.asarray(times, dtype=float)
 
             vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, _ = self._read_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
+            data_v, _ = self._read_display_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
             data_v = np.asarray(data_v, dtype=float)
 
             # Exclude manually annotated bad segments from the reference computation
@@ -838,11 +1036,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ref_raw_pick = int(picks[ref_abs])
 
             vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = self._read_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
+            data_v, times = self._read_display_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
 
-            ref_data, _ = self._read_raw_segment(raw, [ref_raw_pick], start_samp, end_samp)
+            ref_data, _ = self._read_display_raw_segment(raw, [ref_raw_pick], start_samp, end_samp)
             ref_data = np.asarray(ref_data, dtype=float)
 
             if ref_data.ndim != 2 or ref_data.shape[0] == 0:
@@ -913,6 +1111,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             self._picks = np.asarray(picks, dtype=int)
 
         self._channel_names = [raw.ch_names[i] for i in self._picks.tolist()]
+        self._clear_filtered_segment_cache()
 
         # keep reference mode / montage / selections / zoom / hidden / bad / annotations
         # but make display names consistent with current reference mode
@@ -1363,8 +1562,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             if raw_idx_1 is None or raw_idx_2 is None:
                 continue
 
-            d1, _ = self._read_raw_segment(raw, [int(raw_idx_1)], start_samp, stop_samp)
-            d2, _ = self._read_raw_segment(raw, [int(raw_idx_2)], start_samp, stop_samp)
+            d1, _ = self._read_display_raw_segment(raw, [int(raw_idx_1)], start_samp, stop_samp)
+            d2, _ = self._read_display_raw_segment(raw, [int(raw_idx_2)], start_samp, stop_samp)
 
             d1_arr = np.asarray(d1, dtype=float)
             d2_arr = np.asarray(d2, dtype=float)

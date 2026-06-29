@@ -51,8 +51,6 @@ from app.filtering import (
     NOTCH_50_HARM,
     NOTCH_60_HARM,
     validate_filter_settings,
-    build_filtered_raw_by_group,
-    is_filter_active,
 )
 from app.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICES, get_display_theme
 from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
@@ -375,6 +373,8 @@ class MainWindow(QMainWindow):
         #Channel selection updated 
         self.comp_panel.panelSelectionChanged.connect(self._on_comp_panel_selection_changed)
         self.comp_panel.settingsChanged.connect(self._mark_project_dirty)
+        self.comp_panel.seizureMarkersChanged.connect(self._on_ei_markers_changed)
+        self.comp_panel.seizureMarkerEdited.connect(self._on_ei_marker_edited)
         
         # Make computation panel follow the viewer cursor (instead of window start)
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
@@ -587,9 +587,12 @@ class MainWindow(QMainWindow):
 
         # ---- Connect toolbar -> viewer ----
         self.time_range.valueChanged.connect(self._on_time_range_changed)
+        self.time_range.valueChanged.connect(lambda _v: self._mark_project_dirty())
         self.gain.valueChanged.connect(lambda v: self.viewer.set_view_params(gain=v))
         self.gain.valueChanged.connect(lambda v: self.comp_panel.set_main_gain_uv(float(v)))
+        self.gain.valueChanged.connect(lambda _v: self._mark_project_dirty())
         self.chan_range.valueChanged.connect(lambda v: self.viewer.set_view_params(chan_range=v))
+        self.chan_range.valueChanged.connect(lambda _v: self._mark_project_dirty())
         self.fit_traces.toggled.connect(lambda checked: self.viewer.set_fit_visible_traces(checked))
 
     def _on_display_theme_changed(self, index: int) -> None:
@@ -1115,6 +1118,10 @@ class MainWindow(QMainWindow):
         if not isinstance(computation, dict):
             computation = {}
 
+        display = payload.get("display")
+        if not isinstance(display, dict):
+            display = {}
+
         annos = review.get("annotations", [])
         hidden_raw = review.get("hidden_channels", [])
         bad_raw = review.get("bad_channels", [])
@@ -1125,6 +1132,7 @@ class MainWindow(QMainWindow):
         self._push_scope_profile_to_ui()
         self._rebuild_active_raw_from_source()
         self._refresh_active_signal_everywhere()
+        self._restore_display_settings(display)
         self._update_filter_summary_label()
 
         hidden = set(hidden_raw) if isinstance(hidden_raw, list) else set()
@@ -1391,6 +1399,45 @@ class MainWindow(QMainWindow):
             self.project_dirty = False
             self._update_window_title()
 
+    def _restore_display_settings(self, display: dict) -> None:
+        if not isinstance(display, dict):
+            return
+
+        def _clamp_float(value, spin: QDoubleSpinBox) -> float | None:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(numeric):
+                return None
+            return max(float(spin.minimum()), min(float(spin.maximum()), numeric))
+
+        def _clamp_int(value, spin: QSpinBox) -> int | None:
+            try:
+                numeric = int(round(float(value)))
+            except (TypeError, ValueError):
+                return None
+            return max(int(spin.minimum()), min(int(spin.maximum()), numeric))
+
+        time_range = _clamp_float(display.get("time_range_s"), self.time_range)
+        channel_range = _clamp_int(display.get("channel_range"), self.chan_range)
+        gain = _clamp_float(display.get("amplitude_uv"), self.gain)
+
+        if time_range is not None:
+            self.time_range.setValue(time_range)
+        if channel_range is not None:
+            self.chan_range.setValue(channel_range)
+        if gain is not None:
+            self.gain.setValue(gain)
+
+        self.viewer.set_view_params(
+            time_range=time_range,
+            chan_range=channel_range,
+            gain=gain,
+        )
+        self._update_time_slider_range()
+        self.comp_panel.set_main_gain_uv(float(self.gain.value()))
+
     def _enable_loaded_ui(self) -> None:
         self.tb.setEnabled(True)
         self.timeline.show()
@@ -1615,17 +1662,8 @@ class MainWindow(QMainWindow):
         if self.source_raw is None:
             return
 
-        if (
-            is_filter_active(self.filter_profiles.macro)
-            or is_filter_active(self.filter_profiles.micro)
-        ):
-            self.current_raw = build_filtered_raw_by_group(
-                self.source_raw,
-                self.filter_profiles,
-                self.channel_groups,
-            )
-        else:
-            self.current_raw = self.source_raw
+        self.current_raw = self.source_raw
+        self.viewer.set_display_filter_profiles(self.filter_profiles)
             
     def on_apply_filters(self) -> None:
         if self.source_raw is None:
@@ -1662,7 +1700,7 @@ class MainWindow(QMainWindow):
         self._mark_project_dirty()
 
         self.console.log(
-            "Filters applied | "
+            "Display filters applied windowed | "
             f"Scope: {self.filter_scope.currentText()} | "
             f"Macro: {self._fmt_filter_short(self.filter_profiles.macro)} | "
             f"Micro: {self._fmt_filter_short(self.filter_profiles.micro)}"
@@ -1770,6 +1808,28 @@ class MainWindow(QMainWindow):
     def _on_time_ctl_t0_changed(self, t0: float):
         # user moved the timeline in main window
         self.viewer.set_time_start(float(t0))
+
+    def _on_ei_markers_changed(self, onset_s, offset_s) -> None:
+        onset = float(onset_s) if isinstance(onset_s, (int, float)) else None
+        offset = float(offset_s) if isinstance(offset_s, (int, float)) else None
+        self.viewer.set_seizure_markers(onset, offset)
+
+    def _on_ei_marker_edited(self, _kind: str, value_s) -> None:
+        if self.current_raw is None:
+            return
+        if not isinstance(value_s, (int, float)):
+            return
+
+        target = float(value_s)
+        if not np.isfinite(target):
+            return
+
+        total_s = float(self.current_raw.times[-1]) if self.current_raw.n_times > 1 else 0.0
+        target = max(0.0, min(target, total_s))
+        view_range = float(getattr(self.viewer, "_time_range", 0.0) or self.time_range.value())
+        self.viewer.set_time_start(target - 0.5 * view_range)
+        self.viewer.set_cursor_x(target)
+        self.time_ctl.set_t0(self.viewer.time_start())
 
     def _refresh_display_name_dependent_ui(self) -> None:
         self._sync_comp_panel_context()
@@ -3416,7 +3476,7 @@ class MainWindow(QMainWindow):
 # ---------------- Filters  -------------
     def on_toggle_permanent_filters(self) -> None:
         if self.current_raw is None:
-            QMessageBox.information(self, "Permanent Filters", "Load a dataset first.")
+            QMessageBox.information(self, "Display filters", "Load a dataset first.")
             return
 
         visible = self.filter_controls_widget.isVisible()

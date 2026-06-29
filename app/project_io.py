@@ -6,7 +6,7 @@ from pathlib import Path
 from dataclasses import asdict
 from typing import Any
 
-PROJECT_VERSION = 5
+PROJECT_VERSION = 6
 PROJECT_FORMAT = "ieeg-review-project"
 
 
@@ -73,6 +73,7 @@ def build_project_dict(main_window) -> dict[str, Any]:
         "preprocessing": {
             "filters": _serialize_filter_profiles(filter_profiles),
         },
+        "display": _serialize_display_settings(main_window),
         "computation": (
             comp_panel.project_state()
             if comp_panel is not None and hasattr(comp_panel, "project_state")
@@ -109,7 +110,7 @@ def load_project(path: Path) -> dict[str, Any]:
     version_raw = payload.get("version")
     if not isinstance(version_raw, int):
         raise ValueError(f"Invalid project version: {version_raw!r}")
-    if version_raw not in (1, 2, 3, 4, 5):
+    if version_raw not in (1, 2, 3, 4, 5, 6):
         raise ValueError(f"Unsupported project version: {version_raw!r}")
 
     source = payload.get("source")
@@ -150,4 +151,12 @@ def _serialize_filter_profiles(profiles) -> dict[str, Any]:
     return {
         "macro": _serialize_filter_settings(profiles.macro),
         "micro": _serialize_filter_settings(profiles.micro),
+    }
+
+
+def _serialize_display_settings(main_window) -> dict[str, Any]:
+    return {
+        "time_range_s": float(main_window.time_range.value()),
+        "channel_range": int(main_window.chan_range.value()),
+        "amplitude_uv": float(main_window.gain.value()),
     }

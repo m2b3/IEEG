@@ -61,6 +61,8 @@ class ComputationPanel(QWidget):
 
     panelSelectionChanged = Signal(list)  # absolute channel indices
     settingsChanged = Signal()
+    seizureMarkersChanged = Signal(object, object)  # onset_s, offset_s
+    seizureMarkerEdited = Signal(str, object)  # "onset" | "offset", value_s
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -545,6 +547,10 @@ class ComputationPanel(QWidget):
 
         self.state.seizure_onset_s = self._parse_float_text(self.edit_seizure_onset)
         self.state.seizure_offset_s = self._parse_float_text(self.edit_seizure_offset)
+        self.seizureMarkersChanged.emit(
+            self.state.seizure_onset_s,
+            self.state.seizure_offset_s,
+        )
         self._sync_ei_windows_from_ui(emit=False)
         saved_metadata = ei.get("last_result_metadata")
         self.ei_result_metadata = saved_metadata if isinstance(saved_metadata, dict) else None
@@ -785,11 +791,21 @@ class ComputationPanel(QWidget):
 
     def _on_ei_onset_text_changed(self, _text: str) -> None:
         self.state.seizure_onset_s = self._parse_float_text(self.edit_seizure_onset)
+        self.seizureMarkersChanged.emit(
+            self.state.seizure_onset_s,
+            self.state.seizure_offset_s,
+        )
+        self.seizureMarkerEdited.emit("onset", self.state.seizure_onset_s)
         self._apply_default_ei_windows_from_onset()
         self.settingsChanged.emit()
 
     def _on_ei_offset_text_changed(self, _text: str) -> None:
         self.state.seizure_offset_s = self._parse_float_text(self.edit_seizure_offset)
+        self.seizureMarkersChanged.emit(
+            self.state.seizure_onset_s,
+            self.state.seizure_offset_s,
+        )
+        self.seizureMarkerEdited.emit("offset", self.state.seizure_offset_s)
         self.settingsChanged.emit()
 
     def _apply_default_ei_windows_from_onset(self) -> None:
@@ -1103,7 +1119,7 @@ class ComputationPanel(QWidget):
                 "Channel",
                 "EI score",
                 "Rank",
-                "EI onset from seizure onset (s)",
+                "Peak HFER activity",
                 "Recruitment delay (s)",
             ]
         )
@@ -1119,20 +1135,51 @@ class ComputationPanel(QWidget):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
         metadata = result.metadata or {}
+        hfer_activity_by_channel: dict[str, float] = {}
+        heatmap = np.asarray(result.heatmap, dtype=float)
+        heatmap_channels = list(result.heatmap_channels or [])
+        display_order_by_channel = {
+            str(channel_name): int(order)
+            for order, channel_name in enumerate(heatmap_channels)
+        }
+        if heatmap.ndim == 2 and heatmap.size and heatmap_channels:
+            n_rows = min(int(heatmap.shape[0]), len(heatmap_channels))
+            for row_idx in range(n_rows):
+                row = np.asarray(heatmap[row_idx], dtype=float)
+                finite_values = row[np.isfinite(row)]
+                if finite_values.size:
+                    hfer_activity_by_channel[str(heatmap_channels[row_idx])] = float(
+                        np.max(finite_values)
+                    )
+
         summary_rows: list[dict[str, float | int | str]] = []
         for original_order, channel_result in enumerate(result.channels):
             recruitment_delay, has_delay_metadata = self._compute_recruitment_delay(
                 channel_result,
                 metadata,
             )
+            channel_name = str(channel_result.channel)
+            hfer_activity = hfer_activity_by_channel.get(channel_name)
             summary_rows.append(
                 {
                     "original_order": int(original_order),
-                    "channel": str(channel_result.channel),
-                    "channel_sort": str(channel_result.channel).casefold(),
+                    "display_order": int(
+                        display_order_by_channel.get(channel_name, original_order)
+                    ),
+                    "channel": channel_name,
+                    "channel_sort": channel_name.casefold(),
                     "ei_score": float(channel_result.ei),
                     "rank": int(channel_result.rank),
-                    "ei_onset": float(channel_result.onset_sec_from_seizure_onset),
+                    "hfer_activity": (
+                        float(hfer_activity)
+                        if hfer_activity is not None
+                        else float("-inf")
+                    ),
+                    "hfer_activity_text": (
+                        f"{float(hfer_activity):.4g}"
+                        if hfer_activity is not None
+                        else ""
+                    ),
                     "recruitment_delay": (
                         float(recruitment_delay) if has_delay_metadata else float("inf")
                     ),
@@ -1153,7 +1200,7 @@ class ComputationPanel(QWidget):
                     str(row_data["channel"]),
                     f"{float(row_data['ei_score']):.4f}",
                     str(int(row_data["rank"])),
-                    f"{float(row_data['ei_onset']):.3f}",
+                    str(row_data["hfer_activity_text"]),
                     str(row_data["recruitment_delay_text"]),
                 ]
 
@@ -1170,12 +1217,12 @@ class ComputationPanel(QWidget):
         sort_state = {
             "column": -1,
             "order": Qt.SortOrder.AscendingOrder,
-            "channel_mode": "display_order",
+            "channel_mode": "display",
         }
 
         def sort_summary_table(column: int) -> None:
             if column == 0:
-                if sort_state["channel_mode"] == "display_order":
+                if sort_state["channel_mode"] == "display":
                     sort_state["channel_mode"] = "alphabetical"
                     sorted_rows = sorted(
                         summary_rows,
@@ -1183,12 +1230,12 @@ class ComputationPanel(QWidget):
                     )
                     header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
                 else:
-                    sort_state["channel_mode"] = "display_order"
+                    sort_state["channel_mode"] = "display"
                     sorted_rows = sorted(
                         summary_rows,
-                        key=lambda row: int(row["original_order"]),
+                        key=lambda row: int(row["display_order"]),
                     )
-                    header.setSortIndicator(0, Qt.SortOrder.DescendingOrder)
+                    header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
                 sort_state["column"] = 0
                 populate_summary_table(sorted_rows)
                 return
@@ -1202,16 +1249,16 @@ class ComputationPanel(QWidget):
             else:
                 sort_state["order"] = (
                     Qt.SortOrder.DescendingOrder
-                    if column == 1
+                    if column in {1, 3}
                     else Qt.SortOrder.AscendingOrder
                 )
             sort_state["column"] = column
-            sort_state["channel_mode"] = "display_order"
+            sort_state["channel_mode"] = "display"
 
             key_map = {
                 1: "ei_score",
                 2: "rank",
-                3: "ei_onset",
+                3: "hfer_activity",
                 4: "recruitment_delay",
             }
             key_name = key_map.get(column, "original_order")

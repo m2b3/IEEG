@@ -616,13 +616,13 @@ Notch filter:
 
 - 60 Hz + harmonics
 
-The notch filter uses an FIR notch filtering approach.
+Display filters use windowed zero-phase IIR filtering for responsive browsing.
 
 ### How to use
 
-Permanent filter controls are hidden by default when a file or project is opened.
+Display filter controls are hidden by default when a file or project is opened.
 
-To show or hide them, click **Preprocessing > Permanent Filters**.
+To show or hide them, click **Preprocessing > Display Filters**.
 
 Enter the desired high-pass and/or low-pass values.
 
@@ -630,7 +630,7 @@ Select the notch mode.
 
 Click Apply filters.
 
-The filters remain active for the current session/project until changed or reset.
+The display filters remain active for the current session/project until changed or reset.
 
 Click Reset to default to return to the unfiltered signal.
 
@@ -650,13 +650,15 @@ Filters are non-destructive
 
 The original recording is never modified
 
-Applying new filters replaces the previously active filter state for the current session/project
+Applying new filters replaces the previously active display filter state for the current session/project
 
-Saving a project also saves the current permanent filter settings
+Saving a project also saves the current display filter settings
+
+For large recordings, filters are applied to the visible time window with padding and then cropped back before plotting. This avoids loading or filtering the full recording during normal browsing.
 
 ### Project persistence
 
-Permanent filter settings are included in the project save system. When a project is reopened, the saved filter state is restored with the rest of the session state.
+Display filter settings are included in the project save system. When a project is reopened, the saved filter state is restored with the rest of the session state.
 
 ---
 
@@ -781,7 +783,7 @@ The EI summary shows:
 - channel
 - EI score
 - rank
-- EI onset from seizure onset
+- peak HFER activity
 - recruitment delay
 
 Recruitment delay is computed relative to the manually entered seizure onset.

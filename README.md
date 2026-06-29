@@ -45,7 +45,7 @@ Rendering is optimized to:
 - Use transparent outlined selection rectangles for annotation, zoom, and scalogram workflows
 - Use zoom selection for rectangular zoom-in review
 - Open scalogram windows from a selected channel/time interval and filter displayed frequencies
-- Apply permanent filters from a collapsible control strip
+- Apply windowed display filters from a collapsible control strip
 - Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
 - Run computation-panel workflows for channel mean traces and Epileptogenicity Index (EI)
 - Enter seizure onset/offset and baseline/ictal windows manually for EI runs
