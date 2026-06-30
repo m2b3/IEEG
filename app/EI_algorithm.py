@@ -259,7 +259,7 @@ def validate_gui_ei_timing(
     if seizure_offset_s <= seizure_onset_s:
         raise ValueError("Seizure offset must be after seizure onset.")
     if seizure_offset_s - seizure_onset_s <= 20.0:
-        raise ValueError("Seizure duration must be more than 20 seconds for EI.")
+        raise ValueError("Seizure duration must be more than 20 seconds for REI.")
     if baseline_end_s <= baseline_start_s:
         raise ValueError("Baseline end must be after baseline start.")
     if ictal_end_s <= ictal_start_s:
@@ -297,12 +297,12 @@ def compute_ei_for_gui(
     metadata: dict | None = None,
 ) -> EIComputationResult:
     """
-    GUI-facing EI computation.
+    GUI-facing REI computation.
 
     Parameters
     ----------
     data
-        Channels x time data from the current GUI montage. The EI normalization is
+        Channels x time data from the current GUI montage. The REI normalization is
         scale-invariant for rankings, so volts/uV are both acceptable as long as
         baseline and ictal windows use the same units.
     fs
@@ -318,11 +318,11 @@ def compute_ei_for_gui(
     """
     data = np.asarray(data, dtype=float)
     if data.ndim != 2:
-        raise ValueError("EI data must be a 2D channels x time array.")
+        raise ValueError("REI data must be a 2D channels x time array.")
     if data.shape[0] != len(channel_names):
-        raise ValueError("EI channel name count does not match data rows.")
+        raise ValueError("REI channel name count does not match data rows.")
     if data.shape[0] == 0:
-        raise ValueError("No channels available for EI computation.")
+        raise ValueError("No channels available for REI computation.")
 
     n_samples = int(data.shape[1])
     validate_gui_ei_timing(
@@ -350,7 +350,7 @@ def compute_ei_for_gui(
     bad_channels = {str(ch) for ch in (bad_channels or set())}
     keep = [idx for idx, name in enumerate(channel_names) if str(name) not in bad_channels]
     if not keep:
-        raise ValueError("All selected channels are marked bad; no EI channels remain.")
+        raise ValueError("All selected channels are marked bad; no REI channels remain.")
 
     kept_names = [str(channel_names[idx]) for idx in keep]
     kept_data = data[np.asarray(keep, dtype=int), :]

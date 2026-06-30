@@ -376,6 +376,7 @@ class MainWindow(QMainWindow):
         self.comp_panel.seizureMarkersChanged.connect(self._on_ei_markers_changed)
         self.comp_panel.seizureMarkerEdited.connect(self._on_ei_marker_edited)
         self.comp_panel.recruitmentMarkersChanged.connect(self._on_ei_recruitment_markers_changed)
+        self.comp_panel.eiScoreLabelsChanged.connect(self._on_ei_score_labels_changed)
         self.comp_panel.eiSummaryChannelActivated.connect(self._on_ei_summary_channel_activated)
         self.comp_panel.eiSummaryOrderChanged.connect(self._on_ei_summary_order_changed)
         self.comp_dock.visibilityChanged.connect(self._on_computation_dock_visibility_changed)
@@ -1850,6 +1851,9 @@ class MainWindow(QMainWindow):
     def _on_ei_recruitment_markers_changed(self, markers: dict) -> None:
         self.viewer.set_recruitment_markers(markers if isinstance(markers, dict) else {})
 
+    def _on_ei_score_labels_changed(self, styles: dict) -> None:
+        self.viewer.set_ei_label_styles(styles if isinstance(styles, dict) else {})
+
     def _on_ei_summary_order_changed(self, ordered_channel_names: list) -> None:
         if self.current_raw is None:
             return
@@ -1863,6 +1867,7 @@ class MainWindow(QMainWindow):
             return
         self.viewer.set_seizure_markers(None, None)
         self.viewer.set_recruitment_markers({})
+        self.viewer.set_ei_label_styles({})
         self.viewer.clear_display_order_override()
 
     def _refresh_display_name_dependent_ui(self) -> None:
@@ -2033,14 +2038,14 @@ class MainWindow(QMainWindow):
     ) -> tuple[np.ndarray, float, list[str]]:
         raw = self.source_raw if self.source_raw is not None else self.current_raw
         if raw is None or self.current_picks is None:
-            raise RuntimeError("Load a dataset before running EI.")
+            raise RuntimeError("Load a dataset before running REI.")
 
         display_names = self.viewer.get_channel_names()
         fs = float(raw.info["sfreq"])
         t0 = float(min(start_s, stop_s))
         t1 = float(max(start_s, stop_s))
         if t1 <= t0:
-            raise RuntimeError("Invalid EI data window.")
+            raise RuntimeError("Invalid REI data window.")
 
         start_samp = max(0, min(int(np.floor(t0 * fs)), raw.n_times - 1))
         stop_samp = max(start_samp + 1, min(int(np.ceil(t1 * fs)), raw.n_times))
@@ -2093,7 +2098,7 @@ class MainWindow(QMainWindow):
                 if 0 <= int(abs_idx) < len(display_names) and int(abs_idx) < len(picks)
             ]
             if not selected:
-                raise RuntimeError("No selected channels are available for EI.")
+                raise RuntimeError("No selected channels are available for REI.")
 
             selected_picks = picks[np.asarray(selected, dtype=int)]
             selected_data, _ = read_raw_segment(selected_picks)
@@ -2130,7 +2135,7 @@ class MainWindow(QMainWindow):
                 names.append(str(display_names[abs_idx]))
 
         if not rows or min(row.size for row in rows) < 2:
-            raise RuntimeError("Could not extract enough selected channel data for EI.")
+            raise RuntimeError("Could not extract enough selected channel data for REI.")
 
         min_len = min(row.size for row in rows)
         data = np.vstack([row[:min_len] for row in rows])

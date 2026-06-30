@@ -64,6 +64,7 @@ class ComputationPanel(QWidget):
     seizureMarkersChanged = Signal(object, object)  # onset_s, offset_s
     seizureMarkerEdited = Signal(str, object)  # "onset" | "offset", value_s
     recruitmentMarkersChanged = Signal(dict)  # display channel name -> absolute time_s
+    eiScoreLabelsChanged = Signal(dict)  # display channel name -> {score_norm, rank}
     eiSummaryChannelActivated = Signal(str)
     eiSummaryOrderChanged = Signal(list)
 
@@ -127,7 +128,7 @@ class ComputationPanel(QWidget):
         self.btn_algo_mean.setChecked(True)
         self.btn_algo_mean.setProperty("algorithm", "mean")
 
-        self.btn_algo_ei = QPushButton("EI")
+        self.btn_algo_ei = QPushButton("REI")
         self.btn_algo_ei.setCheckable(True)
         self.btn_algo_ei.setProperty("algorithm", "ei")
 
@@ -214,13 +215,13 @@ class ComputationPanel(QWidget):
         ei_time_layout.setContentsMargins(0, 0, 0, 0)
         ei_time_layout.setSpacing(8)
 
-        info_box = QGroupBox("EI setup")
+        info_box = QGroupBox("REI setup")
         info_layout = QHBoxLayout(info_box)
         info_layout.addWidget(QLabel("Recommended montage: Bipolar"), 1)
         self.btn_ei_info = QPushButton("i")
         self.btn_ei_info.setFixedSize(22, 22)
         self.btn_ei_info.setToolTip(
-            "EI preprocessing: confirmed bad channels are excluded and an internal "
+            "REI preprocessing: confirmed bad channels are excluded and an internal "
             "70-140 Hz zero-phase Butterworth bandpass filter is applied."
         )
         self.btn_ei_info.setStyleSheet("border-radius: 11px; font-weight: bold;")
@@ -275,7 +276,7 @@ class ComputationPanel(QWidget):
         assumptions_form.addRow("Use display filter:", QLabel("No"))
         advanced_layout.addWidget(assumptions_box)
 
-        preprocessing_box = QGroupBox("EI preprocessing")
+        preprocessing_box = QGroupBox("REI preprocessing")
         preprocessing_form = QFormLayout(preprocessing_box)
         preprocessing_form.addRow("Analysis filter:", QLabel("Butterworth bandpass"))
         preprocessing_form.addRow("Filter order:", QLabel("4"))
@@ -285,7 +286,7 @@ class ComputationPanel(QWidget):
         preprocessing_form.addRow("Line frequency:", QLabel("60 Hz"))
         advanced_layout.addWidget(preprocessing_box)
 
-        params_box = QGroupBox("EI computation")
+        params_box = QGroupBox("REI computation")
         params_form = QFormLayout(params_box)
         params_form.addRow("Threshold sigma:", QLabel("10"))
         params_form.addRow("Energy window:", QLabel("0.5 s"))
@@ -305,11 +306,11 @@ class ComputationPanel(QWidget):
         self.btn_run = QPushButton("Run computation")
         p_layout.addWidget(self.btn_run)
 
-        self.btn_open_ei_summary = QPushButton("Open EI summary")
+        self.btn_open_ei_summary = QPushButton("Open REI summary")
         self.btn_open_ei_summary.setEnabled(False)
         p_layout.addWidget(self.btn_open_ei_summary)
 
-        self.btn_open_ei_heatmap = QPushButton("Open EI heatmap")
+        self.btn_open_ei_heatmap = QPushButton("Open REI heatmap")
         self.btn_open_ei_heatmap.setEnabled(False)
         p_layout.addWidget(self.btn_open_ei_heatmap)
 
@@ -749,7 +750,7 @@ class ComputationPanel(QWidget):
         self.btn_open_ei_summary.setVisible(is_ei)
         self.btn_open_ei_heatmap.setVisible(is_ei)
 
-        self.btn_run.setText("Run EI" if is_ei else "Run computation")
+        self.btn_run.setText("Run REI" if is_ei else "Run computation")
 
         if is_ei:
             self.curve.setData([], [])
@@ -761,7 +762,7 @@ class ComputationPanel(QWidget):
     def _open_advanced_dialog(self) -> None:
         if self.advanced_dialog is None:
             self.advanced_dialog = QDialog(self)
-            self.advanced_dialog.setWindowTitle("EI advanced parameters")
+            self.advanced_dialog.setWindowTitle("REI advanced parameters")
             self.advanced_dialog.setModal(False)
             self.advanced_dialog.resize(420, 520)
 
@@ -866,9 +867,9 @@ class ComputationPanel(QWidget):
 
     def _validate_ei_inputs(self) -> tuple[bool, str]:
         if self._raw is None or self._picks is None:
-            return False, "Load a dataset before running EI."
+            return False, "Load a dataset before running REI."
         if not self.state.selected_abs:
-            return False, "Select at least one channel before running EI."
+            return False, "Select at least one channel before running REI."
 
         try:
             onset, offset, baseline_start, baseline_end, ictal_start, ictal_end = (
@@ -911,14 +912,14 @@ class ComputationPanel(QWidget):
         if self.state.algorithm == "ei":
             ok, message = self._validate_ei_inputs()
             if not ok:
-                QMessageBox.warning(self, "EI computation", message)
+                QMessageBox.warning(self, "REI computation", message)
                 return
             if not self._confirm_ei_montage_before_run():
                 return
             try:
                 result = self._compute_ei_result()
             except Exception as exc:
-                QMessageBox.warning(self, "EI computation", str(exc))
+                QMessageBox.warning(self, "REI computation", str(exc))
                 return
             self._show_ei_result(result)
             self.ei_result_metadata = result.metadata
@@ -928,7 +929,7 @@ class ComputationPanel(QWidget):
 
     def _compute_ei_result(self) -> EIComputationResult:
         if self._ei_data_callback is None:
-            raise RuntimeError("EI data extraction is not available.")
+            raise RuntimeError("REI data extraction is not available.")
 
         (
             seizure_onset,
@@ -997,8 +998,8 @@ class ComputationPanel(QWidget):
         msg.setIcon(QMessageBox.Icon.Warning)
         msg.setWindowTitle("Recommended montage: Bipolar")
         msg.setText(
-            "The Epileptogenicity Index (EI) was originally designed and validated primarily "
-            "on bipolar iEEG recordings. Using another montage may affect EI scores and "
+            "The Recruitment Energy Index (REI) is designed for recruitment-focused iEEG analysis. "
+            "Using another montage may affect REI scores and "
             "channel rankings.\n\n"
             f"Current montage: {current_montage}"
         )
@@ -1030,14 +1031,14 @@ class ComputationPanel(QWidget):
         QMessageBox.information(
             self,
             "Recommended montage: Bipolar",
-            "Switched to bipolar montage. Review the selected channels and run EI again.",
+            "Switched to bipolar montage. Review the selected channels and run REI again.",
         )
         return False
 
     def _show_nonblocking_ei_error(self, message: str) -> None:
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Icon.Warning)
-        msg.setWindowTitle("EI computation")
+        msg.setWindowTitle("REI computation")
         msg.setText(str(message))
         msg.setStandardButtons(QMessageBox.StandardButton.Ok)
         msg.open()
@@ -1052,7 +1053,7 @@ class ComputationPanel(QWidget):
         ictal_window_s: tuple[float, float] | None = None,
     ) -> dict:
         return {
-            "algorithm": "Epileptogenicity Index",
+            "algorithm": "Recruitment Energy Index",
             "montage_used": montage_used,
             "recommended_montage": "bipolar",
             "seizure_onset_s": seizure_onset_s,
@@ -1086,6 +1087,7 @@ class ComputationPanel(QWidget):
         self._last_ei_result = None
         self.ei_result_metadata = None
         self.recruitmentMarkersChanged.emit({})
+        self.eiScoreLabelsChanged.emit({})
         self._ei_summary_table = None
         self._ei_summary_row_by_channel = {}
 
@@ -1101,11 +1103,33 @@ class ComputationPanel(QWidget):
         self.recruitmentMarkersChanged.emit(
             self._recruitment_markers_from_result(result)
         )
+        self.eiScoreLabelsChanged.emit(
+            self._ei_score_label_styles_from_result(result)
+        )
 
         self.btn_open_ei_summary.setEnabled(True)
         self.btn_open_ei_heatmap.setEnabled(bool(result.heatmap.size))
 
         self._open_ei_summary_dialog()
+
+    def _ei_score_label_styles_from_result(
+        self,
+        result: EIComputationResult,
+    ) -> dict[str, dict[str, float | int]]:
+        scores = [float(row.ei) for row in result.channels if np.isfinite(float(row.ei))]
+        max_score = max(scores) if scores else 0.0
+        if max_score <= 0.0:
+            max_score = 1.0
+
+        styles: dict[str, dict[str, float | int]] = {}
+        for channel_result in result.channels:
+            score = float(channel_result.ei)
+            score_norm = max(0.0, min(1.0, score / max_score)) if np.isfinite(score) else 0.0
+            styles[str(channel_result.channel)] = {
+                "score_norm": float(score_norm),
+                "rank": int(channel_result.rank),
+            }
+        return styles
 
     def _recruitment_markers_from_result(
         self,
@@ -1136,11 +1160,11 @@ class ComputationPanel(QWidget):
     def _open_ei_summary_dialog(self) -> None:
         result = self._last_ei_result
         if result is None:
-            QMessageBox.information(self, "EI summary", "Run EI first.")
+            QMessageBox.information(self, "REI summary", "Run REI first.")
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("EI summary")
+        dialog.setWindowTitle("REI summary")
         dialog.resize(720, 420)
 
         layout = QVBoxLayout(dialog)
@@ -1149,7 +1173,7 @@ class ComputationPanel(QWidget):
         table.setHorizontalHeaderLabels(
             [
                 "Channel",
-                "EI score",
+                "REI score",
                 "Rank",
                 "Peak HFER activity",
                 "Recruitment delay (s)",
@@ -1354,15 +1378,15 @@ class ComputationPanel(QWidget):
     def _open_ei_heatmap_dialog(self) -> None:
         result = self._last_ei_result
         if result is None:
-            QMessageBox.information(self, "EI heatmap", "Run EI first.")
+            QMessageBox.information(self, "REI heatmap", "Run REI first.")
             return
 
         if not result.heatmap.size:
-            QMessageBox.information(self, "EI heatmap", "No heatmap data available.")
+            QMessageBox.information(self, "REI heatmap", "No heatmap data available.")
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("EI heatmap")
+        dialog.setWindowTitle("REI heatmap")
         dialog.resize(980, 620)
 
         layout = QVBoxLayout(dialog)
@@ -1370,7 +1394,7 @@ class ComputationPanel(QWidget):
         controls_row = QHBoxLayout()
         controls_row.addWidget(QLabel("Sort channels by:"))
         sort_combo = QComboBox()
-        sort_combo.addItem("EI score", userData="ei_score")
+        sort_combo.addItem("REI score", userData="ei_score")
         sort_combo.addItem("Recruitment delay", userData="recruitment_delay")
         sort_combo.addItem("Peak HFER activity", userData="peak_hfer")
         sort_combo.addItem("Mean HFER activity", userData="mean_hfer")
@@ -1391,7 +1415,7 @@ class ComputationPanel(QWidget):
         score_plot = pg.PlotWidget()
         score_plot.setMinimumWidth(120)
         score_plot.showGrid(x=True, y=False, alpha=0.15)
-        score_plot.setLabel("bottom", "EI score")
+        score_plot.setLabel("bottom", "REI score")
         score_plot.hideAxis("left")
 
         heatmap_plot = pg.PlotWidget()
@@ -1464,9 +1488,9 @@ class ComputationPanel(QWidget):
                 if not warned_missing_recruitment_metadata["shown"]:
                     QMessageBox.warning(
                         dialog,
-                        "EI heatmap",
+                        "REI heatmap",
                         "Recruitment delay metadata is incomplete. Falling back to "
-                        "EI onset from seizure onset for sorting.",
+                        "REI onset from seizure onset for sorting.",
                     )
                     warned_missing_recruitment_metadata["shown"] = True
 

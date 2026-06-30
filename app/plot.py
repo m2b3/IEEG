@@ -144,6 +144,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._visible_abs: np.ndarray = np.array([], dtype=int)  # abs indices in displayed channel list
         self._curves: list[pg.PlotDataItem] = []
         self._labels: list[pg.TextItem] = []
+        self._ei_rank_badges: list[pg.TextItem] = []
+        self._ei_label_header_items: list[Any] = []
         self._minmax_items: list[pg.TextItem] = []
 
         self._selected_abs_set: set[int] = set()
@@ -159,6 +161,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_marker_labels: list[pg.TextItem] = []
         self._recruitment_marker_times: dict[str, float] = {}
         self._recruitment_marker_items: list[Any] = []
+        self._ei_label_styles: dict[str, dict[str, float | int]] = {}
         self._context_menu_active = False
 
         # ---- Layout: label plot (left) + signal plot (right) ----
@@ -300,6 +303,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_marker_labels = []
         self._recruitment_marker_times = {}
         self._recruitment_marker_items = []
+        self._ei_label_styles = {}
         self._visible_abs = np.array([], dtype=int)
         self._last_visible_abs = []
         self._last_visible_ch_indices = []
@@ -380,6 +384,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_marker_labels = []
         self._recruitment_marker_times = {}
         self._recruitment_marker_items = []
+        self._ei_label_styles = {}
         self._selected_abs_set.clear()   
 
         # Reset per-dataset annotations (do NOT carry across datasets)
@@ -502,6 +507,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_annotations(n_vis)
 
         self._set_ranges(t_ds, n_vis, seg_ds_uv)
+        self._draw_ei_label_header()
         self._draw_time_lines(t_ds)
         self._draw_seizure_markers(t_ds)
         self._draw_recruitment_markers(t_ds, visible_abs)
@@ -518,6 +524,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._curves = []
         self._labels = []
+        self._ei_rank_badges = []
+        self._ei_label_header_items = []
         self._time_lines = []
         self._cursor_line = None
         self._seizure_marker_lines = []
@@ -573,6 +581,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     
     def _draw_labels(self, n_vis: int) -> None:
         self._labels = []
+        self._ei_rank_badges = []
 
         for row in range(n_vis):
             abs_idx = int(self._visible_abs[row])
@@ -582,7 +591,22 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             y = plot_row * float(self._spacing)
 
             group = self.get_channel_group(ch_name)
-            label_color = self._micro_label_color if group == "micro" else self._macro_label_color
+            label_color = self._label_color_for_channel(ch_name, group)
+            style = self._ei_label_styles.get(str(ch_name))
+
+            if style is not None:
+                rank = int(style.get("rank", 0))
+                badge = pg.TextItem(
+                    text=str(rank),
+                    anchor=(0.5, 0.5),
+                    color=(255, 255, 255, 245),
+                    fill=pg.mkBrush(34, 42, 48, 230),
+                    border=pg.mkPen(label_color, width=1.3),
+                )
+                badge.setPos(12.0, y)
+                badge.setZValue(8)
+                self.label_plot.addItem(badge)
+                self._ei_rank_badges.append(badge)
 
             txt = pg.TextItem(
                 text=ch_name,
@@ -593,6 +617,19 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             txt.setPos(98.0, y)
             self.label_plot.addItem(txt)
             self._labels.append(txt)
+
+    def _ei_score_color(self, score_norm: float) -> tuple[int, int, int, int]:
+        score = max(0.0, min(1.0, float(score_norm)))
+        low = np.asarray([224.0, 116.0, 38.0])
+        high = np.asarray([33.0, 150.0, 83.0])
+        rgb = low * (1.0 - score) + high * score
+        return int(rgb[0]), int(rgb[1]), int(rgb[2]), 255
+
+    def _label_color_for_channel(self, ch_name: str, group: str) -> Any:
+        style = self._ei_label_styles.get(str(ch_name))
+        if style is not None:
+            return self._ei_score_color(float(style.get("score_norm", 0.0)))
+        return self._micro_label_color if group == "micro" else self._macro_label_color
 
     def _draw_annotations(self, n_vis: int) -> None:
         """Draw annotation overlays on the signal plot."""
@@ -674,6 +711,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._seizure_onset_s is not None or self._seizure_offset_s is not None:
             y1 += 0.45 * spacing
+        if self._ei_label_styles:
+            y1 += 0.34 * spacing
 
         t0 = float(t_ds[0])
         t1 = float(t_ds[-1])
@@ -683,6 +722,56 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         self._label_vb.setYRange(y0, y1, padding=0)
         self._label_vb.setXRange(0.0, 100.0, padding=0)
+
+    def _draw_ei_label_header(self) -> None:
+        if not self._ei_label_styles:
+            return
+
+        y_min, y_max = self._label_vb.viewRange()[1]
+        top_trace_y = max(0.0, float(len(getattr(self, "_last_visible_abs", [])) - 1)) * float(self._spacing)
+        label_band = max(1e-9, float(y_max) - top_trace_y)
+        header_y = float(y_max) - 0.18 * label_band
+        scale_y = float(y_max) - 0.38 * label_band
+
+        rank_title = pg.TextItem(
+            text="Rank",
+            anchor=(0.5, 0.5),
+            color=(90, 96, 104, 245),
+        )
+        rank_title.setPos(12.0, header_y)
+        rank_title.setZValue(12)
+        self.label_plot.addItem(rank_title)
+        self._ei_label_header_items.append(rank_title)
+
+        score_title = pg.TextItem(
+            text="REI score",
+            anchor=(0.5, 0.5),
+            color=(90, 96, 104, 245),
+        )
+        score_title.setPos(72.0, header_y)
+        score_title.setZValue(12)
+        self.label_plot.addItem(score_title)
+        self._ei_label_header_items.append(score_title)
+
+        x0 = 48.0
+        width = 46.0
+        height = max(9.0, 0.06 * float(self._spacing))
+        n_steps = 16
+        for step in range(n_steps):
+            frac0 = step / float(n_steps)
+            frac1 = (step + 1) / float(n_steps)
+            color = self._ei_score_color((step + 0.5) / float(n_steps))
+            rect = QtWidgets.QGraphicsRectItem(
+                x0 + frac0 * width,
+                scale_y - 0.5 * height,
+                (frac1 - frac0) * width,
+                height,
+            )
+            rect.setBrush(pg.mkBrush(*color))
+            rect.setPen(pg.mkPen(None))
+            rect.setZValue(11)
+            self.label_plot.addItem(rect)
+            self._ei_label_header_items.append(rect)
 
     def _draw_time_lines(self, t_ds: np.ndarray):
         step = self._nice_time_step(self._time_range, target_lines=10)
@@ -767,6 +856,25 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 if np.isfinite(value):
                     cleaned[str(channel_name)] = value
         self._recruitment_marker_times = cleaned
+        if self._raw is not None:
+            self.render()
+
+    def set_ei_label_styles(self, styles: dict[str, dict[str, float | int]] | None) -> None:
+        cleaned: dict[str, dict[str, float | int]] = {}
+        if isinstance(styles, dict):
+            for channel_name, style in styles.items():
+                if not isinstance(style, dict):
+                    continue
+                try:
+                    score_norm = float(style.get("score_norm", 0.0))
+                    rank = int(style.get("rank", 0))
+                except (TypeError, ValueError):
+                    continue
+                cleaned[str(channel_name)] = {
+                    "score_norm": max(0.0, min(1.0, score_norm)),
+                    "rank": max(1, rank),
+                }
+        self._ei_label_styles = cleaned
         if self._raw is not None:
             self.render()
 
@@ -1411,14 +1519,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             group = self.get_channel_group(ch_name)
 
             if abs_idx in self._selected_abs_set:
-                self._labels[row].setColor(self._theme.selected_label_color)
+                self._labels[row].setColor(self._label_color_for_channel(ch_name, group))
             else:
-                base_color = (
-                    self._micro_label_color
-                    if group == "micro"
-                    else self._macro_label_color
-                )
-                self._labels[row].setColor(base_color)
+                self._labels[row].setColor(self._label_color_for_channel(ch_name, group))
 
     def set_channel_start(self, ch_start: int):
         """Move the visible channel window start (index in displayed channel list)."""

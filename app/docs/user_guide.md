@@ -600,7 +600,7 @@ Signal flow: raw data → reference choice → filters → viewer + PSD + comput
 
 This means the viewer, PSD panel, and mean computation use the same filtered signal.
 
-The EI workflow is different: it starts from the current montage, ignores the display filter, excludes confirmed bad channels, then applies its own internal 70-140 Hz zero-phase Butterworth bandpass before computing EI.
+The REI workflow is different: it starts from the current montage, ignores the display filter, excludes confirmed bad channels, then applies its own internal 70-140 Hz zero-phase Butterworth bandpass before computing Recruitment Energy Index (REI).
 
 ### Available filters
 
@@ -700,18 +700,18 @@ In Mean mode, the panel can follow the main viewer time window when the link opt
 
 The mean output plot can optionally match the main viewer display scaling.
 
-### EI mode
+### REI mode
 
-EI mode is designed for manual seizure-window entry and delayed execution.
+REI mode is designed for manual seizure-window entry and delayed execution.
 
-The EI time section contains:
+The REI time section contains:
 
 - **Seizure onset (s)**
 - **Seizure offset (s)**
 - **Baseline start / end**
 - **Ictal start / end**
 
-Default EI windows are derived from seizure onset:
+Default REI windows are derived from seizure onset:
 
 - baseline start = seizure onset - 70 s
 - baseline end = seizure onset - 10 s
@@ -720,9 +720,9 @@ Default EI windows are derived from seizure onset:
 
 These defaults can be restored with **Use default windows** and can then be edited manually.
 
-### EI validation rules
+### REI validation rules
 
-EI runs only if all timing inputs are coherent.
+REI runs only if all timing inputs are coherent.
 
 Current checks include:
 
@@ -735,15 +735,15 @@ Current checks include:
 - ictal must end at or before seizure offset
 - windows must remain inside the recording when recording duration is available
 
-If any check fails, the software shows a warning and EI is not run.
+If any check fails, the software shows a warning and REI is not run.
 
-### EI montage recommendation
+### REI montage recommendation
 
-EI shows a small information button with the recommendation that bipolar montage is preferred.
+REI shows a small information button with the recommendation that bipolar montage is preferred.
 
-When you click **Run EI**:
+When you click **Run REI**:
 
-- if the current montage is bipolar, EI runs directly
+- if the current montage is bipolar, REI runs directly
 - if the montage is not bipolar or is unknown, the software shows a warning dialog
 
 From that dialog you can:
@@ -752,11 +752,11 @@ From that dialog you can:
 - **Run Anyway**
 - **Cancel**
 
-If you switch to bipolar successfully, the software stops there and asks you to review the channels and run EI again.
+If you switch to bipolar successfully, the software stops there and asks you to review the channels and run REI again.
 
-### EI preprocessing
+### REI preprocessing
 
-The current implementation uses fixed EI preprocessing:
+The current implementation uses fixed REI preprocessing:
 
 - input data taken from the current montage
 - confirmed bad channels excluded
@@ -765,42 +765,42 @@ The current implementation uses fixed EI preprocessing:
 - no automatic notch filter
 - no automatic common-average reference
 
-### EI advanced parameters
+### REI advanced parameters
 
 The **Advanced parameters** button opens a separate non-docked window.
 
-At present, this window is informational. It shows the current EI assumptions and preprocessing settings, while baseline and ictal windows remain editable in the main EI section.
+At present, this window is informational. It shows the current REI assumptions and preprocessing settings, while baseline and ictal windows remain editable in the main REI section.
 
-### EI outputs
+### REI outputs
 
 After a successful run, the panel enables two output windows:
 
-- **Open EI summary**
-- **Open EI heatmap**
+- **Open REI summary**
+- **Open REI heatmap**
 
-The EI summary shows:
+The REI summary shows:
 
 - channel
-- EI score
+- REI score
 - rank
 - peak HFER activity
 - recruitment delay
 
 Recruitment delay is computed relative to the manually entered seizure onset.
 
-The EI heatmap shows:
+The REI heatmap shows:
 
 - log-scaled HFER activity
 - time on the x-axis relative to seizure onset
 - channel names on the y-axis
 - a dashed vertical line at seizure onset, time 0
-- EI score side bars
+- REI score side bars
 - sorting controls
 - top-N channel display control
 
 Available heatmap sorting modes:
 
-- EI score
+- REI score
 - Recruitment delay
 - Peak HFER activity
 - Mean HFER activity
@@ -815,7 +815,7 @@ When you save a project, the computation panel preserves its current state, incl
 - selected channels
 - seizure onset and seizure offset
 - baseline and ictal windows
-- last EI result metadata when available
+- last REI result metadata when available
 
 ---
 
