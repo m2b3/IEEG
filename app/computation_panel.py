@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Callable, Optional, cast
 
 import numpy as np
@@ -24,6 +25,7 @@ from app.EI_algorithm import (
     compute_ei_for_gui,
     validate_gui_ei_timing,
 )
+from app.performance_monitor import timed_mark
 
 
 @dataclass
@@ -916,13 +918,34 @@ class ComputationPanel(QWidget):
                 return
             if not self._confirm_ei_montage_before_run():
                 return
+            perf_start = time.perf_counter()
             try:
                 result = self._compute_ei_result()
             except Exception as exc:
+                timed_mark("after_REI", perf_start, raw=self._raw, notes=f"error: {exc}")
                 QMessageBox.warning(self, "REI computation", str(exc))
                 return
             self._show_ei_result(result)
             self.ei_result_metadata = result.metadata
+            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+            baseline_window = metadata.get("baseline_window_s", "")
+            ictal_window = metadata.get("ictal_window_s", "")
+            timed_mark(
+                "after_REI",
+                perf_start,
+                raw=self._raw,
+                visible_window_s=(
+                    float(metadata.get("ictal_window_s", [0.0, 0.0])[1])
+                    - float(metadata.get("ictal_window_s", [0.0, 0.0])[0])
+                    if isinstance(metadata.get("ictal_window_s"), list)
+                    and len(metadata.get("ictal_window_s")) >= 2
+                    else None
+                ),
+                notes=(
+                    f"channels={len(result.channels)}; "
+                    f"baseline={baseline_window}; ictal={ictal_window}"
+                ),
+            )
             return
 
         self._request_update_plot(delay_ms=0)
@@ -1348,7 +1371,12 @@ class ComputationPanel(QWidget):
         header.setSortIndicatorShown(True)
         header.sectionClicked.connect(sort_summary_table)
         table.cellClicked.connect(activate_summary_row)
-        populate_summary_table(summary_rows)
+        default_rows = sorted(
+            summary_rows,
+            key=lambda row: int(row["display_order"]),
+        )
+        header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+        populate_summary_table(default_rows)
         layout.addWidget(table)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)

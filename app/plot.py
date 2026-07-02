@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import sys
+import time
 from typing import Optional, List, cast, Any
 
 import numpy as np
@@ -27,6 +28,15 @@ from app.filtering import (
     profiles_signature,
 )
 from app.referencing import BipolarMontage, BipolarPair
+from app.performance_monitor import timed_mark
+
+LABEL_PANEL_X_MAX = 116.0
+RANK_BADGE_X = 15.0
+CHANNEL_LABEL_X = 104.0
+EI_SCORE_HEADER_X = 84.0
+EI_SCALE_X0 = 58.0
+EI_SCALE_WIDTH = 52.0
+
 
 class AnnotationRect(QtWidgets.QGraphicsRectItem):
     def __init__(self, viewer: "MultiChannelViewer", anno_id: str, *args):
@@ -119,6 +129,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._filtered_segment_cache: OrderedDict[tuple, tuple[np.ndarray, int, int]] = OrderedDict()
         self._filtered_segment_cache_bytes = 0
         self._filtered_segment_cache_limit_bytes = 128 * 1024 * 1024
+        self._next_performance_render_step: str | None = None
 
         self._reference_mode: str = "monopolar"
         self._bipolar_montage: BipolarMontage | None = None
@@ -170,8 +181,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self.addItem(self.label_plot, 0, 0)
         self.addItem(self.signal_plot, 0, 1)
 
-        self.label_plot.setMaximumWidth(100)   # try 140-200
-        self.label_plot.setMinimumWidth(60)
+        self.label_plot.setMaximumWidth(124)
+        self.label_plot.setMinimumWidth(78)
 
         # Hide label plot axes
         for ax in ("bottom", "left", "right", "top"):
@@ -197,7 +208,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._label_vb.setYLink(self._sig_vb)
 
         # Label plot x-range just needs enough space for text
-        self._label_vb.setXRange(0.0, 100.0, padding=0)
+        self._label_vb.setXRange(0.0, LABEL_PANEL_X_MAX, padding=0)
         self._label_vb.enableAutoRange(axis=pg.ViewBox.XAxis, enable=False)
 
         # Scene mouse click -> channel selection
@@ -422,6 +433,12 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         Update view parameters. Any parameter can be None (unchanged).
         """
         if time_range is not None:
+            self._next_performance_render_step = (
+                "after_render_short_window"
+                if float(time_range) <= 10.0
+                else "after_render_long_window"
+            )
+        if time_range is not None:
             self._time_range = float(time_range)
             self._clamp_time_start()
             self.timeWindowChanged.emit(self._t_start)
@@ -478,6 +495,36 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     def common_reference_name(self) -> str | None:
         return self._common_ref_name
 
+    def _perf_add(self, parts: dict[str, float] | None, key: str, elapsed_s: float) -> None:
+        if parts is None:
+            return
+        parts[key] = float(parts.get(key, 0.0)) + max(0.0, float(elapsed_s))
+
+    def _perf_count(self, parts: dict[str, float] | None, key: str, count: int = 1) -> None:
+        if parts is None:
+            return
+        parts[key] = float(parts.get(key, 0.0)) + float(count)
+
+    def _perf_notes(self, parts: dict[str, float] | None) -> str:
+        if not parts:
+            return ""
+        note_parts: list[str] = []
+        for key in (
+            "read_window_s",
+            "filter_s",
+            "reference_s",
+            "downsample_s",
+            "plot_s",
+            "filter_cache_s",
+        ):
+            value = parts.get(key)
+            if value is not None:
+                note_parts.append(f"{key}={float(value):.4f}")
+        cache_hits = int(parts.get("filter_cache_hits", 0.0))
+        if cache_hits:
+            note_parts.append(f"filter_cache_hits={cache_hits}")
+        return "; ".join(note_parts)
+
 
    # ---------------- Rendering ----------------
     def render(self):
@@ -485,6 +532,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._raw is None or self._picks.size == 0:
             return
 
+        perf_start = time.perf_counter()
+        perf_parts: dict[str, float] = {}
         raw = self._raw
         picks = self._picks
 
@@ -497,10 +546,16 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._last_visible_abs = visible_abs
         self._visible_abs = np.asarray(visible_abs, dtype=int)
 
-        seg_ds_uv, t_ds = self._get_visible_data_for_abs(raw, picks, visible_abs)
+        seg_ds_uv, t_ds = self._get_visible_data_for_abs(
+            raw,
+            picks,
+            visible_abs,
+            perf_parts=perf_parts,
+        )
         if seg_ds_uv is None or t_ds is None:
             return
 
+        plot_start = time.perf_counter()
         self._clear_plots()
         self._draw_traces(seg_ds_uv, t_ds, visible_abs)
         self._draw_labels(n_vis)
@@ -516,6 +571,30 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._selected_abs_set:
             self.highlight_selected_channels()
+        self._perf_add(perf_parts, "plot_s", time.perf_counter() - plot_start)
+
+        step = self._next_performance_render_step
+        self._next_performance_render_step = None
+        if step is None:
+            step = (
+                "after_render_short_window"
+                if float(self._time_range) <= 10.0
+                else "after_render_long_window"
+            )
+        timed_mark(
+            step,
+            perf_start,
+            raw=raw,
+            visible_window_s=float(self._time_range),
+            filter_mode=(
+                "active" if self._display_filter_active() else "off"
+            ),
+            reference_mode=self.reference_mode(),
+            notes=(
+                f"visible_channels={n_vis}; plotted_points={int(t_ds.size)}; "
+                f"{self._perf_notes(perf_parts)}"
+            ).rstrip("; "),
+        )
 
     # ---------------- Render helpers ----------------
     def _clear_plots(self):
@@ -599,11 +678,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 badge = pg.TextItem(
                     text=str(rank),
                     anchor=(0.5, 0.5),
-                    color=(255, 255, 255, 245),
-                    fill=pg.mkBrush(34, 42, 48, 230),
-                    border=pg.mkPen(label_color, width=1.3),
+                    color=label_color,
                 )
-                badge.setPos(12.0, y)
+                badge_font = QtGui.QFont()
+                badge_font.setPointSize(8)
+                badge_font.setBold(True)
+                badge.setFont(badge_font)
+                badge.setPos(RANK_BADGE_X, y)
                 badge.setZValue(8)
                 self.label_plot.addItem(badge)
                 self._ei_rank_badges.append(badge)
@@ -613,8 +694,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 anchor=(1.0, 0.5),
                 color=label_color,
             )
+            label_font = QtGui.QFont()
+            label_font.setPointSize(9)
+            txt.setFont(label_font)
             
-            txt.setPos(98.0, y)
+            txt.setPos(CHANNEL_LABEL_X, y)
             self.label_plot.addItem(txt)
             self._labels.append(txt)
 
@@ -721,7 +805,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._sig_vb.setYRange(y0, y1, padding=0)
 
         self._label_vb.setYRange(y0, y1, padding=0)
-        self._label_vb.setXRange(0.0, 100.0, padding=0)
+        self._label_vb.setXRange(0.0, LABEL_PANEL_X_MAX, padding=0)
 
     def _draw_ei_label_header(self) -> None:
         if not self._ei_label_styles:
@@ -732,13 +816,23 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         label_band = max(1e-9, float(y_max) - top_trace_y)
         header_y = float(y_max) - 0.18 * label_band
         scale_y = float(y_max) - 0.38 * label_band
+        header_color = (98, 106, 114, 245)
+
+        x0 = EI_SCALE_X0
+        width = EI_SCALE_WIDTH
+        height = max(18.0, 0.12 * float(self._spacing))
+        endpoint_y = scale_y - 0.5 * height - max(42.0, 0.21 * float(self._spacing))
 
         rank_title = pg.TextItem(
             text="Rank",
             anchor=(0.5, 0.5),
-            color=(90, 96, 104, 245),
+            color=header_color,
         )
-        rank_title.setPos(12.0, header_y)
+        header_font = QtGui.QFont()
+        header_font.setPointSize(8)
+        header_font.setBold(True)
+        rank_title.setFont(header_font)
+        rank_title.setPos(RANK_BADGE_X, header_y)
         rank_title.setZValue(12)
         self.label_plot.addItem(rank_title)
         self._ei_label_header_items.append(rank_title)
@@ -746,16 +840,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         score_title = pg.TextItem(
             text="REI score",
             anchor=(0.5, 0.5),
-            color=(90, 96, 104, 245),
+            color=header_color,
         )
-        score_title.setPos(72.0, header_y)
+        score_title.setFont(header_font)
+        score_title.setPos(EI_SCORE_HEADER_X, header_y)
         score_title.setZValue(12)
         self.label_plot.addItem(score_title)
         self._ei_label_header_items.append(score_title)
 
-        x0 = 48.0
-        width = 46.0
-        height = max(9.0, 0.06 * float(self._spacing))
         n_steps = 16
         for step in range(n_steps):
             frac0 = step / float(n_steps)
@@ -772,6 +864,30 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             rect.setZValue(11)
             self.label_plot.addItem(rect)
             self._ei_label_header_items.append(rect)
+
+        scale_border = QtWidgets.QGraphicsRectItem(
+            x0,
+            scale_y - 0.5 * height,
+            width,
+            height,
+        )
+        scale_border.setBrush(pg.mkBrush(0, 0, 0, 0))
+        scale_border.setPen(pg.mkPen((55, 62, 70, 170), width=1.0))
+        scale_border.setZValue(12)
+        self.label_plot.addItem(scale_border)
+        self._ei_label_header_items.append(scale_border)
+
+        for text, x in (("0", x0), ("1", x0 + width)):
+            endpoint_label = pg.TextItem(
+                text=text,
+                anchor=(0.5, 0.5),
+                color=header_color,
+            )
+            endpoint_label.setFont(header_font)
+            endpoint_label.setPos(x, endpoint_y)
+            endpoint_label.setZValue(12)
+            self.label_plot.addItem(endpoint_label)
+            self._ei_label_header_items.append(endpoint_label)
 
     def _draw_time_lines(self, t_ds: np.ndarray):
         step = self._nice_time_step(self._time_range, target_lines=10)
@@ -1044,10 +1160,14 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         picks,
         start_samp: int,
         end_samp: int,
+        perf_parts: dict[str, float] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         raw_picks = tuple(int(pick) for pick in np.asarray(picks, dtype=int).reshape(-1))
         if not self._display_filter_active():
-            return self._read_raw_segment(raw, raw_picks, start_samp, end_samp)
+            read_start = time.perf_counter()
+            result = self._read_raw_segment(raw, raw_picks, start_samp, end_samp)
+            self._perf_add(perf_parts, "read_window_s", time.perf_counter() - read_start)
+            return result
 
         pad_samp = int(round(profiles_padding_seconds(self._display_filter_profiles) * float(self._fs)))
         padded_start = max(0, int(start_samp) - pad_samp)
@@ -1077,14 +1197,20 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         cached = self._filtered_segment_cache.get(key)
         if cached is not None:
+            cache_start = time.perf_counter()
             filtered, cached_start, _cached_end = cached
             self._filtered_segment_cache.move_to_end(key)
             rel_start = int(start_samp) - int(cached_start)
             rel_end = rel_start + (int(end_samp) - int(start_samp))
             times = np.asarray(raw.times[int(start_samp):int(end_samp)], dtype=float)
-            return np.asarray(filtered[:, rel_start:rel_end], dtype=float), times
+            result = np.asarray(filtered[:, rel_start:rel_end], dtype=float), times
+            self._perf_add(perf_parts, "filter_cache_s", time.perf_counter() - cache_start)
+            self._perf_count(perf_parts, "filter_cache_hits")
+            return result
 
+        read_start = time.perf_counter()
         padded_data, _ = self._read_raw_segment(raw, raw_picks, padded_start, padded_end)
+        self._perf_add(perf_parts, "read_window_s", time.perf_counter() - read_start)
         filtered = np.asarray(padded_data, dtype=float).copy()
 
         macro_rows: list[int] = []
@@ -1097,6 +1223,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 macro_rows.append(row_idx)
 
         try:
+            filter_start = time.perf_counter()
             if macro_rows and is_filter_active(self._display_filter_profiles.macro):
                 filtered[np.asarray(macro_rows, dtype=int), :] = apply_settings_to_array(
                     filtered[np.asarray(macro_rows, dtype=int), :],
@@ -1109,9 +1236,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     float(self._fs),
                     self._display_filter_profiles.micro,
                 )
+            self._perf_add(perf_parts, "filter_s", time.perf_counter() - filter_start)
         except Exception as exc:
             print(f"Warning: display window filtering failed: {exc}", file=sys.stderr)
-            return self._read_raw_segment(raw, raw_picks, start_samp, end_samp)
+            read_start = time.perf_counter()
+            result = self._read_raw_segment(raw, raw_picks, start_samp, end_samp)
+            self._perf_add(perf_parts, "read_window_s", time.perf_counter() - read_start)
+            return result
 
         self._store_filtered_segment_cache(key, filtered, padded_start, padded_end)
 
@@ -1183,11 +1314,78 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             times = np.asarray(raw.times[int(start_samp):int(end_samp)], dtype=float)
         return np.asarray(data, dtype=float), times
 
+    def _downsample_display_envelope(
+        self,
+        data_uv: np.ndarray,
+        times: np.ndarray,
+        max_points: int = 3000,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        data = np.asarray(data_uv, dtype=float)
+        t = np.asarray(times, dtype=float)
+        if data.ndim != 2 or t.ndim != 1 or data.shape[1] != t.size:
+            raise ValueError("Display data/time shape mismatch.")
+
+        n_samples = int(t.size)
+        if n_samples <= int(max_points):
+            return data, t
+
+        max_bins = max(1, int(max_points) // 2)
+        bin_size = int(np.ceil(n_samples / float(max_bins)))
+        n_bins = int(np.ceil(n_samples / float(bin_size)))
+
+        padded_samples = n_bins * bin_size
+        if padded_samples != n_samples:
+            padded = np.full((int(data.shape[0]), padded_samples), np.nan, dtype=float)
+            padded[:, :n_samples] = data
+        else:
+            padded = data
+
+        binned = padded.reshape(int(data.shape[0]), n_bins, bin_size)
+        finite = np.isfinite(binned)
+        has_finite = np.any(finite, axis=2)
+
+        min_source = np.where(finite, binned, np.inf)
+        max_source = np.where(finite, binned, -np.inf)
+        min_idx = np.argmin(min_source, axis=2)
+        max_idx = np.argmax(max_source, axis=2)
+
+        min_vals = np.take_along_axis(min_source, min_idx[..., np.newaxis], axis=2)[..., 0]
+        max_vals = np.take_along_axis(max_source, max_idx[..., np.newaxis], axis=2)[..., 0]
+        min_vals = np.where(has_finite, min_vals, np.nan)
+        max_vals = np.where(has_finite, max_vals, np.nan)
+
+        min_first = min_idx <= max_idx
+        first_vals = np.where(min_first, min_vals, max_vals)
+        second_vals = np.where(min_first, max_vals, min_vals)
+
+        out = np.empty((int(data.shape[0]), n_bins * 2), dtype=float)
+        out[:, 0::2] = first_vals
+        out[:, 1::2] = second_vals
+
+        starts = np.arange(n_bins, dtype=int) * int(bin_size)
+        stops = np.minimum(starts + int(bin_size), n_samples) - 1
+        out_t = np.empty(n_bins * 2, dtype=float)
+        out_t[0::2] = t[starts]
+        out_t[1::2] = t[stops]
+
+        return out, out_t
+
+    def _downsample_display_stride(
+        self,
+        data_uv: np.ndarray,
+        times: np.ndarray,
+        max_points: int = 3000,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        win_len = int(np.asarray(data_uv).shape[1])
+        step = max(1, win_len // int(max_points))
+        return np.asarray(data_uv)[:, ::step], np.asarray(times)[::step]
+
     def _get_visible_data_for_abs(
         self,
         raw: BaseRaw,
         picks: np.ndarray,
         visible_abs: list[int],
+        perf_parts: dict[str, float] | None = None,
     ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         start_samp = int(self._t_start * self._fs)
         end_samp = int((self._t_start + self._time_range) * self._fs)
@@ -1198,7 +1396,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         if self._reference_mode == "monopolar":
             raw_ch_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = self._read_display_raw_segment(raw, raw_ch_picks, start_samp, end_samp)
+            data_v, times = self._read_display_raw_segment(
+                raw,
+                raw_ch_picks,
+                start_samp,
+                end_samp,
+                perf_parts=perf_parts,
+            )
 
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
@@ -1211,14 +1415,27 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 return None, None
 
             ref_raw_picks = picks[np.asarray(ref_abs, dtype=int)]
-            ref_data, times = self._read_display_raw_segment(raw, ref_raw_picks, start_samp, end_samp)
+            ref_data, times = self._read_display_raw_segment(
+                raw,
+                ref_raw_picks,
+                start_samp,
+                end_samp,
+                perf_parts=perf_parts,
+            )
             ref_data = np.asarray(ref_data, dtype=float)
             times = np.asarray(times, dtype=float)
 
             vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, _ = self._read_display_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
+            data_v, _ = self._read_display_raw_segment(
+                raw,
+                vis_raw_picks,
+                start_samp,
+                end_samp,
+                perf_parts=perf_parts,
+            )
             data_v = np.asarray(data_v, dtype=float)
 
+            reference_start = time.perf_counter()
             # Exclude manually annotated bad segments from the reference computation
             bad_mask = self._build_bad_segment_mask_for_abs(ref_abs, times)
             if bad_mask.shape == ref_data.shape:
@@ -1234,6 +1451,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ref = np.where(np.isnan(ref), 0.0, ref)
 
             data_v = data_v - ref
+            self._perf_add(perf_parts, "reference_s", time.perf_counter() - reference_start)
 
         
         elif self._reference_mode == "common":
@@ -1247,17 +1465,31 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             ref_raw_pick = int(picks[ref_abs])
 
             vis_raw_picks = picks[np.asarray(visible_abs, dtype=int)]
-            data_v, times = self._read_display_raw_segment(raw, vis_raw_picks, start_samp, end_samp)
+            data_v, times = self._read_display_raw_segment(
+                raw,
+                vis_raw_picks,
+                start_samp,
+                end_samp,
+                perf_parts=perf_parts,
+            )
             data_v = np.asarray(data_v, dtype=float)
             times = np.asarray(times, dtype=float)
 
-            ref_data, _ = self._read_display_raw_segment(raw, [ref_raw_pick], start_samp, end_samp)
+            ref_data, _ = self._read_display_raw_segment(
+                raw,
+                [ref_raw_pick],
+                start_samp,
+                end_samp,
+                perf_parts=perf_parts,
+            )
             ref_data = np.asarray(ref_data, dtype=float)
 
             if ref_data.ndim != 2 or ref_data.shape[0] == 0:
                 return None, None
 
+            reference_start = time.perf_counter()
             data_v = data_v - ref_data[0:1, :]
+            self._perf_add(perf_parts, "reference_s", time.perf_counter() - reference_start)
 
         elif self._reference_mode == "bipolar":
             if self._bipolar_montage is None or not self._bipolar_montage.pairs:
@@ -1285,11 +1517,22 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         data_uv = data_v * 1e6
 
         max_points = 3000
-        win_len = int(data_uv.shape[1])
-        step = max(1, win_len // max_points)
-
-        t_ds = times[::step]
-        seg_ds_uv = data_uv[:, ::step]
+        try:
+            downsample_start = time.perf_counter()
+            seg_ds_uv, t_ds = self._downsample_display_envelope(
+                data_uv,
+                times,
+                max_points=max_points,
+            )
+            self._perf_add(perf_parts, "downsample_s", time.perf_counter() - downsample_start)
+        except Exception:
+            downsample_start = time.perf_counter()
+            seg_ds_uv, t_ds = self._downsample_display_stride(
+                data_uv,
+                times,
+                max_points=max_points,
+            )
+            self._perf_add(perf_parts, "downsample_s", time.perf_counter() - downsample_start)
         return seg_ds_uv, t_ds
 
     def _clamp_time_start(self):
@@ -1538,6 +1781,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             return
 
         self._ch_start = new_start
+        self._next_performance_render_step = "after_scroll_jump"
         self.render()
         self.channelWindowChanged.emit(self._ch_start)
 
@@ -1902,6 +2146,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             return
         self._t_start = float(t_start)
         self._clamp_time_start()
+        self._next_performance_render_step = "after_scroll_jump"
         self.render()
         self.timeWindowChanged.emit(self._t_start)
 

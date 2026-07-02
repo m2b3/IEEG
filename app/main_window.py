@@ -4,6 +4,7 @@ import csv
 import re
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,7 @@ from app.filtering import (
 from app.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICES, get_display_theme
 from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 from app.expert_event_grid import ExpertEventGridDialog
+from app.performance_monitor import monitor, timed_mark
 
 
 def _channel_label_sort_key(label: str) -> tuple:
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        monitor().mark("start", notes="MainWindow initialized")
 
         self._base_title = "iEEG Tool"
         self.setWindowTitle(self._base_title)
@@ -769,9 +772,16 @@ class MainWindow(QMainWindow):
         Load a raw EEG/iEEG file into the UI.
         Returns True on success, False on failure.
         """
+        perf_start = time.perf_counter()
         try:
             raw, picks = self._load_eeg_file(raw_path)
         except Exception as e:
+            timed_mark(
+                "after_open",
+                perf_start,
+                file_path=raw_path,
+                notes=f"error: {e}",
+            )
             QMessageBox.critical(self, "Open EEG error", str(e))
             return False
 
@@ -822,6 +832,18 @@ class MainWindow(QMainWindow):
         self._act_save.setEnabled(False)
         self._update_window_title()
 
+        timed_mark(
+            "after_open",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            filter_mode=(
+                f"macro={self._fmt_filter_short(self.filter_profiles.macro)}; "
+                f"micro={self._fmt_filter_short(self.filter_profiles.micro)}"
+            ),
+            reference_mode=self.viewer.reference_mode(),
+        )
         return True
 
     def _extract_fdt_candidates_from_error(self, error: Exception) -> list[str]:
@@ -1675,6 +1697,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Filters", "Load a dataset first.")
             return
 
+        perf_start = time.perf_counter()
         new_settings = self._filter_settings_from_ui()
         ok, msg = validate_filter_settings(new_settings, sfreq=float(self.source_raw.info["sfreq"]))
         if not ok:
@@ -1709,6 +1732,18 @@ class MainWindow(QMainWindow):
             f"Scope: {self.filter_scope.currentText()} | "
             f"Macro: {self._fmt_filter_short(self.filter_profiles.macro)} | "
             f"Micro: {self._fmt_filter_short(self.filter_profiles.micro)}"
+        )
+        timed_mark(
+            "after_filter_render",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            filter_mode=(
+                f"macro={self._fmt_filter_short(self.filter_profiles.macro)}; "
+                f"micro={self._fmt_filter_short(self.filter_profiles.micro)}"
+            ),
+            reference_mode=self.viewer.reference_mode(),
         )
         
     def on_reset_filters(self) -> None:
@@ -2160,41 +2195,72 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
+        perf_start = time.perf_counter()
         self.viewer.set_monopolar_mode()
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(False)
         self._update_montage_label()
         self.console.log("Reference mode: Monopolar")
+        timed_mark(
+            "after_reference_change",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            reference_mode=self.viewer.reference_mode(),
+            notes="monopolar",
+        )
  
     def on_reference_average(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
+        perf_start = time.perf_counter()
         self.viewer.set_average_mode()
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(False)
         self._mark_project_dirty()
         self._update_montage_label()
         self.console.log("Reference mode: Average")
+        timed_mark(
+            "after_reference_change",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            reference_mode=self.viewer.reference_mode(),
+            notes="average",
+        )
 
     def on_reference_median(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
+        perf_start = time.perf_counter()
         self.viewer.set_median_mode()
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(False)
         self._mark_project_dirty()
         self._update_montage_label()
         self.console.log("Reference mode: Median")
+        timed_mark(
+            "after_reference_change",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            reference_mode=self.viewer.reference_mode(),
+            notes="median",
+        )
 
     def on_reference_bipolar(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
+        perf_start = time.perf_counter()
         channel_names = self.viewer.get_raw_channel_names()
         already_bipolar = [
             name for name in channel_names
@@ -2251,6 +2317,15 @@ class MainWindow(QMainWindow):
         self.btn_edit_bipolar.setEnabled(True)
         self._update_montage_label()
         self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
+        timed_mark(
+            "after_reference_change",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            reference_mode=self.viewer.reference_mode(),
+            notes=f"bipolar pairs={len(montage.pairs)}",
+        )
 
         if self._saved_bipolar_montage is None and montage.skipped_channels:
             skipped = ", ".join(montage.skipped_channels)
@@ -2753,12 +2828,22 @@ class MainWindow(QMainWindow):
         if not ref_name:
             return
 
+        perf_start = time.perf_counter()
         self.viewer.set_common_reference_mode(ref_name)
         self._refresh_display_name_dependent_ui()
         self.btn_edit_bipolar.setEnabled(False)
         self._mark_project_dirty()
         self._update_montage_label()
         self.console.log(f"Reference mode: Common ({ref_name})")
+        timed_mark(
+            "after_reference_change",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(self.time_range.value()),
+            reference_mode=self.viewer.reference_mode(),
+            notes=f"common={ref_name}",
+        )
 
 # ---------------- Annotations -------------
 
@@ -3073,6 +3158,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "PSD", "Load a dataset first.")
             return
 
+        perf_start = time.perf_counter()
         total_s = float(self.current_raw.times[-1]) if self.current_raw.n_times > 1 else 0.0
         dlg = PSDIntervalDialog(total_s, self)
 
@@ -3104,6 +3190,15 @@ class MainWindow(QMainWindow):
 
         self._set_psd_tab_visible(True)
         self.main_tabs.setCurrentWidget(self.psd_panel)
+        timed_mark(
+            "after_PSD",
+            perf_start,
+            raw=self.current_raw,
+            file_path=self.loaded_file,
+            visible_window_s=float(stop_s) - float(start_s),
+            reference_mode=self.viewer.reference_mode(),
+            notes=f"interval={float(start_s):.3f}-{float(stop_s):.3f}s",
+        )
 
     def _on_bad_channels_changed(self) -> None:
         self._mark_project_dirty()
