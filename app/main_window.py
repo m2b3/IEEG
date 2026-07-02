@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QHeaderView, QTextBrowser, QTabWidget, QTabBar, QSizePolicy
 )
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QIcon, QColor
 
 from app.menus import build_menubar
@@ -265,6 +265,15 @@ class MainWindow(QMainWindow):
         self.time_ctl = TimeWindowControl(label_prefix="t0")
         tl.addWidget(self.time_ctl, 1)
 
+        # Debounce timeline drags so rapid slider movement does not trigger
+        # expensive read/render cycles for every intermediate position. This
+        # improves UI smoothness only; the final rendered data window is unchanged.
+        self._timeline_render_timer = QTimer(self)
+        self._timeline_render_timer.setSingleShot(True)
+        self._timeline_render_timer.setInterval(150)
+        self._pending_timeline_t0: float | None = None
+        self._timeline_render_timer.timeout.connect(self._flush_pending_timeline_render)
+
         self.timeline.hide()
         layout.addWidget(self.timeline, 0)
 
@@ -366,6 +375,7 @@ class MainWindow(QMainWindow):
         # Timeline sync
         self.viewer.timeWindowChanged.connect(self._sync_time_from_viewer)
         self.time_ctl.t0Changed.connect(self._on_time_ctl_t0_changed)
+        self.time_ctl.slider.sliderReleased.connect(self._flush_pending_timeline_render)
 
         # keep panel time updated when main time moves
         self.viewer.timeWindowChanged.connect(self._push_time_to_comp_panel)
@@ -844,6 +854,8 @@ class MainWindow(QMainWindow):
             ),
             reference_mode=self.viewer.reference_mode(),
         )
+        if self._channel_groups_need_sampling_review(raw):
+            QTimer.singleShot(0, self._open_channel_groups_for_mixed_sampling)
         return True
 
     def _extract_fdt_candidates_from_error(self, error: Exception) -> list[str]:
@@ -969,19 +981,130 @@ class MainWindow(QMainWindow):
         picks = np.arange(raw.info["nchan"], dtype=int)
         return raw, picks
         
-    def _format_title_freq_value(self, settings: FilterSettings) -> str:
-        if self.source_raw is None:
-            return "—"
+    @staticmethod
+    def _first_positive_float(value) -> float | None:
+        if value is None:
+            return None
+        try:
+            arr = np.asarray(value, dtype=float).reshape(-1)
+        except (TypeError, ValueError):
+            return None
+        finite = arr[np.isfinite(arr) & (arr > 0)]
+        if finite.size == 0:
+            return None
+        return float(finite[0])
 
-        nyquist = 0.5 * float(self.source_raw.info["sfreq"])
-        high = nyquist if settings.lowpass_hz is None else float(settings.lowpass_hz)
-        high = max(0.0, min(high, nyquist))
-        return f"{high:g} Hz"
+    def _channel_sampling_rates_by_name(self, raw: BaseRaw | None = None) -> dict[str, float]:
+        raw = raw or self.source_raw or self.current_raw
+        if raw is None:
+            return {}
+
+        fallback_sfreq = float(raw.info.get("sfreq", 0.0) or 0.0)
+        rates = {str(ch): fallback_sfreq for ch in raw.ch_names}
+
+        # MNE exposes one display sfreq after loading, but EDF/BDF readers keep
+        # original per-channel sample counts in _raw_extras. Use them for the
+        # title/group review only; this does not change data accuracy or reads.
+        for extra in getattr(raw, "_raw_extras", None) or []:
+            if not isinstance(extra, dict):
+                continue
+
+            n_samps = extra.get("n_samps")
+            record_length = self._first_positive_float(
+                extra.get("record_length", extra.get("data_record_duration"))
+            )
+            if n_samps is None or record_length is None:
+                continue
+
+            try:
+                samples_per_record = np.asarray(n_samps, dtype=float).reshape(-1)
+            except (TypeError, ValueError):
+                continue
+
+            names = extra.get("ch_names") or raw.ch_names
+            for ch_name, n_samples in zip(names, samples_per_record):
+                ch_key = str(ch_name)
+                if ch_key not in rates or not np.isfinite(n_samples) or n_samples <= 0:
+                    continue
+                rates[ch_key] = float(n_samples) / record_length
+
+        return rates
+
+    @staticmethod
+    def _format_group_sampling_rates(channel_names: list[str], rates: dict[str, float]) -> str:
+        values = [
+            float(rates[ch])
+            for ch in channel_names
+            if ch in rates and np.isfinite(float(rates[ch])) and float(rates[ch]) > 0
+        ]
+        if not values:
+            return "n/a"
+
+        unique = sorted({round(value, 6) for value in values})
+        if len(unique) == 1:
+            return f"{unique[0]:g} Hz"
+        return f"mixed {unique[0]:g}-{unique[-1]:g} Hz"
+
+    def _has_mixed_channel_sampling(self, raw: BaseRaw | None = None) -> bool:
+        rates = self._channel_sampling_rates_by_name(raw)
+        unique = {
+            round(float(rate), 6)
+            for rate in rates.values()
+            if np.isfinite(float(rate)) and float(rate) > 0
+        }
+        return len(unique) > 1
+
+    def _channel_groups_need_sampling_review(self, raw: BaseRaw | None = None) -> bool:
+        if not self._has_mixed_channel_sampling(raw):
+            return False
+        if raw is None:
+            raw = self.source_raw
+        if raw is None:
+            return False
+
+        groups = {
+            str(self.channel_groups.get(str(ch), "macro")).casefold()
+            for ch in raw.ch_names
+        }
+        return "micro" not in groups
+
+    def _open_channel_groups_for_mixed_sampling(self) -> None:
+        if not self._channel_groups_need_sampling_review(self.source_raw):
+            return
+        self.console.log(
+            "Mixed channel sampling frequencies detected; opening Channel Groups."
+        )
+        self.on_edit_channel_groups()
+        self._update_window_title()
 
     def _build_title_freq_text(self) -> str:
-        macro_txt = self._format_title_freq_value(self.filter_profiles.macro)
-        micro_txt = self._format_title_freq_value(self.filter_profiles.micro)
-        return f"Macro: {macro_txt} | Micro: {micro_txt}"
+        raw = self.source_raw or self.current_raw
+        if raw is None:
+            return "Macro Fs: n/a"
+
+        rates = self._channel_sampling_rates_by_name(raw)
+        groups = self.channel_groups or {str(ch): "macro" for ch in raw.ch_names}
+        parts: list[str] = []
+
+        for label, group_name in (("Macro", "macro"), ("Micro", "micro")):
+            channel_names = [
+                str(ch)
+                for ch in raw.ch_names
+                if str(groups.get(str(ch), "macro")).casefold() == group_name
+            ]
+            if not channel_names:
+                continue
+            parts.append(
+                f"{label} Fs: {self._format_group_sampling_rates(channel_names, rates)}"
+            )
+
+        if not parts:
+            all_channels = [str(ch) for ch in raw.ch_names]
+            parts.append(
+                f"Macro Fs: {self._format_group_sampling_rates(all_channels, rates)}"
+            )
+
+        return " | ".join(parts)
 
     def _update_window_title(self):
         base = getattr(self, "_base_title", "iEEG tool")
@@ -1403,6 +1526,7 @@ class MainWindow(QMainWindow):
         self.channel_groups = working_groups
         self.viewer.set_channel_groups(self.channel_groups)
         self._mark_project_dirty()
+        self._update_window_title()
 
         self._refresh_psd_panel_context()
 
@@ -1858,8 +1982,18 @@ class MainWindow(QMainWindow):
         menu.exec_(QCursor.pos())
 
     def _on_time_ctl_t0_changed(self, t0: float):
-        # user moved the timeline in main window
-        self.viewer.set_time_start(float(t0))
+        # User moved the main timeline slider. Debounce expensive render/read
+        # work during drags; this improves UI smoothness, not data accuracy.
+        self._pending_timeline_t0 = float(t0)
+        self._timeline_render_timer.start()
+
+    def _flush_pending_timeline_render(self) -> None:
+        if self._pending_timeline_t0 is None:
+            return
+        t0 = float(self._pending_timeline_t0)
+        self._pending_timeline_t0 = None
+        self._timeline_render_timer.stop()
+        self.viewer.set_time_start(t0)
 
     def _on_ei_markers_changed(self, onset_s, offset_s) -> None:
         onset = float(onset_s) if isinstance(onset_s, (int, float)) else None
