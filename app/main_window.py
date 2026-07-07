@@ -2199,6 +2199,14 @@ class MainWindow(QMainWindow):
             self._comp_dock_default_size_applied = True
         self.comp_dock.raise_()
 
+    def open_computation_panel(self) -> None:
+        if self.current_raw is None or self.current_picks is None:
+            QMessageBox.information(self, "Computation Panel", "Load a dataset first.")
+            return
+        start = max(0, int(self.viewer.channel_start()))
+        stop = min(len(self.current_picks), start + int(self.chan_range.value()))
+        self._open_computation_panel(list(range(start, stop)))
+
     def _get_ei_data_for_computation(
         self,
         selected_abs: list[int],

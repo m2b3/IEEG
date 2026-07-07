@@ -930,19 +930,21 @@ class ComputationPanel(QWidget):
             metadata = result.metadata if isinstance(result.metadata, dict) else {}
             baseline_window = metadata.get("baseline_window_s", "")
             ictal_window = metadata.get("ictal_window_s", "")
+            channel_results = (
+                list(result.channels)
+                if result.channels is not None
+                else []
+            )
+            visible_window_s = None
+            if isinstance(ictal_window, list) and len(ictal_window) >= 2:
+                visible_window_s = float(ictal_window[1]) - float(ictal_window[0])
             timed_mark(
                 "after_REI",
                 perf_start,
                 raw=self._raw,
-                visible_window_s=(
-                    float(metadata.get("ictal_window_s", [0.0, 0.0])[1])
-                    - float(metadata.get("ictal_window_s", [0.0, 0.0])[0])
-                    if isinstance(metadata.get("ictal_window_s"), list)
-                    and len(metadata.get("ictal_window_s")) >= 2
-                    else None
-                ),
+                visible_window_s=visible_window_s,
                 notes=(
-                    f"channels={len(result.channels)}; "
+                    f"channels={len(channel_results)}; "
                     f"baseline={baseline_window}; ictal={ictal_window}"
                 ),
             )
@@ -1123,17 +1125,26 @@ class ComputationPanel(QWidget):
     def _show_ei_result(self, result: EIComputationResult) -> None:
         self._last_ei_result = result
         self.ei_result_metadata = result.metadata
+        self._ei_summary_table = None
+        self._ei_summary_row_by_channel = {}
         self.recruitmentMarkersChanged.emit(
             self._recruitment_markers_from_result(result)
         )
         self.eiScoreLabelsChanged.emit(
             self._ei_score_label_styles_from_result(result)
         )
+        heatmap_channels = (
+            list(result.heatmap_channels)
+            if result.heatmap_channels is not None
+            else []
+        )
+        if heatmap_channels:
+            self.eiSummaryOrderChanged.emit(
+                [str(channel_name) for channel_name in heatmap_channels]
+            )
 
         self.btn_open_ei_summary.setEnabled(True)
         self.btn_open_ei_heatmap.setEnabled(bool(result.heatmap.size))
-
-        self._open_ei_summary_dialog()
 
     def _ei_score_label_styles_from_result(
         self,
@@ -1398,9 +1409,13 @@ class ComputationPanel(QWidget):
             return False
         if not (0 <= int(row) < table.rowCount()):
             return False
+        item_or_none = table.item(int(row), 0)
+        if item_or_none is None:
+            return False
+        item: QTableWidgetItem = item_or_none
         table.setCurrentCell(int(row), 0)
         table.selectRow(int(row))
-        table.scrollToItem(table.item(int(row), 0))
+        table.scrollToItem(item)
         return True
 
     def _open_ei_heatmap_dialog(self) -> None:
@@ -1433,7 +1448,12 @@ class ComputationPanel(QWidget):
         controls_row.addSpacing(16)
         controls_row.addWidget(QLabel("Show top N channels:"))
         top_n_spin = QSpinBox()
-        max_channels = max(1, min(len(result.heatmap_channels), int(result.heatmap.shape[0])))
+        heatmap_channel_names = (
+            list(result.heatmap_channels)
+            if result.heatmap_channels is not None
+            else []
+        )
+        max_channels = max(1, min(len(heatmap_channel_names), int(result.heatmap.shape[0])))
         top_n_spin.setRange(1, max_channels)
         top_n_spin.setValue(min(30, max_channels))
         controls_row.addWidget(top_n_spin)

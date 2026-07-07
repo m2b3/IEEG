@@ -9,39 +9,47 @@ def add_action(menu, name, slot):
     return action
 
 
+def add_disabled_action(menu, name):
+    action = QAction(name, menu)
+    action.setEnabled(False)
+    menu.addAction(action)
+    return action
+
+
 def build_menubar(main_window):
     menubar = main_window.menuBar()
     menubar.clear()
 
     # -------- File --------
     file_menu = menubar.addMenu("File")
-    add_action(file_menu, "New", main_window.on_new_project)
-    add_action(file_menu, "Open", main_window.on_open_project)
+    add_action(file_menu, "New Project...", main_window.on_new_project)
+    add_action(file_menu, "Open Project...", main_window.on_open_project)
 
     file_menu.addSeparator()
 
     act_save = add_action(file_menu, "Save", main_window.on_save_project)
-    act_save.setShortcut(QKeySequence.StandardKey.Save)    # Ctrl+S
+    act_save.setShortcut(QKeySequence.StandardKey.Save)
 
-    act_saveas = add_action(file_menu, "Save as...", main_window.on_save_project_as)
-    act_saveas.setShortcut(QKeySequence.StandardKey.SaveAs)     # Ctrl+Shift+S
+    act_saveas = add_action(file_menu, "Save As...", main_window.on_save_project_as)
+    act_saveas.setShortcut(QKeySequence.StandardKey.SaveAs)
 
     file_menu.addSeparator()
 
-    act_close = add_action(file_menu, "Close", main_window.on_close_project)
-    act_settings = add_action(file_menu, "Settings", lambda: print("TODO: Settings"))
+    act_close = add_action(file_menu, "Close Project", main_window.on_close_project)
+    file_menu.addSeparator()
     add_action(file_menu, "Exit", main_window.close)
 
     main_window._act_save = act_save
     main_window._act_saveas = act_saveas
     main_window._act_close = act_close
 
-    # -------- Viewer --------
-    view_menu = menubar.addMenu("Viewer")
+    # -------- View --------
+    view_menu = menubar.addMenu("View")
     add_action(view_menu, "Zoom Selection", main_window.on_zoom_selection)
     act_reset_zoom = add_action(view_menu, "Reset Zoom", main_window.on_reset_zoom)
     act_reset_zoom.setEnabled(False)
-    act_scalogram = QAction("Scalogram", view_menu)
+
+    act_scalogram = QAction("Scalogram Mode", view_menu)
     act_scalogram.setCheckable(True)
     act_scalogram.toggled.connect(main_window.on_toggle_scalogram_mode)
     view_menu.addAction(act_scalogram)
@@ -49,84 +57,55 @@ def build_menubar(main_window):
     main_window._act_scalogram = act_scalogram
     main_window._act_reset_zoom = act_reset_zoom
 
-    # -------- Edit --------
-    edit_menu = menubar.addMenu("Edit")
-    act_implantation = add_action(edit_menu, "Implantation", lambda: print("TODO: Implantation"))
-    add_action(edit_menu, "Annotate", main_window.on_annotate)
-    add_action(edit_menu, "Channel Groups", main_window.on_edit_channel_groups)
+    # -------- Channels --------
+    channels_menu = menubar.addMenu("Channels")
+    add_action(channels_menu, "Channel Groups...", main_window.on_edit_channel_groups)
+    add_action(channels_menu, "Hidden Channels...", main_window._show_hidden_channels_menu)
+    act_bad_channels = add_disabled_action(
+        channels_menu,
+        "Bad Channels / Review Bad Channels",
+    )
+
+    montage_ref_menu = channels_menu.addMenu("Montage/ Reference")
+    add_action(montage_ref_menu, "Monopolar", main_window.on_reference_monopolar)
+    add_action(montage_ref_menu, "Bipolar", main_window.on_reference_bipolar)
+    add_action(montage_ref_menu, "Average", main_window.on_reference_average)
+    add_action(montage_ref_menu, "Median", main_window.on_reference_median)
+    add_action(montage_ref_menu, "Common Reference...", main_window.on_reference_common)
 
     # -------- Preprocessing --------
     pre_menu = menubar.addMenu("Preprocessing")
+    add_action(pre_menu, "Display Filters...", main_window.on_toggle_permanent_filters)
     add_action(pre_menu, "Power Spectrum", main_window.open_psd_panel)
-    add_action(pre_menu, "Display Filters", main_window.on_toggle_permanent_filters)
 
-    # Submenu Re-Referencing
-    ref_menu = pre_menu.addMenu("Re-referencing")
-
-    add_action(ref_menu, "Monopolar", main_window.on_reference_monopolar)
-    add_action(ref_menu, "Bipolar", main_window.on_reference_bipolar)
-    add_action(ref_menu, "Average", main_window.on_reference_average)
-    add_action(ref_menu, "Median", main_window.on_reference_median)
-    add_action(ref_menu, "Common Reference", main_window.on_reference_common)
-
-    # -------- Detect --------
-    detect_menu = menubar.addMenu("Detect")
-    act_detect_spikes = add_action(detect_menu, "Epileptic Spikes", lambda: print("TODO: Spike detection"))
-    act_detect_ripples = add_action(detect_menu, "Ripples", lambda: print("TODO: Seizure detection"))
-    act_detect_fast_ripples = add_action(detect_menu, "Fast Ripples", lambda: print("TODO: Seizure detection"))
+    # -------- Compute --------
+    compute_menu = menubar.addMenu("Compute")
+    add_action(compute_menu, "Open Computation Panel", main_window.open_computation_panel)
 
     # -------- Review --------
     review_menu = menubar.addMenu("Review")
-
-    # Submenu Event Viewers
-    event_viewers_menu = review_menu.addMenu("Event Viewers")
-    act_review_spikes = add_action(event_viewers_menu, "Epileptic Spikes", lambda: print("TODO"))
-    act_review_ripples = add_action(event_viewers_menu, "Ripples", lambda: print("TODO"))
-    act_review_fast_ripples = add_action(event_viewers_menu, "Fast Ripples", lambda: print("TODO"))
-
-    # Expert Event Grid - load and display expert-reviewed HFO annotations
+    add_action(review_menu, "Annotate", main_window.on_annotate)
     add_action(review_menu, "Expert Event Grid", main_window.open_expert_event_grid)
-
-    act_events_display = add_action(review_menu, "Events Display", lambda: print("TODO"))
-
-    # -------- Results --------
-    results_menu = menubar.addMenu("Results")
-
-    # Submenu Topographic map
-    top_menu = results_menu.addMenu("Topographic map")
-    act_topo_spikes = add_action(top_menu, "Epileptic Spikes", lambda: print("TODO"))
-    act_topo_ripples = add_action(top_menu, "Ripples", lambda: print("TODO"))
-    act_topo_fast_ripples = add_action(top_menu, "Fast Ripples", lambda: print("TODO"))
-    act_topo_es_ripples = add_action(top_menu, "ES & Ripples", lambda: print("TODO"))
-    act_topo_es_fast_ripples = add_action(top_menu, "ES & Fast Ripples", lambda: print("TODO"))
-
-    # Submenu Export metrics
-    metrics_menu = results_menu.addMenu("Export metrics")
-    act_metrics_spikes = add_action(metrics_menu, "Epileptic Spikes", lambda: print("TODO"))
-    act_metrics_ripples = add_action(metrics_menu, "Ripples", lambda: print("TODO"))
-    act_metrics_fast_ripples = add_action(metrics_menu, "Fast Ripples", lambda: print("TODO"))
-    act_metrics_other = add_action(metrics_menu, "Other Events", lambda: print("TODO"))
-    act_metrics_notes = add_action(metrics_menu, "Notes", lambda: print("TODO"))
 
     # -------- Help --------
     help_menu = menubar.addMenu("Help")
     add_action(help_menu, "User Guide", main_window.on_open_user_guide)
-    act_shortcuts = add_action(help_menu, "Shortcuts", lambda: print("TODO"))
+    act_shortcuts = add_disabled_action(help_menu, "Shortcuts")
 
-    # Store what should be disabled until a file is loaded
+    # Store what should be disabled until a file is loaded.
     main_window._menus_disabled_until_loaded = [
-        view_menu, edit_menu, pre_menu, detect_menu, review_menu, results_menu
+        view_menu,
+        channels_menu,
+        pre_menu,
+        compute_menu,
+        review_menu,
     ]
     main_window._menus_always_enabled = [file_menu, help_menu]
 
-    # Store TODO actions to keep them always disabled
+    # Store actions that are visible placeholders but not implemented yet.
     main_window._todo_actions = [
-        act_settings, act_implantation,
-        act_detect_spikes, act_detect_ripples, act_detect_fast_ripples,
-        act_review_spikes, act_review_ripples, act_review_fast_ripples, act_events_display,
-        act_topo_spikes, act_topo_ripples, act_topo_fast_ripples, act_topo_es_ripples, act_topo_es_fast_ripples,
-        act_metrics_spikes, act_metrics_ripples, act_metrics_fast_ripples, act_metrics_other, act_metrics_notes,
-        act_shortcuts
+        act_bad_channels,
+        act_shortcuts,
     ]
 
     return act_save, act_saveas, act_close
