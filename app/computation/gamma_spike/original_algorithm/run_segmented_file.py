@@ -6,6 +6,9 @@ import time
 
 from .segmented_pipeline import (
     DEFAULT_SETTINGS,
+    Rows,
+    SegmentedPipelineResult,
+    SummaryRow,
     boundary_header,
     gamma_header,
     qc_header,
@@ -22,7 +25,7 @@ def main() -> None:
     parser.add_argument("recording", type=Path, help="EDF/FIF file, or an .ieeg metadata file pointing to one.")
     parser.add_argument("--output-dir", type=Path, required=True, help="Folder where CSV outputs will be written.")
     parser.add_argument("--chunk-minutes", type=float, default=10.0)
-    parser.add_argument("--context-seconds", type=float, default=5.0)
+    parser.add_argument("--context-seconds", type=float, default=10.0)
     parser.add_argument("--filter-context-seconds", type=float, default=30.0)
     parser.add_argument("--settings", default=DEFAULT_SETTINGS)
     parser.add_argument(
@@ -34,7 +37,7 @@ def main() -> None:
     args = parser.parse_args()
 
     start = time.perf_counter()
-    result = run_segmented_recording(
+    result: SegmentedPipelineResult = run_segmented_recording(
         args.recording,
         settings=args.settings,
         chunk_minutes=args.chunk_minutes,
@@ -45,19 +48,28 @@ def main() -> None:
     elapsed = time.perf_counter() - start
 
     write_outputs(args.output_dir, result)
+    summary: SummaryRow = result.summary
     print(f"saved_output_dir={args.output_dir}")
     print(f"runtime_seconds={elapsed:.3f}")
-    print(f"raw_detections={result['summary'][5]}")
-    print(f"postprocessed_detections={result['summary'][6]}")
+    print(f"raw_detections={summary[5]}")
+    print(f"postprocessed_detections={summary[6]}")
 
 
-def write_outputs(output_dir: Path, result: dict[str, object]) -> None:
-    write_rows(output_dir / "step1_detections.csv", step1_header(), result["step1"])
-    write_rows(output_dir / "step2_postprocessing_by_channel.csv", step2_header(), result["step2"])
-    write_rows(output_dir / "step2_qc_summary.csv", qc_header(), result["qc"])
-    write_rows(output_dir / "step3_boundaries.csv", boundary_header(), result["step3"])
-    write_rows(output_dir / "step4_gamma.csv", gamma_header(), result["step4"])
-    write_rows(output_dir / "summary.csv", summary_header(), [result["summary"]])
+def write_outputs(output_dir: Path, result: SegmentedPipelineResult) -> None:
+    step1_rows: Rows = result.step1
+    step2_rows: Rows = result.step2
+    qc_rows: Rows = result.qc
+    boundary_rows: Rows = result.step3
+    gamma_rows: Rows = result.step4
+    summary: SummaryRow = result.summary
+    summary_rows: Rows = [summary]
+
+    write_rows(output_dir / "step1_detections.csv", step1_header(), step1_rows)
+    write_rows(output_dir / "step2_postprocessing_by_channel.csv", step2_header(), step2_rows)
+    write_rows(output_dir / "step2_qc_summary.csv", qc_header(), qc_rows)
+    write_rows(output_dir / "step3_boundaries.csv", boundary_header(), boundary_rows)
+    write_rows(output_dir / "step4_gamma.csv", gamma_header(), gamma_rows)
+    write_rows(output_dir / "summary.csv", summary_header(), summary_rows)
 
 
 if __name__ == "__main__":

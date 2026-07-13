@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, cast
 
 import numpy as np
 from scipy import signal
@@ -47,6 +48,11 @@ class GammaSpikeComputationResult:
     channels: list[GammaSpikeChannelResult]
     detector_output: DetectorOutput
     metadata: dict
+
+
+def _butter_ba(*args: Any, **kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
+    b, a = cast(Any, signal.butter(*args, **kwargs))
+    return np.asarray(b, dtype=float), np.asarray(a, dtype=float)
 
 
 def compute_gamma_spike_for_gui(
@@ -279,7 +285,7 @@ def _bandpass_filter(values: np.ndarray, fs: float, low_hz: float, high_hz: floa
     high = min(float(high_hz), nyquist - 1e-6)
     if low >= high:
         return arr
-    b, a = signal.butter(4, [low, high], btype="bandpass", fs=float(fs))
+    b, a = _butter_ba(4, [low, high], btype="bandpass", fs=float(fs))
     return signal.filtfilt(b, a, arr)
 
 

@@ -17,7 +17,7 @@ from app.computation.gamma_spike.original_algorithm import run_segmented_recordi
 result = run_segmented_recording(
     recording_path,
     chunk_minutes=10.0,
-    context_seconds=5.0,
+    context_seconds=10.0,
     filter_context_seconds=30.0,
     max_spikes_for_boundary_gamma=None,
 )
@@ -44,12 +44,16 @@ Useful options:
 
 ```powershell
 --chunk-minutes 10
---context-seconds 5
+--context-seconds 10
 --filter-context-seconds 30
 --max-spikes-for-boundary-gamma 250
 ```
 
 Use `--max-spikes-for-boundary-gamma` only for validation/debugging. For full processing, omit it.
+
+## Validated Defaults
+
+Use `context_seconds=10.0` for segmented processing. In the 30-minute multi-chunk validation, 5 seconds left two chunk-boundary event differences, while 10 seconds matched full Python2 event locations and downstream outputs.
 
 ## File Support
 

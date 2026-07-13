@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 
-def select_max_gamma_candidate(candidate_powers: np.ndarray) -> int | None:
+def select_max_gamma_candidate(candidate_powers: Sequence[float] | np.ndarray) -> int | None:
     powers = np.asarray(candidate_powers, dtype=float).ravel()
     if powers.size == 0:
         return None

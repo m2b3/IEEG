@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 import math
 import shlex
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple, cast
 
 import numpy as np
 from scipy import signal, special
@@ -63,6 +63,11 @@ class Discharges:
     MW: np.ndarray
     MPDF: np.ndarray
     MRAW: np.ndarray
+
+
+def _filter_ba(factory: Any, *args: Any, **kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
+    b, a = cast(Any, factory(*args, **kwargs))
+    return np.asarray(b, dtype=float), np.asarray(a, dtype=float)
 
 
 def parse_settings(settings: str | None) -> DetectorSettings:
@@ -209,7 +214,7 @@ def _spike_detector(
         winsize = d.shape[0]
 
     d = _filt_hum(d, fs, cfg.main_hum_freq, cfg.bandwidth)
-    b_hp, a_hp = signal.butter(2, 2 * 1 / fs, btype="high")
+    b_hp, a_hp = _filter_ba(signal.butter, 2, 2 * 1 / fs, btype="high")
     d_decim = _filtfilt(b_hp, a_hp, d)
 
     beta_mask = None
@@ -549,22 +554,22 @@ def _filtering(d: np.ndarray, fs: float, cfg: DetectorSettings) -> np.ndarray:
         wp = 2 * high / fs
         ws = min(1.0, 2 * high / fs + 0.1)
         n, _ = signal.cheb2ord(wp, ws, 6, 60)
-        bl, al = signal.cheby2(n, 60, ws)
+        bl, al = _filter_ba(signal.cheby2, n, 60, ws)
 
         wp = 2 * low / fs
         ws = max(1e-5, 2 * low / fs - 0.05)
         n, _ = signal.cheb2ord(wp, ws, 6, 60)
-        bh, ah = signal.cheby2(n, 60, ws, btype="high")
+        bh, ah = _filter_ba(signal.cheby2, n, 60, ws, btype="high")
     elif f_type == 2:
         wp = 2 * high / fs
         ws = min(1.0, 2 * high / fs + 0.1)
         n, ws = signal.buttord(wp, ws, 6, 60)
-        bl, al = signal.butter(n, ws)
+        bl, al = _filter_ba(signal.butter, n, ws)
 
         wp = 2 * low / fs
         ws = max(0.1, 2 * low / fs - 0.05)
         n, ws = signal.buttord(wp, ws, 6, 60)
-        bh, ah = signal.butter(n, ws, btype="high")
+        bh, ah = _filter_ba(signal.butter, n, ws, btype="high")
     elif f_type == 3:
         taps = int(fs // 2)
         if taps % 2 == 0:
@@ -602,7 +607,7 @@ def _beta_detect(d: np.ndarray, fs: float, beta: float, winsize_sec: float, beta
         return np.zeros_like(d, dtype=bool)
 
     index = np.arange(0, d.shape[0] - winsize + 1, step, dtype=int)
-    b, a = signal.butter(4, 2 * 30 / fs)
+    b, a = _filter_ba(signal.butter, 4, 2 * 30 / fs)
     mask = np.zeros_like(d, dtype=bool)
     for ch in range(d.shape[1]):
         flags = []

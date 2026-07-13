@@ -8,14 +8,33 @@ adds a QC structure exposing common-mode and burst-removal masks.
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
-from typing import Mapping, Sequence
+from typing import Literal, Mapping, Sequence, overload
 
 import numpy as np
 
-try:
-    from .spike_detector_hilbert_v25 import DetectorOutput
-except ImportError:  # Allows direct script-style use from this folder.
-    from spike_detector_hilbert_v25 import DetectorOutput
+from .spike_detector_hilbert_v25 import DetectorOutput
+
+
+@overload
+def postprocessing(
+    out: DetectorOutput | Mapping[str, Sequence[float]],
+    fs: float,
+    num_chans: int,
+    *,
+    return_qc: Literal[False] = False,
+) -> list[np.ndarray]:
+    ...
+
+
+@overload
+def postprocessing(
+    out: DetectorOutput | Mapping[str, Sequence[float]],
+    fs: float,
+    num_chans: int,
+    *,
+    return_qc: Literal[True],
+) -> tuple[list[np.ndarray], dict[str, object]]:
+    ...
 
 
 def postprocessing(
@@ -24,7 +43,7 @@ def postprocessing(
     num_chans: int,
     *,
     return_qc: bool = False,
-):
+) -> list[np.ndarray] | tuple[list[np.ndarray], dict[str, object]]:
     out_fields = _out_fields(out)
     positions_sec = np.asarray(out_fields[0], dtype=float).ravel()
     channels = np.asarray(out_fields[2], dtype=float).ravel()

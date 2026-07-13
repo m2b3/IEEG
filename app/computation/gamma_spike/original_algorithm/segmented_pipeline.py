@@ -1,28 +1,67 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable, cast, overload
 
 import mne
 import numpy as np
 from scipy import signal
 
-try:
-    from .compute_gamma import compute_gamma
-    from .compute_spike_boundary import compute_spike_boundary
-    from .postprocessing import postprocessing
-    from .spike_detector_hilbert_v25 import DetectorOutput, spike_detector_hilbert_v25
-except ImportError:  # Allows direct script-style use from this folder.
-    from compute_gamma import compute_gamma
-    from compute_spike_boundary import compute_spike_boundary
-    from postprocessing import postprocessing
-    from spike_detector_hilbert_v25 import DetectorOutput, spike_detector_hilbert_v25
+from .compute_gamma import compute_gamma
+from .compute_spike_boundary import compute_spike_boundary
+from .postprocessing import postprocessing
+from .spike_detector_hilbert_v25 import DetectorOutput, spike_detector_hilbert_v25
 
 
 DEFAULT_SETTINGS = "-bl 10 -bh 60 -h 60 -k1 3.65 -dec 200"
+
+
+CsvRow = list[Any]
+Rows = list[CsvRow]
+SummaryRow = CsvRow
+
+
+@dataclass(frozen=True)
+class SegmentedPipelineResult:
+    step1: Rows
+    step2: Rows
+    qc: Rows
+    step3: Rows
+    step4: Rows
+    summary: SummaryRow
+
+
+@dataclass(frozen=True)
+class EventRecord:
+    time_sec: float
+    sample: int
+    channel: int
+    channel_name: str
+    condition: float
+    weight: float
+    pdf: float
+    dur: float
+
+
+def _row_float(row: Sequence[Any], index: int) -> float:
+    return float(row[index])
+
+
+def _row_int(row: Sequence[Any], index: int) -> int:
+    return int(row[index])
+
+
+def _row_str(row: Sequence[Any], index: int) -> str:
+    return str(row[index])
+
+
+def _butter_ba(*args: Any, **kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
+    b, a = cast(Any, signal.butter(*args, **kwargs))
+    return np.asarray(b, dtype=float), np.asarray(a, dtype=float)
 
 
 @dataclass(frozen=True)
@@ -39,10 +78,10 @@ def run_segmented_recording(
     *,
     settings: str = DEFAULT_SETTINGS,
     chunk_minutes: float = 10.0,
-    context_seconds: float = 5.0,
+    context_seconds: float = 10.0,
     filter_context_seconds: float = 5.0,
     max_spikes_for_boundary_gamma: int | None = 25,
-) -> dict[str, object]:
+) -> SegmentedPipelineResult:
     """Run the Python2 spike-gamma pipeline using chunked EDF reads."""
 
     signal_path = resolve_signal_path(edf_path)
@@ -57,8 +96,8 @@ def run_segmented_recording(
     if chunk_samples <= 0:
         raise ValueError("chunk_minutes must produce at least one sample")
 
-    detector_rows: list[list[object]] = []
-    event_records: list[dict[str, object]] = []
+    detector_rows: Rows = []
+    event_records: list[EventRecord] = []
 
     for spec in make_chunk_specs(n_samples, chunk_samples, context_samples):
         data = read_data(raw, spec.extended_start_sample0, spec.extended_stop_sample0)
@@ -91,7 +130,7 @@ def run_segmented_recording(
         filter_context_seconds=filter_context_seconds,
     )
 
-    summary = [
+    summary: SummaryRow = [
         str(edf_path),
         str(signal_path),
         fs,
@@ -109,14 +148,14 @@ def run_segmented_recording(
         "",
     ]
 
-    return {
-        "step1": detector_rows,
-        "step2": step2_rows,
-        "qc": qc_rows,
-        "step3": boundary_rows,
-        "step4": gamma_rows,
-        "summary": summary,
-    }
+    return SegmentedPipelineResult(
+        step1=detector_rows,
+        step2=step2_rows,
+        qc=qc_rows,
+        step3=boundary_rows,
+        step4=gamma_rows,
+        summary=summary,
+    )
 
 
 def make_chunk_specs(n_samples: int, chunk_samples: int, context_samples: int) -> Iterable[ChunkSpec]:
@@ -165,8 +204,8 @@ def keep_central_events(
     out: DetectorOutput,
     fs: float,
     channel_names: list[str],
-) -> tuple[list[list[object]], list[dict[str, object]]]:
-    records: list[dict[str, object]] = []
+) -> tuple[Rows, list[EventRecord]]:
+    records: list[EventRecord] = []
     for pos, dur, channel, condition, weight, pdf in zip(out.pos, out.dur, out.chan, out.con, out.weight, out.pdf):
         global_pos = float(pos + spec.extended_start_sample0 / fs)
         global_sample = int(matlab_round(global_pos * fs))
@@ -174,54 +213,56 @@ def keep_central_events(
             continue
         ch = int(channel)
         records.append(
-            {
-                "time_sec": global_pos,
-                "sample": global_sample,
-                "channel": ch,
-                "channel_name": channel_names[ch - 1] if 1 <= ch <= len(channel_names) else "",
-                "condition": float(condition),
-                "weight": float(weight),
-                "pdf": float(pdf),
-                "dur": float(dur),
-            }
+            EventRecord(
+                time_sec=global_pos,
+                sample=global_sample,
+                channel=ch,
+                channel_name=channel_names[ch - 1] if 1 <= ch <= len(channel_names) else "",
+                condition=float(condition),
+                weight=float(weight),
+                pdf=float(pdf),
+                dur=float(dur),
+            )
         )
     return event_rows_from_records(records, channel_names), records
 
 
-def sort_and_renumber_events(records: list[dict[str, object]]) -> list[dict[str, object]]:
-    return sorted(records, key=lambda row: (float(row["time_sec"]), int(row["channel"])))
+def sort_and_renumber_events(records: list[EventRecord]) -> list[EventRecord]:
+    return sorted(records, key=lambda row: (row.time_sec, row.channel))
 
 
-def event_rows_from_records(records: list[dict[str, object]], channel_names: list[str]) -> list[list[object]]:
+def event_rows_from_records(records: list[EventRecord], channel_names: list[str]) -> Rows:
     rows = []
     for detection_index, record in enumerate(records, start=1):
+        channel = record.channel
+        channel_name = record.channel_name or channel_names[channel - 1]
         rows.append(
             [
                 detection_index,
-                float(record["time_sec"]),
-                int(record["sample"]),
-                int(record["channel"]),
-                str(record.get("channel_name") or channel_names[int(record["channel"]) - 1]),
-                float(record["condition"]),
-                float(record["weight"]),
-                float(record["pdf"]),
+                record.time_sec,
+                record.sample,
+                channel,
+                channel_name,
+                record.condition,
+                record.weight,
+                record.pdf,
             ]
         )
     return rows
 
 
-def detector_output_from_records(records: list[dict[str, object]]) -> DetectorOutput:
+def detector_output_from_records(records: list[EventRecord]) -> DetectorOutput:
     return DetectorOutput(
-        pos=np.asarray([record["time_sec"] for record in records], dtype=float),
-        dur=np.asarray([record["dur"] for record in records], dtype=float),
-        chan=np.asarray([record["channel"] for record in records], dtype=int),
-        con=np.asarray([record["condition"] for record in records], dtype=float),
-        weight=np.asarray([record["weight"] for record in records], dtype=float),
-        pdf=np.asarray([record["pdf"] for record in records], dtype=float),
+        pos=np.asarray([record.time_sec for record in records], dtype=float),
+        dur=np.asarray([record.dur for record in records], dtype=float),
+        chan=np.asarray([record.channel for record in records], dtype=int),
+        con=np.asarray([record.condition for record in records], dtype=float),
+        weight=np.asarray([record.weight for record in records], dtype=float),
+        pdf=np.asarray([record.pdf for record in records], dtype=float),
     )
 
 
-def make_step2_rows(out_pp: list[np.ndarray], channel_names: list[str]) -> list[list[object]]:
+def make_step2_rows(out_pp: list[np.ndarray], channel_names: list[str]) -> Rows:
     rows = []
     for channel_index, detections in enumerate(out_pp, start=1):
         rows.append(
@@ -235,7 +276,7 @@ def make_step2_rows(out_pp: list[np.ndarray], channel_names: list[str]) -> list[
     return rows
 
 
-def make_qc_rows(qc: dict[str, object]) -> list[list[object]]:
+def make_qc_rows(qc: dict[str, object]) -> Rows:
     return [
         ["input_detections", qc["input_detections"]],
         ["common_mode_removals", qc["common_mode_removals"]],
@@ -255,9 +296,9 @@ def compute_boundaries(
     *,
     filter_context_seconds: float,
     max_rows: int | None,
-) -> list[list[object]]:
-    b_bp, a_bp = signal.butter(4, [10.0, 60.0], btype="bandpass", fs=fs)
-    rows: list[list[object]] = []
+) -> Rows:
+    b_bp, a_bp = _butter_ba(4, [10.0, 60.0], btype="bandpass", fs=fs)
+    rows: Rows = []
     row_id = 0
     n_samples = int(raw.n_times)
 
@@ -319,30 +360,30 @@ def compute_gamma_rows(
     raw,
     fs: float,
     channel_names: list[str],
-    boundary_rows: list[list[object]],
+    boundary_rows: Rows,
     *,
     filter_context_seconds: float,
-) -> list[list[object]]:
+) -> Rows:
     b_notch, a_notch = notch_filter_coefficients(fs)
-    b_gamma, a_gamma = signal.butter(4, [30.0, 100.0], btype="bandpass", fs=fs)
+    b_gamma, a_gamma = _butter_ba(4, [30.0, 100.0], btype="bandpass", fs=fs)
     n_samples = int(raw.n_times)
     rows = []
 
     for row in boundary_rows:
-        row_id = int(row[0])
-        channel = int(row[1])
-        spike_index = int(row[3])
-        sample = float(row[4])
-        status = str(row[10])
+        row_id = _row_int(row, 0)
+        channel = _row_int(row, 1)
+        spike_index = _row_int(row, 3)
+        sample = _row_float(row, 4)
+        status = _row_str(row, 10)
         error = ""
         output = np.array([0.0, 0.0, 0.0])
 
         if status == "ok":
             try:
-                spike_onset = float(row[5])
-                n1_abs = spike_onset + float(row[8])
-                p1_abs = spike_onset + float(row[7])
-                n2_abs = spike_onset + float(row[9])
+                spike_onset = _row_float(row, 5)
+                n1_abs = spike_onset + _row_float(row, 8)
+                p1_abs = spike_onset + _row_float(row, 7)
+                n2_abs = spike_onset + _row_float(row, 9)
                 ref = n1_abs - fs
                 p1_gamma = p1_abs - ref
                 n2_gamma = n2_abs - ref
@@ -442,9 +483,22 @@ def notch_filter_coefficients(fs: float) -> tuple[np.ndarray, np.ndarray]:
     return b, a
 
 
-def matlab_round(value: np.ndarray | float) -> np.ndarray:
-    value = np.asarray(value, dtype=float)
-    return np.sign(value) * np.floor(np.abs(value) + 0.5)
+@overload
+def matlab_round(value: float) -> float:
+    ...
+
+
+@overload
+def matlab_round(value: np.ndarray) -> np.ndarray:
+    ...
+
+
+def matlab_round(value: np.ndarray | float) -> np.ndarray | float:
+    arr = np.asarray(value, dtype=float)
+    rounded = np.sign(arr) * np.floor(np.abs(arr) + 0.5)
+    if np.isscalar(value):
+        return float(rounded)
+    return rounded
 
 
 def matlab_colon(start: float, stop: float) -> np.ndarray:
@@ -454,7 +508,7 @@ def matlab_colon(start: float, stop: float) -> np.ndarray:
     return start + np.arange(count, dtype=float)
 
 
-def write_rows(path: Path, header: list[str], rows: list[list[object]]) -> None:
+def write_rows(path: Path, header: list[str], rows: Rows) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -503,6 +557,10 @@ def summary_header() -> list[str]:
 
 
 __all__ = [
+    "Rows",
+    "EventRecord",
+    "SegmentedPipelineResult",
+    "SummaryRow",
     "run_segmented_recording",
     "write_rows",
     "step1_header",

@@ -8,14 +8,29 @@ frequency limits 30-100 Hz and 40 voices per octave.
 
 from __future__ import annotations
 
+from typing import Any, TypedDict
+
 import numpy as np
 
-try:
-    from .build_gamma_masks import build_gamma_masks
-    from .select_max_gamma_candidate import select_max_gamma_candidate
-except ImportError:  # Allows direct script-style use from this folder.
-    from build_gamma_masks import build_gamma_masks
-    from select_max_gamma_candidate import select_max_gamma_candidate
+from .build_gamma_masks import build_gamma_masks
+from .select_max_gamma_candidate import select_max_gamma_candidate
+
+
+class GammaSegment(TypedDict):
+    frequency_index: int
+    frequency_hz: float
+    onset_sample: int
+    offset_sample: int
+    onset_rel_ms: float
+    offset_rel_ms: float
+    gamma_power: float
+    baseline_mean: float
+    baseline_sd: float
+    sd_from_baseline: float
+    duration_ms: float
+    ends_within_190ms: bool
+    passes_3cycles: bool
+    passes_gamma_rules: bool
 
 
 MATLAB_MORSE_NORM_PER_HZ_AT_2000HZ = 0.055219397200513345
@@ -137,8 +152,8 @@ def compute_gamma(
     gamma_2sd[:, ~masks["search_mask"]] = False
 
     dur_thresh = 3 * np.ceil((1.0 / tf_freqs) * fs)
-    segments: list[dict[str, object]] = []
-    candidates: list[dict[str, object]] = []
+    segments: list[GammaSegment] = []
+    candidates: list[GammaSegment] = []
 
     for i_freq in range(len(tf_freqs)):
         pass_row = np.r_[False, gamma_2sd[i_freq, :], False].astype(int)
@@ -160,7 +175,7 @@ def compute_gamma(
             ends_within_190ms = bool(p1 - event_offset <= 0.19 * fs)
             dur_thresh_pass = bool(length >= dur_thresh[i_freq])
             passes_gamma_rules = bool(ends_within_190ms and dur_thresh_pass)
-            row = {
+            row: GammaSegment = {
                 "frequency_index": i_freq + 1,
                 "frequency_hz": float(tf_freqs[i_freq]),
                 "onset_sample": event_onset,
@@ -210,7 +225,7 @@ def compute_gamma(
     return (output, details) if return_details else output
 
 
-def _initial_details(min_clean_baseline_ms: float) -> dict[str, object]:
+def _initial_details(min_clean_baseline_ms: float) -> dict[str, Any]:
     return {
         "evaluable": True,
         "exclusion_reason": "",

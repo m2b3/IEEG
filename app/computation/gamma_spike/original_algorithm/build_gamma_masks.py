@@ -1,6 +1,21 @@
 from __future__ import annotations
 
+from typing import TypedDict
+
 import numpy as np
+
+
+class GammaMasks(TypedDict):
+    invalid_mask: np.ndarray
+    baseline_mask: np.ndarray
+    search_mask: np.ndarray
+    pre_mask: np.ndarray
+    post_mask: np.ndarray
+    masked_samples: int
+    clean_baseline_samples: int
+    clean_baseline_duration_ms: float
+    min_clean_baseline_ms: float
+    evaluable: bool
 
 
 def build_gamma_masks(
@@ -10,7 +25,7 @@ def build_gamma_masks(
     n2: float,
     invalid_mask: np.ndarray | None = None,
     min_clean_baseline_ms: float = 250.0,
-) -> dict[str, object]:
+) -> GammaMasks:
     if invalid_mask is None:
         invalid = np.zeros(signal_length, dtype=bool)
     else:
@@ -51,4 +66,4 @@ def build_gamma_masks(
     }
 
 
-__all__ = ["build_gamma_masks"]
+__all__ = ["GammaMasks", "build_gamma_masks"]
