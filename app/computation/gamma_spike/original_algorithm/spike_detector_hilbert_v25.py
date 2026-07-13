@@ -10,6 +10,7 @@ stages instead of hiding them behind a cleaner API too early.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fractions import Fraction
 import math
 import shlex
 from typing import Optional, Tuple
@@ -657,8 +658,13 @@ def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 
 def _resample_columns(d: np.ndarray, fs_out: float, fs: float) -> np.ndarray:
-    up = int(round(fs_out))
-    down = int(round(fs))
+    if np.isclose(fs_out, round(fs_out), rtol=0.0, atol=1e-9) and np.isclose(fs, round(fs), rtol=0.0, atol=1e-9):
+        up = int(round(fs_out))
+        down = int(round(fs))
+    else:
+        ratio = Fraction(float(fs_out) / float(fs)).limit_denominator(1_000_000)
+        up = ratio.numerator
+        down = ratio.denominator
     gcd = math.gcd(up, down)
     up //= gcd
     down //= gcd

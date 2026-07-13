@@ -1,5 +1,9 @@
 """Gamma spike detector package."""
 
+from app.computation.gamma_spike.original_algorithm.segmented_pipeline import (
+    DEFAULT_SETTINGS,
+    run_segmented_recording,
+)
 from app.computation.gamma_spike.original_algorithm.compute_gamma import compute_gamma
 from app.computation.gamma_spike.original_algorithm.compute_spike_boundary import (
     compute_spike_boundary,
@@ -23,6 +27,7 @@ __all__ = [
     "DetectorOutput",
     "DetectorSettings",
     "Discharges",
+    "DEFAULT_SETTINGS",
     "GammaSpikeChannelResult",
     "GammaSpikeComputationResult",
     "GammaSpikeEventResult",
@@ -31,5 +36,6 @@ __all__ = [
     "compute_spike_boundary",
     "parse_settings",
     "postprocessing",
+    "run_segmented_recording",
     "spike_detector_hilbert_v25",
 ]

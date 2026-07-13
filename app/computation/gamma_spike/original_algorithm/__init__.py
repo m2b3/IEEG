@@ -1,25 +1,25 @@
-"""Original translated gamma spike algorithm components."""
+"""Validated Python2 spike-gamma pipeline with segmented long-file support."""
 
-from app.computation.gamma_spike.original_algorithm.compute_gamma import compute_gamma
-from app.computation.gamma_spike.original_algorithm.compute_spike_boundary import (
-    compute_spike_boundary,
-)
-from app.computation.gamma_spike.original_algorithm.postprocessing import postprocessing
-from app.computation.gamma_spike.original_algorithm.spike_detector_hilbert_v25 import (
-    DetectorOutput,
-    DetectorSettings,
-    Discharges,
-    parse_settings,
-    spike_detector_hilbert_v25,
+from .segmented_pipeline import (
+    DEFAULT_SETTINGS,
+    run_segmented_recording,
+    write_rows,
+    step1_header,
+    step2_header,
+    qc_header,
+    boundary_header,
+    gamma_header,
+    summary_header,
 )
 
 __all__ = [
-    "DetectorOutput",
-    "DetectorSettings",
-    "Discharges",
-    "compute_gamma",
-    "compute_spike_boundary",
-    "parse_settings",
-    "postprocessing",
-    "spike_detector_hilbert_v25",
+    "DEFAULT_SETTINGS",
+    "run_segmented_recording",
+    "write_rows",
+    "step1_header",
+    "step2_header",
+    "qc_header",
+    "boundary_header",
+    "gamma_header",
+    "summary_header",
 ]

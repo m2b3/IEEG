@@ -1,9 +1,8 @@
 """
-Python translation of Matlab_version/postprocessing.m.
+Python translation of matlab2/postprocessing.m.
 
-The function keeps the MATLAB behavior intentionally close because this module
-is part of the step-by-step validation path. It returns per-channel spike
-locations after the artifact/co-detection and burst-spacing cleanup.
+The matlab2 version keeps the historical burst-filtered ``out_ch`` output and
+adds a QC structure exposing common-mode and burst-removal masks.
 """
 
 from __future__ import annotations
@@ -13,104 +12,158 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from .spike_detector_hilbert_v25 import DetectorOutput
+try:
+    from .spike_detector_hilbert_v25 import DetectorOutput
+except ImportError:  # Allows direct script-style use from this folder.
+    from spike_detector_hilbert_v25 import DetectorOutput
 
 
 def postprocessing(
     out: DetectorOutput | Mapping[str, Sequence[float]],
     fs: float,
     num_chans: int,
-) -> list[np.ndarray]:
-    """
-    Post-process Janca detector detections.
-
-    Parameters
-    ----------
-    out:
-        Janca detector output with MATLAB-like fields: pos, dur, chan, con,
-        weight, pdf. ``pos`` is in seconds and ``chan`` is 1-based.
-    fs:
-        Sampling frequency in Hz.
-    num_chans:
-        Number of channels in the montage/data.
-
-    Returns
-    -------
-    list[np.ndarray]
-        One list entry per channel. Each array contains retained spike sample
-        positions for that channel, matching MATLAB's ``out_ch`` cells.
-    """
-
+    *,
+    return_qc: bool = False,
+):
     out_fields = _out_fields(out)
-    pos = out_fields[0]
-    chan = out_fields[2].astype(int)
-    threshold_sec = 0.300
+    positions_sec = np.asarray(out_fields[0], dtype=float).ravel()
+    channels = np.asarray(out_fields[2], dtype=float).ravel()
 
-    if pos.size > 1:
-        out_fields = _remove_codetections_matlab_style(out_fields, num_chans)
-        pos = out_fields[0]
-        chan = out_fields[2].astype(int)
-
-        burst_thresh = threshold_sec * fs
-        out_ch: list[np.ndarray] = []
-        for channel in range(1, num_chans + 1):
-            chan_ind = np.flatnonzero(chan == channel)
-            spike_pos = _matlab_round(pos[chan_ind] * fs).astype(float)
-
-            if spike_pos.size > 1:
-                inter_lr = np.diff(spike_pos)
-                inter_lr = np.r_[-(spike_pos[0] - spike_pos[1]), inter_lr]
-                too_close_lr = inter_lr < burst_thresh
-
-                inter_rl = -np.diff(spike_pos[::-1])
-                inter_rl = np.r_[-(spike_pos[-2] - spike_pos[-1]), inter_rl]
-                too_close_rl = (inter_rl < burst_thresh)[::-1]
-
-                spike_pos = spike_pos[~(too_close_lr | too_close_rl)]
-
-            out_ch.append(spike_pos)
-        return out_ch
-
+    coincidence_tolerance_sec = 0.010
+    burst_tolerance_sec = 0.300
     out_ch = [np.asarray([], dtype=float) for _ in range(num_chans)]
-    if chan.size:
-        channel_index = int(chan[0]) - 1
-        if 0 <= channel_index < num_chans:
-            # MATLAB's single-detection branch stores out.pos directly, not
-            # round(out.pos * fs). Preserve that behavior for parity.
-            out_ch[channel_index] = np.asarray([pos[0]], dtype=float)
-    return out_ch
+    context_by_channel = [np.asarray([], dtype=float) for _ in range(num_chans)]
+    removed_common_by_channel = [np.asarray([], dtype=float) for _ in range(num_chans)]
+    removed_burst_by_channel = [np.asarray([], dtype=float) for _ in range(num_chans)]
+
+    if positions_sec.size == 0:
+        qc = _make_qc(
+            np.asarray([], dtype=float),
+            np.asarray([], dtype=float),
+            np.zeros(0, dtype=bool),
+            np.zeros(0, dtype=bool),
+            np.zeros(0, dtype=bool),
+            out_ch,
+            context_by_channel,
+            removed_common_by_channel,
+            removed_burst_by_channel,
+            coincidence_tolerance_sec,
+            burst_tolerance_sec,
+        )
+        return (out_ch, qc) if return_qc else out_ch
+
+    if positions_sec.size != channels.size:
+        raise ValueError("out.pos and out.chan must have the same length")
+    if np.any((channels < 1) | (channels > num_chans) | (channels != np.round(channels))):
+        raise ValueError("detector channel indices must be integers in 1:num_chans")
+
+    samples = _matlab_round(positions_sec * fs).astype(float)
+    n_input = samples.size
+    order = np.argsort(positions_sec, kind="mergesort")
+    sorted_pos = positions_sec[order]
+    sorted_channels = channels[order]
+    common_sorted = np.zeros(n_input, dtype=bool)
+    channel_threshold = int(np.ceil(num_chans / 2))
+
+    cluster_start = 0
+    while cluster_start < n_input:
+        cluster_end = cluster_start
+        anchor = sorted_pos[cluster_start]
+        while cluster_end + 1 < n_input and sorted_pos[cluster_end + 1] - anchor <= coincidence_tolerance_sec:
+            cluster_end += 1
+        members = np.arange(cluster_start, cluster_end + 1)
+        if np.unique(sorted_channels[members]).size >= channel_threshold:
+            common_sorted[members] = True
+        cluster_start = cluster_end + 1
+
+    common_mode_mask = np.zeros(n_input, dtype=bool)
+    common_mode_mask[order] = common_sorted
+
+    burst_removal_mask = np.zeros(n_input, dtype=bool)
+    burst_tolerance_samples = burst_tolerance_sec * fs
+    for channel_index in range(1, num_chans + 1):
+        channel_event_indices = np.flatnonzero((channels == channel_index) & ~common_mode_mask)
+        local_order = np.argsort(samples[channel_event_indices], kind="mergesort")
+        sorted_indices = channel_event_indices[local_order]
+        sorted_samples = samples[sorted_indices]
+        if sorted_samples.size > 1:
+            close_pairs = np.diff(sorted_samples) < burst_tolerance_samples
+            local_burst = np.zeros(sorted_samples.shape, dtype=bool)
+            local_burst[:-1] |= close_pairs
+            local_burst[1:] |= close_pairs
+            burst_removal_mask[sorted_indices[local_burst]] = True
+
+    retained_mask = ~common_mode_mask & ~burst_removal_mask
+
+    for channel_index in range(1, num_chans + 1):
+        channel_mask = channels == channel_index
+        out_ch[channel_index - 1] = np.sort(samples[channel_mask & retained_mask])
+        context_by_channel[channel_index - 1] = np.sort(samples[channel_mask & ~common_mode_mask])
+        removed_common_by_channel[channel_index - 1] = np.sort(samples[channel_mask & common_mode_mask])
+        removed_burst_by_channel[channel_index - 1] = np.sort(samples[channel_mask & burst_removal_mask])
+
+    qc = _make_qc(
+        samples,
+        channels,
+        common_mode_mask,
+        burst_removal_mask,
+        retained_mask,
+        out_ch,
+        context_by_channel,
+        removed_common_by_channel,
+        removed_burst_by_channel,
+        coincidence_tolerance_sec,
+        burst_tolerance_sec,
+    )
+    return (out_ch, qc) if return_qc else out_ch
 
 
 def _out_fields(out: DetectorOutput | Mapping[str, Sequence[float]]) -> list[np.ndarray]:
     names = ["pos", "dur", "chan", "con", "weight", "pdf"]
     if is_dataclass(out):
         available = {field.name for field in fields(out)}
-        missing = [name for name in names if name not in available]
+        missing = [name for name in ["pos", "chan"] if name not in available]
         if missing:
             raise ValueError(f"missing output fields: {missing}")
-        return [np.asarray(getattr(out, name)).copy() for name in names]
+        return [np.asarray(getattr(out, name)).copy() if name in available else np.asarray([]) for name in names]
 
-    missing = [name for name in names if name not in out]
+    missing = [name for name in ["pos", "chan"] if name not in out]
     if missing:
         raise ValueError(f"missing output fields: {missing}")
-    return [np.asarray(out[name]).copy() for name in names]
+    return [np.asarray(out[name]).copy() if name in out else np.asarray([]) for name in names]
 
 
-def _remove_codetections_matlab_style(out_fields: list[np.ndarray], num_chans: int) -> list[np.ndarray]:
-    pos = out_fields[0]
-    unique_pos = np.unique(pos)
-    if unique_pos.size < 2:
-        return out_fields
-
-    counts, _ = np.histogram(pos, bins=unique_pos)
-    spike_bins_to_remove = np.flatnonzero(counts > np.ceil(num_chans / 2)) + 1
-    if spike_bins_to_remove.size == 0:
-        return out_fields
-
-    keep = np.ones(pos.shape, dtype=bool)
-    for spike_bin in spike_bins_to_remove:
-        keep &= pos != spike_bin
-    return [values[keep] for values in out_fields]
+def _make_qc(
+    samples: np.ndarray,
+    channels: np.ndarray,
+    common_mask: np.ndarray,
+    burst_mask: np.ndarray,
+    retained_mask: np.ndarray,
+    output_by_channel: list[np.ndarray],
+    context_by_channel: list[np.ndarray],
+    common_by_channel: list[np.ndarray],
+    burst_by_channel: list[np.ndarray],
+    coincidence_tolerance_sec: float,
+    burst_tolerance_sec: float,
+) -> dict[str, object]:
+    return {
+        "input_detections": int(samples.size),
+        "common_mode_removals": int(np.sum(common_mask)),
+        "burst_removals": int(np.sum(burst_mask)),
+        "non_common_mode_detections": int(np.sum(~common_mask)),
+        "output_detections": int(np.sum(retained_mask)),
+        "coincidence_tolerance_sec": coincidence_tolerance_sec,
+        "burst_tolerance_sec": burst_tolerance_sec,
+        "input_samples": samples,
+        "input_channels": channels,
+        "common_mode_mask": common_mask,
+        "burst_removal_mask": burst_mask,
+        "retained_mask": retained_mask,
+        "output_detections_by_channel": output_by_channel,
+        "context_detections_by_channel": context_by_channel,
+        "removed_common_mode_by_channel": common_by_channel,
+        "removed_burst_by_channel": burst_by_channel,
+    }
 
 
 def _matlab_round(values: np.ndarray) -> np.ndarray:
