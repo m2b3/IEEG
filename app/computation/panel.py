@@ -1222,17 +1222,28 @@ class ComputationPanel(QWidget):
         if self._ei_data_callback is None:
             raise RuntimeError("Gamma spike data extraction is not available.")
 
+        filter_context_s = 30.0
+        total_s = self._total_duration_s()
+        padded_start_s = max(0.0, float(start_s) - filter_context_s)
+        padded_stop_s = float(stop_s) + filter_context_s
+        if total_s is not None:
+            padded_stop_s = min(float(total_s), padded_stop_s)
+
+        # Gamma-spike filtering is context-sensitive. Extract hidden padding so
+        # the GUI path matches the reference segmented pipeline more closely;
+        # only spikes inside the requested analysis window are reported.
         data, fs, channel_names = self._ei_data_callback(
             list(self.state.selected_abs),
-            start_s,
-            stop_s,
+            padded_start_s,
+            padded_stop_s,
         )
         return compute_gamma_spike_for_gui(
             data=data,
             fs=float(fs),
             channel_names=list(channel_names),
-            data_start_s=float(start_s),
+            data_start_s=float(padded_start_s),
             analysis_window_s=(float(start_s), float(stop_s)),
+            filter_context_seconds=filter_context_s,
         )
 
     def _clear_gamma_outputs(self) -> None:
@@ -1267,6 +1278,7 @@ class ComputationPanel(QWidget):
         level_combo = QComboBox()
         level_combo.addItem("All spikes", userData="all")
         level_combo.addItem("Gamma only", userData="gamma")
+        level_combo.addItem("Non-gamma only", userData="non_gamma")
         controls_row.addWidget(level_combo)
         controls_row.addStretch(1)
         layout.addLayout(controls_row)
@@ -1310,6 +1322,12 @@ class ComputationPanel(QWidget):
                     for row in all_rows
                     if int(row["gamma_spikes"]) > 0
                 ]
+            if mode == "non_gamma":
+                return [
+                    row
+                    for row in all_rows
+                    if int(row["gamma_spikes"]) == 0
+                ]
             return list(all_rows)
 
         def populate(rows: list[dict[str, float | int | str]]) -> None:
@@ -1336,6 +1354,9 @@ class ComputationPanel(QWidget):
                         )
                     table.setItem(row_idx, col, item)
             table.setSortingEnabled(False)
+            self.eiSummaryOrderChanged.emit(
+                [str(row["channel"]) for row in rows]
+            )
 
         def sort_rows(rows: list[dict[str, float | int | str]]) -> list[dict[str, float | int | str]]:
             key_map = {
@@ -1417,6 +1438,7 @@ class ComputationPanel(QWidget):
                 )
             ]
             gamma_spikes = len(gamma_events)
+            non_gamma_spikes = max(0, total_spikes - gamma_spikes)
             rate = (
                 float(gamma_spikes) / float(total_spikes)
                 if total_spikes > 0
@@ -1448,6 +1470,7 @@ class ComputationPanel(QWidget):
                     "channel_sort": str(channel_result.channel).casefold(),
                     "total_spikes": int(total_spikes),
                     "gamma_spikes": int(gamma_spikes),
+                    "non_gamma_spikes": int(non_gamma_spikes),
                     "spike_gamma_rate": float(rate),
                     "spike_gamma_rate_text": f"{100.0 * rate:.1f}%",
                     "mean_gamma_power": mean_power,
