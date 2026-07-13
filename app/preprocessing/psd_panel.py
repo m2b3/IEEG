@@ -3,6 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 
+from app.preprocessing.filtering import (
+    FilterProfiles,
+    apply_settings_to_array,
+    is_filter_active,
+)
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -126,6 +131,7 @@ class PSDPanel(QWidget):
         self._picks = np.asarray([], dtype=int)
         self._display_names: list[str] = []
         self._bad_names: set[str] = set()
+        self._filter_profiles = FilterProfiles()
 
         self._start_s = 0.0
         self._stop_s = 0.0
@@ -261,11 +267,13 @@ class PSDPanel(QWidget):
         stop_s: float,
         macro_names=None,
         micro_names=None,
+        filter_profiles=None,
     ) -> None:
         self._raw = raw
         self._picks = np.asarray([] if picks is None else picks, dtype=int)
         self._display_names = list(display_names or [])
         self._bad_names = set(bad_names or [])
+        self._filter_profiles = filter_profiles or FilterProfiles()
         self._start_s = float(start_s)
         self._stop_s = float(stop_s)
 
@@ -474,6 +482,7 @@ class PSDPanel(QWidget):
             return
 
         data = self._raw.get_data(picks=self._picks, start=start_idx, stop=stop_idx)
+        data = self._apply_display_filters_to_psd_data(data, sfreq)
 
         for i, ch_name in enumerate(self._display_names):
             if i >= data.shape[0]:
@@ -485,6 +494,36 @@ class PSDPanel(QWidget):
 
             freqs, psd = self._compute_psd_welch(x, sfreq)
             self._psd_cache[ch_name] = (freqs, psd)
+
+    def _apply_display_filters_to_psd_data(self, data: np.ndarray, sfreq: float) -> np.ndarray:
+        arr = np.asarray(data, dtype=float)
+        if arr.ndim != 2 or arr.size == 0:
+            return arr
+
+        filtered = np.array(arr, dtype=float, copy=True)
+        name_to_row = {str(name): i for i, name in enumerate(self._display_names)}
+
+        for group, settings in (
+            ("macro", self._filter_profiles.macro),
+            ("micro", self._filter_profiles.micro),
+        ):
+            if not is_filter_active(settings):
+                continue
+
+            rows = [
+                name_to_row[ch_name]
+                for ch_name in self._group_channels.get(group, [])
+                if ch_name in name_to_row and name_to_row[ch_name] < filtered.shape[0]
+            ]
+            if not rows:
+                continue
+
+            idx = np.asarray(rows, dtype=int)
+            # PSD should reflect what the user is viewing. This improves display
+            # consistency only; it does not alter the underlying recording data.
+            filtered[idx, :] = apply_settings_to_array(filtered[idx, :], sfreq, settings)
+
+        return filtered
 
     def _compute_psd_welch(self, x: np.ndarray, sfreq: float) -> tuple[np.ndarray, np.ndarray]:
         n = x.size

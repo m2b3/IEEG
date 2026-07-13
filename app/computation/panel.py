@@ -1,4 +1,4 @@
-# app/computation_panel.py
+# app/computation/panel.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,7 +9,7 @@ import numpy as np
 import pyqtgraph as pg
 from mne.io import BaseRaw
 
-from PySide6.QtCore import Qt, Slot, Signal, QTimer, QRectF
+from PySide6.QtCore import Qt, Slot, Signal, QRectF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog,
@@ -18,14 +18,18 @@ from PySide6.QtWidgets import (
     QHeaderView, QTabWidget, QComboBox, QSpinBox, QSplitter,
 )
 
-from app.time_controls import TimeWindowControl
-from app.EI_algorithm import (
+from app.viewer.time_controls import TimeWindowControl
+from app.computation.rei.algorithm import (
     EIChannelResult,
     EIComputationResult,
     compute_ei_for_gui,
     validate_gui_ei_timing,
 )
-from app.performance_monitor import timed_mark
+from app.computation.gamma_spike.wire_algorithm import (
+    GammaSpikeComputationResult,
+    compute_gamma_spike_for_gui,
+)
+from app.diagnostics.performance_monitor import timed_mark
 
 
 @dataclass
@@ -34,13 +38,15 @@ class PanelState:
     t0: float
     win: float
     link_time: bool = True
-    algorithm: str = "mean"
+    algorithm: str = "ei"
     seizure_onset_s: float | None = None
     seizure_offset_s: float | None = None
     baseline_start_s: float = 0.0
     baseline_end_s: float = 0.0
     ictal_start_s: float = 0.0
     ictal_end_s: float = 0.0
+    gamma_start_s: float | None = None
+    gamma_end_s: float | None = None
 
 
 @dataclass
@@ -58,13 +64,14 @@ class ComputationPanel(QWidget):
     Dock content widget:
       - editable channel selection (absolute indices from displayed channel list)
       - time controls (linked/unlinked to main window time)
-      - plot of the mean signal across selected channels
+      - computation setup for REI and gamma spike detection
     """
 
     panelSelectionChanged = Signal(list)  # absolute channel indices
     settingsChanged = Signal()
     seizureMarkersChanged = Signal(object, object)  # onset_s, offset_s
     seizureMarkerEdited = Signal(str, object)  # "onset" | "offset", value_s
+    gammaAnalysisWindowChanged = Signal(object, object)  # start_s, end_s
     recruitmentMarkersChanged = Signal(dict)  # display channel name -> absolute time_s
     eiScoreLabelsChanged = Signal(dict)  # display channel name -> {score_norm, rank}
     eiSummaryChannelActivated = Signal(str)
@@ -85,6 +92,7 @@ class ComputationPanel(QWidget):
         self._bad_names: set[str] = set()
         self._current_montage_callback: Callable[[], str] | None = None
         self._switch_to_bipolar_callback: Callable[[], tuple[bool, str]] | None = None
+        self._ei_filter_callback: Callable[[], dict[str, str]] | None = None
         self._ei_data_callback: Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]] | None = None
         self.ei_result_metadata: dict | None = None
         self._last_ei_result: EIComputationResult | None = None
@@ -92,12 +100,11 @@ class ComputationPanel(QWidget):
         self._ei_heatmap_dialog: QDialog | None = None
         self._ei_summary_table: QTableWidget | None = None
         self._ei_summary_row_by_channel: dict[str, int] = {}
+        self._last_gamma_result: GammaSpikeComputationResult | None = None
+        self._gamma_summary_dialog: QDialog | None = None
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
-
-        # Keep in sync with the main viewer display scaling.
-        self._main_gain_uv: float = 100.0
-        self._correction_factor: float = 0.01
+        self._gamma_default_window_applied = False
         self.ei_params = {
             "expected_reference": "raw_or_bipolar",
             "exclude_bad_channels": True,
@@ -125,19 +132,19 @@ class ComputationPanel(QWidget):
         self.algo_buttons = QButtonGroup(self)
         self.algo_buttons.setExclusive(True)
 
-        self.btn_algo_mean = QPushButton("Mean")
-        self.btn_algo_mean.setCheckable(True)
-        self.btn_algo_mean.setChecked(True)
-        self.btn_algo_mean.setProperty("algorithm", "mean")
-
         self.btn_algo_ei = QPushButton("REI")
         self.btn_algo_ei.setCheckable(True)
+        self.btn_algo_ei.setChecked(True)
         self.btn_algo_ei.setProperty("algorithm", "ei")
 
-        self.algo_buttons.addButton(self.btn_algo_mean)
+        self.btn_algo_gamma = QPushButton("Gamma spikes")
+        self.btn_algo_gamma.setCheckable(True)
+        self.btn_algo_gamma.setProperty("algorithm", "gamma_spike")
+
         self.algo_buttons.addButton(self.btn_algo_ei)
-        algo_row.addWidget(self.btn_algo_mean)
+        self.algo_buttons.addButton(self.btn_algo_gamma)
         algo_row.addWidget(self.btn_algo_ei)
+        algo_row.addWidget(self.btn_algo_gamma)
         algo_row.addStretch(1)
         root.addLayout(algo_row)
 
@@ -183,41 +190,53 @@ class ComputationPanel(QWidget):
         self.gb_t.setChecked(True)
         t_layout = QVBoxLayout(self.gb_t)
 
-        self.mean_time_widget = QWidget()
-        mean_time_layout = QVBoxLayout(self.mean_time_widget)
-        mean_time_layout.setContentsMargins(0, 0, 0, 0)
-        mean_time_layout.setSpacing(8)
+        self.gamma_time_widget = QWidget()
+        gamma_time_layout = QVBoxLayout(self.gamma_time_widget)
+        gamma_time_layout.setContentsMargins(0, 0, 0, 0)
+        gamma_time_layout.setSpacing(8)
 
         self.chk_link_time = QCheckBox("Link to main time window")
         self.chk_link_time.setChecked(True)
-        mean_time_layout.addWidget(self.chk_link_time)
+        self.chk_link_time.hide()
+
+        gamma_form = QFormLayout()
+        self.edit_gamma_start = QLineEdit()
+        self.edit_gamma_start.setPlaceholderText("seconds")
+        self.edit_gamma_end = QLineEdit()
+        self.edit_gamma_end.setPlaceholderText("seconds")
+        gamma_form.addRow("Analysis start (s):", self.edit_gamma_start)
+        gamma_form.addRow("Analysis end (s):", self.edit_gamma_end)
+        gamma_time_layout.addLayout(gamma_form)
 
         info_row = QHBoxLayout()
         self.lbl_t = QLabel("t: [0.00, 5.00] s")
+        self.lbl_t.hide()
         info_row.addWidget(self.lbl_t, 1)
-        mean_time_layout.addLayout(info_row)
 
         spin_row = QHBoxLayout()
-        spin_row.addWidget(QLabel("Window length (s):"))
+        self.lbl_gamma_window_length = QLabel("Window length (s):")
+        self.lbl_gamma_window_length.hide()
+        spin_row.addWidget(self.lbl_gamma_window_length)
         self.spin_win = QDoubleSpinBox()
-        self.spin_win.setRange(1.0, 10.0)
+        self.spin_win.setRange(1.0, 1_000_000.0)
         self.spin_win.setSingleStep(0.5)
         self.spin_win.setValue(5.0)
+        self.spin_win.hide()
         spin_row.addWidget(self.spin_win)
-        mean_time_layout.addLayout(spin_row)
 
         self.time_ctl = TimeWindowControl(label_prefix="t0")
         self.time_ctl.set_enabled(False)
-        mean_time_layout.addWidget(self.time_ctl)
+        self.time_ctl.hide()
 
-        t_layout.addWidget(self.mean_time_widget)
+        self.gamma_time_widget.hide()
+        t_layout.addWidget(self.gamma_time_widget)
 
         self.ei_time_widget = QWidget()
         ei_time_layout = QVBoxLayout(self.ei_time_widget)
         ei_time_layout.setContentsMargins(0, 0, 0, 0)
         ei_time_layout.setSpacing(8)
 
-        info_box = QGroupBox("REI setup")
+        info_box = QGroupBox("Recruitment Energy Index (REI) setup")
         info_layout = QHBoxLayout(info_box)
         info_layout.addWidget(QLabel("Recommended montage: Bipolar"), 1)
         self.btn_ei_info = QPushButton("i")
@@ -284,8 +303,8 @@ class ComputationPanel(QWidget):
         preprocessing_form.addRow("Filter order:", QLabel("4"))
         preprocessing_form.addRow("Bandpass:", QLabel("70-140 Hz"))
         preprocessing_form.addRow("Zero phase:", QLabel("Yes"))
-        preprocessing_form.addRow("Notch filter:", QLabel("No"))
-        preprocessing_form.addRow("Line frequency:", QLabel("60 Hz"))
+        preprocessing_form.addRow("Notch filter:", QLabel("Uses active notch if enabled"))
+        preprocessing_form.addRow("Line frequency:", QLabel("50/60 Hz + harmonics"))
         advanced_layout.addWidget(preprocessing_box)
 
         params_box = QGroupBox("REI computation")
@@ -305,7 +324,7 @@ class ComputationPanel(QWidget):
         gb_p = QGroupBox("Output")
         p_layout = QVBoxLayout(gb_p)
 
-        self.btn_run = QPushButton("Run computation")
+        self.btn_run = QPushButton("Run REI")
         p_layout.addWidget(self.btn_run)
 
         self.btn_open_ei_summary = QPushButton("Open REI summary")
@@ -316,23 +335,12 @@ class ComputationPanel(QWidget):
         self.btn_open_ei_heatmap.setEnabled(False)
         p_layout.addWidget(self.btn_open_ei_heatmap)
 
-        self.chk_match_main = QCheckBox("Match main display scaling")
-        self.chk_match_main.setChecked(True)
-        p_layout.addWidget(self.chk_match_main)
+        self.btn_open_gamma_summary = QPushButton("Open gamma summary")
+        self.btn_open_gamma_summary.setEnabled(False)
+        self.btn_open_gamma_summary.hide()
+        p_layout.addWidget(self.btn_open_gamma_summary)
 
-        self.plot = pg.PlotWidget()
-        self.plot.setMinimumSize(220, 140)
-        self.plot.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self.plot.showGrid(x=True, y=True, alpha=0.15)
-        self.plot.setLabel("bottom", "Time (s)")
-        self.plot.setLabel("left", "Mean voltage (uV)")
-        self.curve = self.plot.plot([], [])
-        p_layout.addWidget(self.plot, 1)
-
-        root.addWidget(gb_p, 2)
+        root.addWidget(gb_p, 0)
 
 
         # --- Wiring ---
@@ -343,8 +351,9 @@ class ComputationPanel(QWidget):
         self.chk_link_time.toggled.connect(self._on_link_time_toggled)
         self.spin_win.valueChanged.connect(self._on_win_changed)
         self.time_ctl.t0Changed.connect(self._on_panel_t0_changed)
+        self.edit_gamma_start.textChanged.connect(self._on_gamma_window_text_changed)
+        self.edit_gamma_end.textChanged.connect(self._on_gamma_window_text_changed)
 
-        self.chk_match_main.toggled.connect(lambda _: self._request_update_plot())
         self.algo_buttons.buttonClicked.connect(self._on_algorithm_button_clicked)
         self.btn_advanced.clicked.connect(self._open_advanced_dialog)
         self.btn_default_windows.clicked.connect(self._apply_default_ei_windows_from_onset)
@@ -360,6 +369,7 @@ class ComputationPanel(QWidget):
         self.btn_run.clicked.connect(self._run_computation)
         self.btn_open_ei_summary.clicked.connect(self._open_ei_summary_dialog)
         self.btn_open_ei_heatmap.clicked.connect(self._open_ei_heatmap_dialog)
+        self.btn_open_gamma_summary.clicked.connect(self._open_gamma_summary_dialog)
 
         self.btn_sel_all.clicked.connect(self._select_all_channels)
         self.btn_sel_macro.clicked.connect(lambda: self._select_group_channels("macro"))
@@ -367,10 +377,7 @@ class ComputationPanel(QWidget):
         self.gb_ch.toggled.connect(self._sync_section_visibility)
         self.gb_t.toggled.connect(self._sync_section_visibility)
 
-        # --- Throttled updates ---
-        self._update_timer = QTimer(self)
-        self._update_timer.setSingleShot(True)
-        self._update_timer.timeout.connect(self._update_plot)
+        self._on_algorithm_button_clicked(self.btn_algo_ei)
 
     # ---------- Public API used by MainWindow ----------
 
@@ -406,8 +413,9 @@ class ComputationPanel(QWidget):
         self._update_group_button_titles()
         if self.state.algorithm == "ei":
             self._clear_ei_outputs()
-        else:
-            self._request_update_plot()
+        if self.state.algorithm == "gamma_spike":
+            self._set_gamma_window_to_full_recording(emit=True)
+            self._clear_gamma_outputs()
         
     def set_selected_channels_abs(self, selected_abs: list[int], *, replace: bool = True) -> None:
         cleaned = sorted(
@@ -429,19 +437,21 @@ class ComputationPanel(QWidget):
         self._update_channels_title()
         if self.state.algorithm == "ei":
             self._clear_ei_outputs()
-        else:
-            self._request_update_plot()
+        if self.state.algorithm == "gamma_spike":
+            self._clear_gamma_outputs()
         self.panelSelectionChanged.emit(self.state.selected_abs)
         self.settingsChanged.emit()
 
     def set_main_time(self, t0: float, main_win_s: float) -> None:
         del main_win_s  # kept for API compatibility
 
+        if self.state.algorithm == "gamma_spike":
+            return
         if not self.state.link_time:
             return
 
         self.state.t0 = float(t0)
-        self.state.win = float(np.clip(self.state.win, 1.0, 10.0))
+        self.state.win = max(1.0, float(self.state.win))
 
         self.spin_win.blockSignals(True)
         self.spin_win.setValue(self.state.win)
@@ -449,11 +459,12 @@ class ComputationPanel(QWidget):
 
         self._update_slider_range()
         self.time_ctl.set_t0(self.state.t0)
-        self._request_update_plot()
+        self._update_time_label()
+        if self.state.algorithm == "gamma_spike":
+            self._set_gamma_window_from_state(emit=True)
 
     def set_main_gain_uv(self, gain_uv: float) -> None:
-        self._main_gain_uv = float(gain_uv)
-        self._request_update_plot()
+        del gain_uv  # kept for API compatibility; no local mean preview is shown.
 
     def set_ei_montage_callbacks(
         self,
@@ -463,6 +474,12 @@ class ComputationPanel(QWidget):
     ) -> None:
         self._current_montage_callback = current_montage
         self._switch_to_bipolar_callback = switch_to_bipolar
+
+    def set_ei_filter_callback(
+        self,
+        callback: Callable[[], dict[str, str]],
+    ) -> None:
+        self._ei_filter_callback = callback
 
     def set_ei_data_callback(
         self,
@@ -475,11 +492,10 @@ class ComputationPanel(QWidget):
         return {
             "algorithm": self.state.algorithm,
             "selected_abs": list(self.state.selected_abs),
-            "mean": {
+            "time": {
                 "t0": float(self.state.t0),
                 "window_s": float(self.state.win),
                 "link_time": bool(self.state.link_time),
-                "match_main_scaling": bool(self.chk_match_main.isChecked()),
             },
             "ei": {
                 "seizure_onset_s": self._parse_float_text(self.edit_seizure_onset),
@@ -491,18 +507,25 @@ class ComputationPanel(QWidget):
                 "params": dict(self.ei_params),
                 "last_result_metadata": self.ei_result_metadata,
             },
+            "gamma_spike": {
+                "analysis_start_s": self._parse_float_text(self.edit_gamma_start),
+                "analysis_end_s": self._parse_float_text(self.edit_gamma_end),
+            },
         }
 
     def restore_project_state(self, data: dict | None) -> None:
         if not isinstance(data, dict):
             return
 
-        mean = data.get("mean", {})
-        if not isinstance(mean, dict):
-            mean = {}
+        time_settings = data.get("time", data.get("mean", {}))
+        if not isinstance(time_settings, dict):
+            time_settings = {}
         ei = data.get("ei", {})
         if not isinstance(ei, dict):
             ei = {}
+        gamma = data.get("gamma_spike", {})
+        if not isinstance(gamma, dict):
+            gamma = {}
         selected_abs = data.get("selected_abs", [])
         if isinstance(selected_abs, list):
             cleaned_abs = []
@@ -513,9 +536,12 @@ class ComputationPanel(QWidget):
                     continue
             self.set_selected_channels_abs(cleaned_abs, replace=True)
 
-        self.state.t0 = float(mean.get("t0", self.state.t0) or 0.0)
-        self.state.win = float(np.clip(float(mean.get("window_s", self.state.win) or self.state.win), 1.0, 10.0))
-        self.state.link_time = bool(mean.get("link_time", self.state.link_time))
+        self.state.t0 = float(time_settings.get("t0", self.state.t0) or 0.0)
+        self.state.win = max(
+            1.0,
+            float(time_settings.get("window_s", self.state.win) or self.state.win),
+        )
+        self.state.link_time = bool(time_settings.get("link_time", self.state.link_time))
 
         self.chk_link_time.blockSignals(True)
         self.chk_link_time.setChecked(self.state.link_time)
@@ -525,7 +551,6 @@ class ComputationPanel(QWidget):
         self.spin_win.blockSignals(True)
         self.spin_win.setValue(self.state.win)
         self.spin_win.blockSignals(False)
-        self.chk_match_main.setChecked(bool(mean.get("match_main_scaling", self.chk_match_main.isChecked())))
 
         def _set_line_edit_float(edit: QLineEdit, value) -> None:
             edit.blockSignals(True)
@@ -535,6 +560,21 @@ class ComputationPanel(QWidget):
         for edit, value in (
             (self.edit_seizure_onset, ei.get("seizure_onset_s")),
             (self.edit_seizure_offset, ei.get("seizure_offset_s")),
+        ):
+            try:
+                _set_line_edit_float(edit, value)
+            except (TypeError, ValueError):
+                _set_line_edit_float(edit, None)
+
+        for edit, value in (
+            (self.edit_gamma_start, gamma.get("analysis_start_s", 0.0)),
+            (
+                self.edit_gamma_end,
+                gamma.get(
+                    "analysis_end_s",
+                    self._total_duration_s(),
+                ),
+            ),
         ):
             try:
                 _set_line_edit_float(edit, value)
@@ -559,12 +599,24 @@ class ComputationPanel(QWidget):
             self.state.seizure_onset_s,
             self.state.seizure_offset_s,
         )
+        self.state.gamma_start_s = self._parse_float_text(self.edit_gamma_start)
+        self.state.gamma_end_s = self._parse_float_text(self.edit_gamma_end)
+        self.gammaAnalysisWindowChanged.emit(
+            self.state.gamma_start_s,
+            self.state.gamma_end_s,
+        )
         self._sync_ei_windows_from_ui(emit=False)
         saved_metadata = ei.get("last_result_metadata")
         self.ei_result_metadata = saved_metadata if isinstance(saved_metadata, dict) else None
 
-        algorithm = str(data.get("algorithm", self.state.algorithm) or "mean")
-        button = self.btn_algo_ei if algorithm == "ei" else self.btn_algo_mean
+        algorithm = str(data.get("algorithm", self.state.algorithm) or "ei")
+        if algorithm == "mean":
+            algorithm = "ei"
+        button_by_algorithm = {
+            "ei": self.btn_algo_ei,
+            "gamma_spike": self.btn_algo_gamma,
+        }
+        button = button_by_algorithm.get(algorithm, self.btn_algo_ei)
         button.setChecked(True)
         self._on_algorithm_button_clicked(button)
 
@@ -692,14 +744,15 @@ class ComputationPanel(QWidget):
 
     @Slot(float)
     def _on_win_changed(self, value: float) -> None:
-        self.state.win = float(np.clip(value, 1.0, 10.0))
+        self.state.win = max(1.0, float(value))
         self._update_time_label()
+        if self.state.algorithm == "gamma_spike":
+            self._set_gamma_window_from_state(emit=True)
 
         if self._raw is not None and self._raw.n_times > 1:
             total_s = float(self._raw.times[-1])
             self.time_ctl.set_range(total_s, self.state.win, self.state.t0)
 
-        self._request_update_plot()
         self.settingsChanged.emit()
 
     def _update_slider_range(self) -> None:
@@ -720,8 +773,66 @@ class ComputationPanel(QWidget):
         if self.state.link_time:
             return
         self.state.t0 = float(t0)
-        self._request_update_plot()
+        self._update_time_label()
+        if self.state.algorithm == "gamma_spike":
+            self._set_gamma_window_from_state(emit=True)
         self.settingsChanged.emit()
+
+    def _set_gamma_window_from_state(self, *, emit: bool = True) -> None:
+        start_s = float(self.state.t0)
+        end_s = float(self.state.t0) + float(self.state.win)
+        self._set_gamma_window_fields(start_s, end_s, emit=emit)
+
+    def _set_gamma_window_to_full_recording(self, *, emit: bool = True) -> None:
+        total_s = self._total_duration_s()
+        if total_s is None:
+            self._set_gamma_window_fields(0.0, max(1.0, float(self.state.win)), emit=emit)
+            return
+        self.state.t0 = 0.0
+        self.state.win = max(1.0, float(total_s))
+        self.spin_win.blockSignals(True)
+        self.spin_win.setValue(self.state.win)
+        self.spin_win.blockSignals(False)
+        self._set_gamma_window_fields(0.0, float(total_s), emit=emit)
+
+    def _set_gamma_window_fields(self, start_s: float, end_s: float, *, emit: bool = True) -> None:
+        self.edit_gamma_start.blockSignals(True)
+        self.edit_gamma_start.setText(f"{start_s:g}")
+        self.edit_gamma_start.blockSignals(False)
+        self.edit_gamma_end.blockSignals(True)
+        self.edit_gamma_end.setText(f"{end_s:g}")
+        self.edit_gamma_end.blockSignals(False)
+        self.state.gamma_start_s = start_s
+        self.state.gamma_end_s = end_s
+        if emit:
+            self.gammaAnalysisWindowChanged.emit(start_s, end_s)
+
+    def _on_gamma_window_text_changed(self, _text: str) -> None:
+        self.state.gamma_start_s = self._parse_float_text(self.edit_gamma_start)
+        self.state.gamma_end_s = self._parse_float_text(self.edit_gamma_end)
+        self._clear_gamma_outputs()
+        self.gammaAnalysisWindowChanged.emit(
+            self.state.gamma_start_s,
+            self.state.gamma_end_s,
+        )
+        self.settingsChanged.emit()
+
+    def _read_gamma_window_from_ui(self) -> tuple[float, float]:
+        start_s = self._parse_float_text(self.edit_gamma_start)
+        end_s = self._parse_float_text(self.edit_gamma_end)
+        if start_s is None:
+            raise ValueError("Enter a valid gamma analysis start time in seconds.")
+        if end_s is None:
+            raise ValueError("Enter a valid gamma analysis end time in seconds.")
+        if end_s <= start_s:
+            raise ValueError("Gamma analysis end must be after analysis start.")
+        total_s = self._total_duration_s()
+        if total_s is not None:
+            if start_s < 0.0 or end_s > total_s:
+                raise ValueError("Gamma analysis window must stay inside the recording.")
+        self.state.gamma_start_s = float(start_s)
+        self.state.gamma_end_s = float(end_s)
+        return float(start_s), float(end_s)
 
     # ---------- Internals : EI controls ----------
 
@@ -740,25 +851,40 @@ class ComputationPanel(QWidget):
         if button is None:
             return
 
-        algorithm = str(button.property("algorithm") or "mean")
+        algorithm = str(button.property("algorithm") or "ei")
         self.state.algorithm = algorithm
         is_ei = algorithm == "ei"
+        is_gamma = algorithm == "gamma_spike"
 
-        self.mean_time_widget.setVisible(self.gb_t.isChecked() and not is_ei)
+        self.gamma_time_widget.setVisible(self.gb_t.isChecked() and is_gamma)
         self.ei_time_widget.setVisible(self.gb_t.isChecked() and is_ei)
-        self.plot.setVisible(not is_ei)
-        self.chk_match_main.setVisible(not is_ei)
 
         self.btn_open_ei_summary.setVisible(is_ei)
         self.btn_open_ei_heatmap.setVisible(is_ei)
-
-        self.btn_run.setText("Run REI" if is_ei else "Run computation")
+        self.btn_open_gamma_summary.setVisible(is_gamma)
 
         if is_ei:
-            self.curve.setData([], [])
-            self._clear_ei_outputs()
+            self.btn_run.setText("Run REI")
+        elif is_gamma:
+            self.btn_run.setText("Run Gamma Spike Detector")
+            if (
+                not self._gamma_default_window_applied
+                or self._parse_float_text(self.edit_gamma_start) is None
+                or self._parse_float_text(self.edit_gamma_end) is None
+            ):
+                self._set_gamma_window_to_full_recording(emit=True)
+                self._gamma_default_window_applied = True
+            else:
+                self._on_gamma_window_text_changed("")
         else:
-            self._request_update_plot()
+            self.btn_run.setText("Run")
+
+        if is_ei:
+            self._clear_ei_outputs()
+        if is_gamma:
+            self._clear_gamma_outputs()
+        if not is_gamma:
+            self.gammaAnalysisWindowChanged.emit(None, None)
         self.settingsChanged.emit()
 
     def _open_advanced_dialog(self) -> None:
@@ -794,7 +920,8 @@ class ComputationPanel(QWidget):
 
         time_visible = self.gb_t.isChecked()
         is_ei = self.state.algorithm == "ei"
-        self.mean_time_widget.setVisible(time_visible and not is_ei)
+        is_gamma = self.state.algorithm == "gamma_spike"
+        self.gamma_time_widget.setVisible(time_visible and is_gamma)
         self.ei_time_widget.setVisible(time_visible and is_ei)
 
     def _on_ei_onset_text_changed(self, _text: str) -> None:
@@ -950,7 +1077,76 @@ class ComputationPanel(QWidget):
             )
             return
 
-        self._request_update_plot(delay_ms=0)
+        if self.state.algorithm == "gamma_spike":
+            if self._raw is None or self._picks is None:
+                QMessageBox.warning(
+                    self,
+                    "Gamma spike detector",
+                    "Load a dataset before running the gamma spike detector.",
+                )
+                return
+            if not self.state.selected_abs:
+                QMessageBox.warning(
+                    self,
+                    "Gamma spike detector",
+                    "Select at least one channel before running the gamma spike detector.",
+                )
+                return
+
+            if self._ei_data_callback is None:
+                QMessageBox.warning(
+                    self,
+                    "Gamma spike detector",
+                    "Gamma spike data extraction is not available.",
+                )
+                return
+
+            try:
+                start_s, stop_s = self._read_gamma_window_from_ui()
+            except ValueError as exc:
+                QMessageBox.warning(
+                    self,
+                    "Gamma spike detector",
+                    str(exc),
+                )
+                return
+
+            perf_start = time.perf_counter()
+            try:
+                result = self._compute_gamma_spike_result(start_s, stop_s)
+            except Exception as exc:
+                timed_mark(
+                    "after_gamma_spike_detector",
+                    perf_start,
+                    raw=self._raw,
+                    visible_window_s=max(0.0, stop_s - start_s),
+                    notes=f"error: {exc}",
+                )
+                QMessageBox.warning(self, "Gamma spike detector", str(exc))
+                return
+
+            self._show_gamma_result(result)
+            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+            timed_mark(
+                "after_gamma_spike_detector",
+                perf_start,
+                raw=self._raw,
+                visible_window_s=max(0.0, stop_s - start_s),
+                notes=(
+                    f"channels={len(result.channels)}; "
+                    f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
+                    f"spikes={metadata.get('total_spikes', 0)}; "
+                    f"gamma={metadata.get('gamma_success_count', 0)}"
+                ),
+            )
+            self._open_gamma_summary_dialog()
+            return
+
+        QMessageBox.warning(
+            self,
+            "Computation",
+            "Select REI or the gamma spike detector before running a computation.",
+        )
 
     def _compute_ei_result(self) -> EIComputationResult:
         if self._ei_data_callback is None:
@@ -978,6 +1174,7 @@ class ComputationPanel(QWidget):
             for name in self._bad_channel_names()
             if str(name) in set(map(str, channel_names))
         }
+        notch_modes_by_channel = self._ei_notch_modes_for_channels(channel_names)
 
         return compute_ei_for_gui(
             data=data,
@@ -990,14 +1187,282 @@ class ComputationPanel(QWidget):
             ictal_window_s=(ictal_start, ictal_end),
             channel_groups=self._channel_groups,
             bad_channels=bad_channels,
+            notch_modes_by_channel=notch_modes_by_channel,
             metadata=self._build_ei_metadata(
                 self._current_montage_name(),
                 seizure_onset_s=seizure_onset,
                 seizure_offset_s=seizure_offset,
                 baseline_window_s=(baseline_start, baseline_end),
                 ictal_window_s=(ictal_start, ictal_end),
+                notch_modes_by_channel=notch_modes_by_channel,
             ),
         )
+
+    def _ei_notch_modes_for_channels(self, channel_names: list[str]) -> dict[str, str]:
+        if self._ei_filter_callback is None:
+            return {}
+        try:
+            modes_by_group = self._ei_filter_callback() or {}
+        except Exception:
+            return {}
+
+        modes: dict[str, str] = {}
+        for name in channel_names:
+            channel_name = str(name)
+            group = str(self._channel_groups.get(channel_name, "macro")).lower()
+            mode = str(modes_by_group.get(group, modes_by_group.get("macro", "Off")))
+            modes[channel_name] = mode
+        return modes
+
+    def _compute_gamma_spike_result(
+        self,
+        start_s: float,
+        stop_s: float,
+    ) -> GammaSpikeComputationResult:
+        if self._ei_data_callback is None:
+            raise RuntimeError("Gamma spike data extraction is not available.")
+
+        data, fs, channel_names = self._ei_data_callback(
+            list(self.state.selected_abs),
+            start_s,
+            stop_s,
+        )
+        return compute_gamma_spike_for_gui(
+            data=data,
+            fs=float(fs),
+            channel_names=list(channel_names),
+            data_start_s=float(start_s),
+            analysis_window_s=(float(start_s), float(stop_s)),
+        )
+
+    def _clear_gamma_outputs(self) -> None:
+        self._last_gamma_result = None
+        self._gamma_summary_dialog = None
+        if hasattr(self, "btn_open_gamma_summary"):
+            self.btn_open_gamma_summary.setEnabled(False)
+
+    def _show_gamma_result(self, result: GammaSpikeComputationResult) -> None:
+        self._last_gamma_result = result
+        self._gamma_summary_dialog = None
+        self.btn_open_gamma_summary.setEnabled(True)
+
+    def _open_gamma_summary_dialog(self) -> None:
+        result = self._last_gamma_result
+        if result is None:
+            QMessageBox.information(
+                self,
+                "Gamma summary",
+                "Run the gamma spike detector first.",
+            )
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Gamma spike channel summary")
+        dialog.resize(840, 420)
+
+        layout = QVBoxLayout(dialog)
+
+        controls_row = QHBoxLayout()
+        controls_row.addWidget(QLabel("Spike level:"))
+        level_combo = QComboBox()
+        level_combo.addItem("All spikes", userData="all")
+        level_combo.addItem("Gamma only", userData="gamma")
+        controls_row.addWidget(level_combo)
+        controls_row.addStretch(1)
+        layout.addLayout(controls_row)
+
+        table = QTableWidget(0, 6)
+        table.setHorizontalHeaderLabels(
+            [
+                "Channel",
+                "Total spikes",
+                "Gamma-spikes",
+                "Spike-gamma rate",
+                "Mean gamma power",
+                "Mean gamma duration",
+            ]
+        )
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.setSortingEnabled(False)
+
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, 6):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSortIndicatorShown(True)
+        layout.addWidget(table)
+
+        all_rows = self._gamma_summary_rows(result)
+
+        sort_state = {
+            "column": 2,
+            "order": Qt.SortOrder.DescendingOrder,
+        }
+
+        def filtered_rows() -> list[dict[str, float | int | str]]:
+            mode = str(level_combo.currentData() or "all")
+            if mode == "gamma":
+                return [
+                    row
+                    for row in all_rows
+                    if int(row["gamma_spikes"]) > 0
+                ]
+            return list(all_rows)
+
+        def populate(rows: list[dict[str, float | int | str]]) -> None:
+            table.setSortingEnabled(False)
+            table.setRowCount(0)
+            for row_data in rows:
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+
+                values = [
+                    str(row_data["channel"]),
+                    str(int(row_data["total_spikes"])),
+                    str(int(row_data["gamma_spikes"])),
+                    str(row_data["spike_gamma_rate_text"]),
+                    str(row_data["mean_gamma_power_text"]),
+                    str(row_data["mean_gamma_duration_text"]),
+                ]
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if col > 0:
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    table.setItem(row_idx, col, item)
+            table.setSortingEnabled(False)
+
+        def sort_rows(rows: list[dict[str, float | int | str]]) -> list[dict[str, float | int | str]]:
+            key_map = {
+                0: "channel_sort",
+                1: "total_spikes",
+                2: "gamma_spikes",
+                3: "spike_gamma_rate",
+                4: "mean_gamma_power",
+                5: "mean_gamma_duration",
+            }
+            key_name = key_map.get(int(sort_state["column"]), "gamma_spikes")
+            reverse = sort_state["order"] == Qt.SortOrder.DescendingOrder
+            return sorted(rows, key=lambda row: row[key_name], reverse=reverse)
+
+        def refresh_table() -> None:
+            rows = sort_rows(filtered_rows())
+            populate(rows)
+            header.setSortIndicator(
+                int(sort_state["column"]),
+                sort_state["order"],
+            )
+
+        def sort_summary_table(column: int) -> None:
+            if sort_state["column"] == column:
+                sort_state["order"] = (
+                    Qt.SortOrder.DescendingOrder
+                    if sort_state["order"] == Qt.SortOrder.AscendingOrder
+                    else Qt.SortOrder.AscendingOrder
+                )
+            else:
+                sort_state["column"] = int(column)
+                sort_state["order"] = (
+                    Qt.SortOrder.AscendingOrder
+                    if column == 0
+                    else Qt.SortOrder.DescendingOrder
+                )
+            refresh_table()
+
+        header.sectionClicked.connect(sort_summary_table)
+        level_combo.currentIndexChanged.connect(lambda _index: refresh_table())
+        refresh_table()
+
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        footer = QLabel(
+            "Total spikes: "
+            f"{metadata.get('total_spikes', 0)}   "
+            "Gamma features: "
+            f"{metadata.get('gamma_success_count', 0)}"
+        )
+        layout.addWidget(footer)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+        self._gamma_summary_dialog = dialog
+
+    def _gamma_summary_rows(
+        self,
+        result: GammaSpikeComputationResult,
+    ) -> list[dict[str, float | int | str]]:
+        rows: list[dict[str, float | int | str]] = []
+        for channel_result in result.channels:
+            total_spikes = int(channel_result.spike_count)
+            gamma_events = [
+                event
+                for event in channel_result.events
+                if (
+                    event.gamma_power is not None
+                    and event.gamma_duration_ms is not None
+                    and (
+                        float(event.gamma_power) > 0.0
+                        or float(event.gamma_duration_ms) > 0.0
+                    )
+                )
+            ]
+            gamma_spikes = len(gamma_events)
+            rate = (
+                float(gamma_spikes) / float(total_spikes)
+                if total_spikes > 0
+                else 0.0
+            )
+            powers = np.asarray(
+                [float(event.gamma_power) for event in gamma_events],
+                dtype=float,
+            )
+            durations = np.asarray(
+                [float(event.gamma_duration_ms) for event in gamma_events],
+                dtype=float,
+            )
+            finite_powers = powers[np.isfinite(powers)]
+            finite_durations = durations[np.isfinite(durations)]
+            mean_power = (
+                float(np.mean(finite_powers))
+                if finite_powers.size
+                else float("-inf")
+            )
+            mean_duration = (
+                float(np.mean(finite_durations))
+                if finite_durations.size
+                else float("-inf")
+            )
+            rows.append(
+                {
+                    "channel": str(channel_result.channel),
+                    "channel_sort": str(channel_result.channel).casefold(),
+                    "total_spikes": int(total_spikes),
+                    "gamma_spikes": int(gamma_spikes),
+                    "spike_gamma_rate": float(rate),
+                    "spike_gamma_rate_text": f"{100.0 * rate:.1f}%",
+                    "mean_gamma_power": mean_power,
+                    "mean_gamma_power_text": (
+                        f"{mean_power:.4g}" if np.isfinite(mean_power) else ""
+                    ),
+                    "mean_gamma_duration": mean_duration,
+                    "mean_gamma_duration_text": (
+                        f"{mean_duration:.1f} ms"
+                        if np.isfinite(mean_duration)
+                        else ""
+                    ),
+                }
+            )
+        return rows
 
     def _bad_channel_names(self) -> set[str]:
         return {
@@ -1076,7 +1541,15 @@ class ComputationPanel(QWidget):
         seizure_offset_s: float | None = None,
         baseline_window_s: tuple[float, float] | None = None,
         ictal_window_s: tuple[float, float] | None = None,
+        notch_modes_by_channel: dict[str, str] | None = None,
     ) -> dict:
+        active_notch_modes = sorted(
+            {
+                str(mode)
+                for mode in (notch_modes_by_channel or {}).values()
+                if str(mode) != "Off"
+            }
+        )
         return {
             "algorithm": "Recruitment Energy Index",
             "montage_used": montage_used,
@@ -1102,7 +1575,13 @@ class ComputationPanel(QWidget):
                 "high_hz": float(self.ei_params["high_freq"]),
                 "zero_phase": bool(self.ei_params["zero_phase"]),
             },
-            "notch_filter": False,
+            "notch_filter": bool(active_notch_modes),
+            "notch_modes": active_notch_modes,
+            "notch_modes_by_channel": {
+                str(channel): str(mode)
+                for channel, mode in (notch_modes_by_channel or {}).items()
+                if str(mode) != "Off"
+            },
             "threshold_sigma": float(self.ei_params["threshold_sigma"]),
             "energy_window_sec": float(self.ei_params["energy_window_sec"]),
             "hfer_window_sec": float(self.ei_params["hfer_window_sec"]),
@@ -1711,93 +2190,6 @@ class ComputationPanel(QWidget):
             selected_scores,
             not has_recruitment_metadata,
         )
-
-    # ---------- Internals : plotting ----------
-
-    def _get_time_slice(self) -> tuple[int, int] | None:
-        if self._raw is None:
-            return None
-
-        total_s = float(self._raw.times[-1]) if self._raw.n_times > 1 else 0.0
-        max_t0 = max(0.0, total_s - float(self.state.win))
-        self.state.t0 = float(np.clip(self.state.t0, 0.0, max_t0))
-
-        fs = float(self._raw.info["sfreq"])
-        start = int(self.state.t0 * fs)
-        end = int((self.state.t0 + self.state.win) * fs)
-
-        n_times = int(self._raw.n_times)
-        start = max(0, min(start, max(0, n_times - 1)))
-        end = max(start + 1, min(end, n_times))
-        return start, end
-
-    def _compute_mean_signal(self, start: int, end: int) -> tuple[np.ndarray, np.ndarray] | None:
-        if self._raw is None or self._picks is None or not self.state.selected_abs:
-            return None
-
-        raw_idx = self._picks[np.asarray(self.state.selected_abs, dtype=int)]
-        data_v = self._raw.get_data(picks=raw_idx, start=int(start), stop=int(end))
-        times = np.asarray(self._raw.times[int(start):int(end)], dtype=float)
-
-        data_v = np.asarray(data_v)
-
-        if data_v.size == 0 or times.size < 2:
-            return None
-
-        mean_v = np.mean(data_v, axis=0)
-        return mean_v, times
-
-    def _scale_for_display(self, y_v: np.ndarray) -> tuple[np.ndarray, str]:
-        if self.chk_match_main.isChecked():
-            y_uv = y_v * 1e6
-            gain_factor = 1.0 / max(1e-9, self._main_gain_uv * self._correction_factor)
-            return y_uv * gain_factor, "Amplitude (uV, main-scaled)"
-
-        return y_v, "Mean voltage (V)"
-
-    def _update_plot(self) -> None:
-        if self.state.algorithm == "ei":
-            return
-
-        self._update_time_label()
-
-        if self._raw is None or self._picks is None or not self.state.selected_abs:
-            self.curve.setData([], [])
-            return
-
-        time_slice = self._get_time_slice()
-        if time_slice is None:
-            self.curve.setData([], [])
-            return
-
-        start, end = time_slice
-        result = self._compute_mean_signal(start, end)
-        if result is None:
-            self.curve.setData([], [])
-            return
-
-        y_v, times = result
-        y, y_label = self._scale_for_display(y_v)
-        self.plot.setLabel("left", y_label)
-
-        max_pts = 2000
-        step = max(1, y.size // max_pts)
-        self.curve.setData(times[::step], y[::step])
-
-        t0 = float(self.state.t0)
-        t1 = t0 + float(self.state.win)
-
-        plot_item = self.plot.getPlotItem()
-        if plot_item is not None:
-            view_box = plot_item.getViewBox()
-            if view_box is not None:
-                view_box.setRange(xRange=(t0, t1))
-
-    def _request_update_plot(self, delay_ms: int = 40) -> None:
-        """Throttle plot updates by restarting a single-shot timer."""
-        if self._update_timer.isActive():
-            self._update_timer.stop()
-        self._update_timer.start(int(delay_ms))
 
     # ---------- Small UI helpers ----------
 

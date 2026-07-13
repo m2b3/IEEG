@@ -10,8 +10,8 @@ from scipy import signal
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt
 
-from app.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
-from app.range_slider import RangeSlider
+from app.viewer.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
+from app.viewer.range_slider import RangeSlider
 
 
 @dataclass(slots=True)

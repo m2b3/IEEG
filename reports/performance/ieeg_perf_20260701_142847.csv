@@ -1,2 +1,0 @@
-file_path,duration_h,n_channels,sfreq,step,elapsed_s,working_set_mb,private_mb,cpu_percent,smoothness_score,visible_window_s,filter_mode,reference_mode,notes
-,,,,logger_self_test,,,,,,,,,temporary logger import/write check

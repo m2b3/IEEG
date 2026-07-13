@@ -23,10 +23,10 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QIcon, QColor
 
 from app.menus import build_menubar
-from app.plot import MultiChannelViewer
+from app.viewer.plot import MultiChannelViewer
 from app.console_viewer import ConsoleWindow
-from app.computation_panel import ComputationPanel
-from app.time_controls import TimeWindowControl
+from app.computation.panel import ComputationPanel
+from app.viewer.time_controls import TimeWindowControl
 from app.annotations import (
     ANNOTATION_TYPES, ANNOTATION_STYLES, 
     ANNOTATION_SCOPES, SCOPE_SELECTED
@@ -44,8 +44,8 @@ from app.referencing import (
     bipolar_pair_display_name,
     refresh_bipolar_montage_pair_names,
 )
-from app.psd_panel import PSDIntervalDialog, PSDPanel
-from app.filtering import (
+from app.preprocessing.psd_panel import PSDIntervalDialog, PSDPanel
+from app.preprocessing.filtering import (
     FilterSettings,
     FilterProfiles,
     NOTCH_OFF,
@@ -53,10 +53,10 @@ from app.filtering import (
     NOTCH_60_HARM,
     validate_filter_settings,
 )
-from app.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICES, get_display_theme
-from app.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
+from app.viewer.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICES, get_display_theme
+from app.viewer.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 from app.expert_event_grid import ExpertEventGridDialog
-from app.performance_monitor import monitor, timed_mark
+from app.diagnostics.performance_monitor import monitor, timed_mark
 
 
 def _channel_label_sort_key(label: str) -> tuple:
@@ -327,6 +327,7 @@ class MainWindow(QMainWindow):
             current_montage=self._current_montage_for_ei,
             switch_to_bipolar=self._switch_to_bipolar_for_ei,
         )
+        self.comp_panel.set_ei_filter_callback(self._ei_notch_modes_by_group)
         self.comp_panel.set_ei_data_callback(self._get_ei_data_for_computation)
         self.comp_dock.setWidget(self.comp_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.comp_dock)
@@ -388,6 +389,7 @@ class MainWindow(QMainWindow):
         self.comp_panel.settingsChanged.connect(self._mark_project_dirty)
         self.comp_panel.seizureMarkersChanged.connect(self._on_ei_markers_changed)
         self.comp_panel.seizureMarkerEdited.connect(self._on_ei_marker_edited)
+        self.comp_panel.gammaAnalysisWindowChanged.connect(self._on_gamma_analysis_window_changed)
         self.comp_panel.recruitmentMarkersChanged.connect(self._on_ei_recruitment_markers_changed)
         self.comp_panel.eiScoreLabelsChanged.connect(self._on_ei_score_labels_changed)
         self.comp_panel.eiSummaryChannelActivated.connect(self._on_ei_summary_channel_activated)
@@ -1795,6 +1797,7 @@ class MainWindow(QMainWindow):
             stop_s=float(stop_s),
             macro_names=macro_names,
             micro_names=micro_names,
+            filter_profiles=self.filter_profiles,
         )
         
     def _refresh_active_signal_everywhere(self) -> None:
@@ -2017,6 +2020,11 @@ class MainWindow(QMainWindow):
         self.viewer.set_cursor_x(target)
         self.time_ctl.set_t0(self.viewer.time_start())
 
+    def _on_gamma_analysis_window_changed(self, start_s, end_s) -> None:
+        start = float(start_s) if isinstance(start_s, (int, float)) else None
+        end = float(end_s) if isinstance(end_s, (int, float)) else None
+        self.viewer.set_analysis_window_markers(start, end)
+
     def _on_ei_recruitment_markers_changed(self, markers: dict) -> None:
         self.viewer.set_recruitment_markers(markers if isinstance(markers, dict) else {})
 
@@ -2035,6 +2043,7 @@ class MainWindow(QMainWindow):
         if self.viewer is None:
             return
         self.viewer.set_seizure_markers(None, None)
+        self.viewer.set_analysis_window_markers(None, None)
         self.viewer.set_recruitment_markers({})
         self.viewer.set_ei_label_styles({})
         self.viewer.clear_display_order_override()
@@ -3328,6 +3337,7 @@ class MainWindow(QMainWindow):
             stop_s=float(stop_s),
             macro_names=macro_names,
             micro_names=micro_names,
+            filter_profiles=self.filter_profiles,
         )
 
         self._set_psd_tab_visible(True)
@@ -3778,6 +3788,12 @@ class MainWindow(QMainWindow):
         if scope_key == "micro":
             return self.filter_profiles.micro
         return self.filter_profiles.macro
+
+    def _ei_notch_modes_by_group(self) -> dict[str, str]:
+        return {
+            "macro": str(self.filter_profiles.macro.notch_mode),
+            "micro": str(self.filter_profiles.micro.notch_mode),
+        }
 
     def _filter_settings_from_ui(self) -> FilterSettings:
         hp = float(self.filter_hp.value())

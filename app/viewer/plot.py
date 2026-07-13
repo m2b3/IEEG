@@ -18,8 +18,8 @@ from app.annotations import (
     SCOPE_CLICKED, SCOPE_SELECTED, SCOPE_GLOBAL,
     ANNOTATION_TYPES,
 )
-from app.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
-from app.filtering import (
+from app.viewer.display_theme import DEFAULT_DISPLAY_THEME, DisplayTheme, get_display_theme
+from app.preprocessing.filtering import (
     FilterProfiles,
     FilterSettings,
     apply_settings_to_array,
@@ -28,7 +28,7 @@ from app.filtering import (
     profiles_signature,
 )
 from app.referencing import BipolarMontage, BipolarPair
-from app.performance_monitor import timed_mark
+from app.diagnostics.performance_monitor import timed_mark
 
 LABEL_PANEL_X_MAX = 116.0
 RANK_BADGE_X = 15.0
@@ -170,6 +170,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_offset_s: float | None = None
         self._seizure_marker_lines: list[pg.InfiniteLine] = []
         self._seizure_marker_labels: list[pg.TextItem] = []
+        self._analysis_window_start_s: float | None = None
+        self._analysis_window_end_s: float | None = None
+        self._analysis_window_marker_items: list[Any] = []
         self._recruitment_marker_times: dict[str, float] = {}
         self._recruitment_marker_items: list[Any] = []
         self._ei_label_styles: dict[str, dict[str, float | int]] = {}
@@ -312,6 +315,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_offset_s = None
         self._seizure_marker_lines = []
         self._seizure_marker_labels = []
+        self._analysis_window_start_s = None
+        self._analysis_window_end_s = None
+        self._analysis_window_marker_items = []
         self._recruitment_marker_times = {}
         self._recruitment_marker_items = []
         self._ei_label_styles = {}
@@ -393,6 +399,9 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_offset_s = None
         self._seizure_marker_lines = []
         self._seizure_marker_labels = []
+        self._analysis_window_start_s = None
+        self._analysis_window_end_s = None
+        self._analysis_window_marker_items = []
         self._recruitment_marker_times = {}
         self._recruitment_marker_items = []
         self._ei_label_styles = {}
@@ -565,6 +574,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_ei_label_header()
         self._draw_time_lines(t_ds)
         self._draw_seizure_markers(t_ds)
+        self._draw_analysis_window_markers(t_ds)
         self._draw_recruitment_markers(t_ds, visible_abs)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
@@ -609,6 +619,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._cursor_line = None
         self._seizure_marker_lines = []
         self._seizure_marker_labels = []
+        self._analysis_window_marker_items = []
         self._recruitment_marker_items = []
         self._minmax_items = []
 
@@ -960,6 +971,64 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             label.setPos(label_x, label_y)
             self.signal_plot.addItem(label)
             self._seizure_marker_labels.append(label)
+
+    def set_analysis_window_markers(
+        self,
+        start_s: float | None = None,
+        end_s: float | None = None,
+    ) -> None:
+        self._analysis_window_start_s = float(start_s) if start_s is not None else None
+        self._analysis_window_end_s = float(end_s) if end_s is not None else None
+        if self._raw is not None:
+            self.render()
+
+    def _draw_analysis_window_markers(self, t_ds: np.ndarray) -> None:
+        t_arr = np.asarray(t_ds, dtype=float).reshape(-1)
+        if t_arr.size < 2:
+            return
+
+        t0 = float(t_arr[0])
+        t1 = float(t_arr[-1])
+        y_min, y_max = self._sig_vb.viewRange()[1]
+        top_trace_y = max(0.0, float(len(getattr(self, "_last_visible_abs", [])) - 1)) * float(self._spacing)
+        label_band = max(1e-9, float(y_max) - top_trace_y)
+        x_span = max(1e-9, float(t1) - float(t0))
+        label_y = float(y_max) - 0.34 * label_band
+
+        markers = (
+            (self._analysis_window_start_s, "Analysis start"),
+            (self._analysis_window_end_s, "Analysis end"),
+        )
+        for marker_s, label_text in markers:
+            if marker_s is None or not np.isfinite(float(marker_s)):
+                continue
+            if not (t0 <= float(marker_s) <= t1):
+                continue
+
+            marker_x = float(marker_s)
+            line = pg.InfiniteLine(pos=marker_x, angle=90, movable=False)
+            line.setZValue(19)
+            pen = pg.mkPen((92, 155, 255, 235), width=2.0, style=Qt.PenStyle.DotLine)
+            pen.setDashPattern([2, 4])
+            line.setPen(pen)
+            self.signal_plot.addItem(line)
+            self._analysis_window_marker_items.append(line)
+
+            label_x_offset = 0.008 * x_span
+            label_anchor = (0.0, 0.0)
+            label_x = marker_x + label_x_offset
+            if label_x > t1:
+                label_x = marker_x - label_x_offset
+                label_anchor = (1.0, 0.0)
+            label = pg.TextItem(
+                text=label_text,
+                color=(78, 132, 220, 255),
+                anchor=label_anchor,
+            )
+            label.setZValue(20)
+            label.setPos(label_x, label_y)
+            self.signal_plot.addItem(label)
+            self._analysis_window_marker_items.append(label)
 
     def set_recruitment_markers(self, markers: dict[str, float] | None) -> None:
         cleaned: dict[str, float] = {}

@@ -36,6 +36,13 @@ def compute_hfer(
 def bandpass_hf(data: Array, fs: float) -> Array: ...
 
 
+def apply_notch_by_channel(
+    data: np.ndarray,
+    fs: float,
+    notch_modes: list[str] | None,
+) -> Array: ...
+
+
 def compute_ei_from_windows(
     data: np.ndarray,
     fs: float,
@@ -66,5 +73,6 @@ def compute_ei_for_gui(
     ictal_window_s: tuple[float, float],
     channel_groups: dict[str, str] | None = None,
     bad_channels: set[str] | None = None,
+    notch_modes_by_channel: dict[str, str] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> EIComputationResult: ...

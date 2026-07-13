@@ -63,6 +63,9 @@ __all__ = [
 ]
 
 Array = NDArray[np.float64]
+NOTCH_OFF = "Off"
+NOTCH_50_HARM = "50 Hz + harmonics"
+NOTCH_60_HARM = "60 Hz + harmonics"
 
 
 @dataclass
@@ -229,6 +232,51 @@ def bandpass_hf(data: Array, fs: float) -> Array:
     return cast(Array, np.asarray(filtered, dtype=np.float64))
 
 
+def apply_notch_by_channel(
+    data: np.ndarray,
+    fs: float,
+    notch_modes: list[str] | None,
+) -> Array:
+    """
+    Apply the GUI notch choice per channel before REI's internal HFER bandpass.
+
+    REI still ignores display high/low filters. Only the explicit notch setting
+    is reused here so line-noise suppression is consistent when enabled.
+    """
+    arr = np.asarray(data, dtype=np.float64)
+    if arr.ndim != 2 or arr.size == 0 or not notch_modes:
+        return cast(Array, arr)
+
+    if len(notch_modes) != arr.shape[0]:
+        raise ValueError("notch mode count must match the number of REI channels")
+
+    filtered = arr.copy()
+    nyquist = 0.5 * float(fs)
+    for mode in sorted(set(map(str, notch_modes))):
+        if mode == NOTCH_50_HARM:
+            freqs = np.arange(50.0, nyquist, 50.0, dtype=float)
+        elif mode == NOTCH_60_HARM:
+            freqs = np.arange(60.0, nyquist, 60.0, dtype=float)
+        else:
+            continue
+
+        row_idx = np.asarray(
+            [idx for idx, row_mode in enumerate(notch_modes) if str(row_mode) == mode],
+            dtype=int,
+        )
+        if row_idx.size == 0:
+            continue
+
+        for freq in freqs:
+            if freq <= 0.0 or freq >= nyquist:
+                continue
+            b, a = signal.iirnotch(w0=float(freq), Q=30.0, fs=float(fs))
+            sos = signal.tf2sos(b, a)
+            filtered[row_idx, :] = signal.sosfiltfilt(sos, filtered[row_idx, :], axis=1)
+
+    return cast(Array, np.asarray(filtered, dtype=np.float64))
+
+
 def compute_ei_from_windows(data: np.ndarray, fs: float,
                             baseline_samples: tuple[int, int],
                             ictal_samples: tuple[int, int]) -> tuple[Array, Array, Array]:
@@ -294,6 +342,7 @@ def compute_ei_for_gui(
     ictal_window_s: tuple[float, float],
     channel_groups: dict[str, str] | None = None,
     bad_channels: set[str] | None = None,
+    notch_modes_by_channel: dict[str, str] | None = None,
     metadata: dict | None = None,
 ) -> EIComputationResult:
     """
@@ -354,6 +403,12 @@ def compute_ei_for_gui(
 
     kept_names = [str(channel_names[idx]) for idx in keep]
     kept_data = data[np.asarray(keep, dtype=int), :]
+    notch_modes_by_channel = notch_modes_by_channel or {}
+    kept_notch_modes = [
+        str(notch_modes_by_channel.get(name, NOTCH_OFF))
+        for name in kept_names
+    ]
+    kept_data = apply_notch_by_channel(kept_data, float(fs), kept_notch_modes)
 
     ei, channel_onset_samples, target_hfer = compute_ei_from_windows(
         data=kept_data,
@@ -382,6 +437,12 @@ def compute_ei_for_gui(
 
     heatmap_times = np.arange(target_hfer.shape[1], dtype=float) / float(fs)
     result_metadata = dict(metadata or {})
+    active_notch_modes = sorted({mode for mode in kept_notch_modes if mode != NOTCH_OFF})
+    active_notch_by_channel = {
+        name: mode
+        for name, mode in zip(kept_names, kept_notch_modes)
+        if mode != NOTCH_OFF
+    }
     result_metadata.update({
         "bad_channels_excluded": True,
         "excluded_bad_channels": sorted(bad_channels.intersection(set(channel_names))),
@@ -390,6 +451,9 @@ def compute_ei_for_gui(
         "fs": float(fs),
         "baseline_samples": [int(b0), int(b1)],
         "ictal_samples": [int(i0), int(i1)],
+        "notch_filter": bool(active_notch_modes),
+        "notch_modes": active_notch_modes,
+        "notch_modes_by_channel": active_notch_by_channel,
     })
     if "seizure_onset_s" not in result_metadata:
         result_metadata["seizure_onset_s"] = float(seizure_onset_s)
