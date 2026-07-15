@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog,
     QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup, QAbstractButton,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QComboBox, QSpinBox, QGridLayout, QScrollArea,
+    QHeaderView, QComboBox, QSpinBox, QGridLayout, QScrollArea, QGraphicsRectItem,
     QSplitter,
 )
 
@@ -34,6 +34,7 @@ from app.computation.gamma_spike.wire_algorithm import (
     compute_gamma_spike_for_gui,
 )
 from app.diagnostics.performance_monitor import timed_mark
+from app.ui_busy import busy_cursor
 
 
 @dataclass
@@ -1147,36 +1148,40 @@ class ComputationPanel(QWidget):
                 return
             if not self._confirm_ei_montage_before_run():
                 return
-            perf_start = time.perf_counter()
-            try:
-                result = self._compute_ei_result()
-            except Exception as exc:
-                timed_mark("after_REI", perf_start, raw=self._raw, notes=f"error: {exc}")
-                QMessageBox.warning(self, "REI computation", str(exc))
-                return
-            self._show_ei_result(result)
-            self.ei_result_metadata = result.metadata
-            metadata = result.metadata if isinstance(result.metadata, dict) else {}
-            baseline_window = metadata.get("baseline_window_s", "")
-            ictal_window = metadata.get("ictal_window_s", "")
-            channel_results = (
-                list(result.channels)
-                if result.channels is not None
-                else []
-            )
-            visible_window_s = None
-            if isinstance(ictal_window, list) and len(ictal_window) >= 2:
-                visible_window_s = float(ictal_window[1]) - float(ictal_window[0])
-            timed_mark(
-                "after_REI",
-                perf_start,
-                raw=self._raw,
-                visible_window_s=visible_window_s,
-                notes=(
-                    f"channels={len(channel_results)}; "
-                    f"baseline={baseline_window}; ictal={ictal_window}"
-                ),
-            )
+            error_message: str | None = None
+            with busy_cursor(self, "Running REI computation..."):
+                perf_start = time.perf_counter()
+                try:
+                    result = self._compute_ei_result()
+                except Exception as exc:
+                    timed_mark("after_REI", perf_start, raw=self._raw, notes=f"error: {exc}")
+                    error_message = str(exc)
+                else:
+                    self._show_ei_result(result)
+                    self.ei_result_metadata = result.metadata
+                    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+                    baseline_window = metadata.get("baseline_window_s", "")
+                    ictal_window = metadata.get("ictal_window_s", "")
+                    channel_results = (
+                        list(result.channels)
+                        if result.channels is not None
+                        else []
+                    )
+                    visible_window_s = None
+                    if isinstance(ictal_window, list) and len(ictal_window) >= 2:
+                        visible_window_s = float(ictal_window[1]) - float(ictal_window[0])
+                    timed_mark(
+                        "after_REI",
+                        perf_start,
+                        raw=self._raw,
+                        visible_window_s=visible_window_s,
+                        notes=(
+                            f"channels={len(channel_results)}; "
+                            f"baseline={baseline_window}; ictal={ictal_window}"
+                        ),
+                    )
+            if error_message is not None:
+                QMessageBox.warning(self, "REI computation", error_message)
             return
 
         if self.state.algorithm == "gamma_spike":
@@ -1213,36 +1218,39 @@ class ComputationPanel(QWidget):
                 )
                 return
 
-            perf_start = time.perf_counter()
-            try:
-                result = self._compute_gamma_spike_result(start_s, stop_s)
-            except Exception as exc:
-                timed_mark(
-                    "after_gamma_spike_detector",
-                    perf_start,
-                    raw=self._raw,
-                    visible_window_s=max(0.0, stop_s - start_s),
-                    notes=f"error: {exc}",
-                )
-                QMessageBox.warning(self, "Gamma spike detector", str(exc))
-                return
-
-            self._show_gamma_result(result)
-            metadata = result.metadata if isinstance(result.metadata, dict) else {}
-            timed_mark(
-                "after_gamma_spike_detector",
-                perf_start,
-                raw=self._raw,
-                visible_window_s=max(0.0, stop_s - start_s),
-                notes=(
-                    f"channels={len(result.channels)}; "
-                    f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
-                    f"spikes={metadata.get('total_spikes', 0)}; "
-                    f"gamma={metadata.get('gamma_success_count', 0)}"
-                ),
-            )
-            # Keep the computation flow quiet: users can open the summary table
-            # when needed, but it should not interrupt the main viewer.
+            error_message = None
+            with busy_cursor(self, "Running gamma spike detector..."):
+                perf_start = time.perf_counter()
+                try:
+                    result = self._compute_gamma_spike_result(start_s, stop_s)
+                except Exception as exc:
+                    timed_mark(
+                        "after_gamma_spike_detector",
+                        perf_start,
+                        raw=self._raw,
+                        visible_window_s=max(0.0, stop_s - start_s),
+                        notes=f"error: {exc}",
+                    )
+                    error_message = str(exc)
+                else:
+                    self._show_gamma_result(result)
+                    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+                    timed_mark(
+                        "after_gamma_spike_detector",
+                        perf_start,
+                        raw=self._raw,
+                        visible_window_s=max(0.0, stop_s - start_s),
+                        notes=(
+                            f"channels={len(result.channels)}; "
+                            f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
+                            f"spikes={metadata.get('total_spikes', 0)}; "
+                            f"gamma={metadata.get('gamma_success_count', 0)}"
+                        ),
+                    )
+                    # Keep the computation flow quiet: users can open the summary table
+                    # when needed, but it should not interrupt the main viewer.
+            if error_message is not None:
+                QMessageBox.warning(self, "Gamma spike detector", error_message)
             return
 
         QMessageBox.warning(
@@ -1565,11 +1573,13 @@ class ComputationPanel(QWidget):
             )
             return
 
-        grid_cols = 6
-        grid_rows = 4
-        grid_total = grid_cols * grid_rows
         regular_border = "#4091ff"
         gamma_border = "#ff9743"
+        grid_settings = {
+            "columns": 6,
+            "rows": 4,
+            "card_height": 150,
+        }
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Gamma spike grid")
@@ -1601,6 +1611,27 @@ class ComputationPanel(QWidget):
         min_power.setSingleStep(0.1)
         min_power.setValue(0.0)
         controls.addWidget(min_power)
+
+        controls.addSpacing(12)
+        controls.addWidget(QLabel("Columns:"))
+        grid_cols_spin = QSpinBox()
+        grid_cols_spin.setRange(2, 10)
+        grid_cols_spin.setValue(int(grid_settings["columns"]))
+        controls.addWidget(grid_cols_spin)
+
+        controls.addWidget(QLabel("Rows:"))
+        grid_rows_spin = QSpinBox()
+        grid_rows_spin.setRange(1, 8)
+        grid_rows_spin.setValue(int(grid_settings["rows"]))
+        controls.addWidget(grid_rows_spin)
+
+        controls.addWidget(QLabel("Card size:"))
+        card_size_spin = QSpinBox()
+        card_size_spin.setRange(110, 280)
+        card_size_spin.setSingleStep(10)
+        card_size_spin.setSuffix(" px")
+        card_size_spin.setValue(int(grid_settings["card_height"]))
+        controls.addWidget(card_size_spin)
 
         controls.addStretch(1)
         root.addWidget(controls_widget)
@@ -1680,7 +1711,23 @@ class ComputationPanel(QWidget):
         zoom_plot.setLabel("bottom", "Time", units="s")
         zoom_plot.setLabel("left", "Amplitude", units="uV")
         zoom_plot.showGrid(x=True, y=True, alpha=0.25)
-        zoom_layout.addWidget(zoom_plot, 1)
+
+        tf_plot = pg.PlotWidget()
+        tf_plot.setMinimumHeight(220)
+        tf_plot.setBackground("w")
+        tf_plot.setLabel("bottom", "Time", units="s")
+        tf_plot.setLabel("left", "Frequency", units="Hz")
+        tf_plot.showGrid(x=True, y=True, alpha=0.18)
+        tf_color_bar: Any | None = None
+
+        zoom_plot_splitter = QSplitter(Qt.Orientation.Vertical)
+        zoom_plot_splitter.setChildrenCollapsible(False)
+        zoom_plot_splitter.addWidget(zoom_plot)
+        zoom_plot_splitter.addWidget(tf_plot)
+        zoom_plot_splitter.setStretchFactor(0, 3)
+        zoom_plot_splitter.setStretchFactor(1, 2)
+        zoom_plot_splitter.setSizes([360, 240])
+        zoom_layout.addWidget(zoom_plot_splitter, 1)
 
         zoom_metrics = QTableWidget(1, 6)
         zoom_metrics.setHorizontalHeaderLabels(
@@ -1881,13 +1928,125 @@ class ComputationPanel(QWidget):
                 clipped_x1 = min(float(t_arr[-1]), x1)
                 if clipped_x1 <= clipped_x0:
                     return
-                gamma_y = marker_y0 + 0.08 * (marker_y1 - marker_y0)
-                gamma_segment = plot.plot(
-                    [clipped_x0, clipped_x1],
-                    [gamma_y, gamma_y],
-                    pen=pg.mkPen((255, 151, 67, 190), width=8),
+                gamma_region = QGraphicsRectItem(
+                    QRectF(
+                        clipped_x0,
+                        marker_y0,
+                        max(0.0, clipped_x1 - clipped_x0),
+                        max(0.0, marker_y1 - marker_y0),
+                    )
                 )
-                gamma_segment.setZValue(12)
+                gamma_region.setBrush(pg.mkBrush(255, 151, 67, 45))
+                gamma_region.setPen(pg.mkPen((255, 151, 67, 190), width=1.5, style=Qt.PenStyle.DashLine))
+                gamma_region.setZValue(10)
+                plot.addItem(gamma_region)
+                for x_edge in (clipped_x0, clipped_x1):
+                    edge_line = plot.plot(
+                        [x_edge, x_edge],
+                        [marker_y0, marker_y1],
+                        pen=pg.mkPen((255, 151, 67, 220), width=2, style=Qt.PenStyle.DashLine),
+                    )
+                    edge_line.setZValue(14)
+
+        def update_time_frequency(row: GammaReviewRow, times: np.ndarray | None, waveform: np.ndarray | None) -> None:
+            nonlocal tf_color_bar
+            tf_plot.clear()
+            tf_plot.setBackground("w")
+            try:
+                time_s = float(row["time_s"])
+            except (TypeError, ValueError):
+                time_s = 0.0
+
+            t_arr = None if times is None else np.asarray(times, dtype=float).reshape(-1)
+            y_arr = None if waveform is None else np.asarray(waveform, dtype=float).reshape(-1)
+            if t_arr is None or y_arr is None or t_arr.size < 16 or t_arr.size != y_arr.size:
+                tf_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
+                tf_plot.setYRange(20.0, 140.0, padding=0.02)
+                return
+
+            dt = float(np.median(np.diff(t_arr)))
+            if not np.isfinite(dt) or dt <= 0.0:
+                return
+            fs = 1.0 / dt
+            nperseg = int(min(max(32, round(0.128 * fs)), y_arr.size))
+            if nperseg < 16:
+                return
+            noverlap = int(min(nperseg - 1, max(0, round(0.85 * nperseg))))
+            try:
+                freqs, rel_times, power = signal.spectrogram(
+                    y_arr - float(np.nanmean(y_arr)),
+                    fs=fs,
+                    window="hann",
+                    nperseg=nperseg,
+                    noverlap=noverlap,
+                    detrend=False,
+                    scaling="spectrum",
+                    mode="magnitude",
+                )
+            except Exception:
+                return
+
+            freq_mask = (freqs >= 20.0) & (freqs <= min(160.0, 0.5 * fs))
+            if not np.any(freq_mask) or rel_times.size == 0:
+                return
+
+            freqs = np.asarray(freqs[freq_mask], dtype=float)
+            power = np.asarray(power[freq_mask, :], dtype=float)
+            log_power = np.log10(np.maximum(power, 1e-12))
+            finite_power = log_power[np.isfinite(log_power)]
+            if finite_power.size:
+                low_level = float(np.percentile(finite_power, 5.0))
+                high_level = float(np.percentile(finite_power, 98.0))
+                if high_level <= low_level:
+                    high_level = low_level + 1.0
+            else:
+                low_level, high_level = -12.0, -6.0
+
+            tf_image = pg.ImageItem(axisOrder="row-major")
+            tf_image.setImage(log_power, levels=(low_level, high_level), autoLevels=False)
+            color_map = cast(Any, pg.colormap.get("viridis"))
+            if color_map is not None:
+                tf_image.setLookupTable(np.asarray(color_map.getLookupTable(), dtype=np.float64))
+
+            x0 = float(t_arr[0] + rel_times[0])
+            if rel_times.size >= 2:
+                dt_spec = float(np.median(np.diff(rel_times)))
+                width = float((rel_times[-1] - rel_times[0]) + dt_spec)
+                x0 -= 0.5 * dt_spec
+            else:
+                width = max(dt, float(t_arr[-1] - t_arr[0]))
+                x0 -= 0.5 * width
+            if freqs.size >= 2:
+                df = float(np.median(np.diff(freqs)))
+                y0 = float(freqs[0]) - 0.5 * df
+                height = float((freqs[-1] - freqs[0]) + df)
+            else:
+                y0 = float(freqs[0]) - 1.0
+                height = 2.0
+
+            tf_image.setRect(QRectF(x0, y0, max(width, dt), max(height, 1.0)))
+            tf_plot.addItem(tf_image)
+            if tf_color_bar is None:
+                tf_color_bar = pg.ColorBarItem(
+                    values=(low_level, high_level),
+                    colorMap=color_map if color_map is not None else "viridis",
+                    label="log10 power",
+                    interactive=False,
+                )
+                tf_color_bar.setImageItem(tf_image, insert_in=tf_plot.getPlotItem())
+            else:
+                tf_color_bar.setImageItem(tf_image, insert_in=tf_plot.getPlotItem())
+                tf_color_bar.setLevels((low_level, high_level))
+            tf_plot.setXRange(float(t_arr[0]), float(t_arr[-1]), padding=0.02)
+            tf_plot.setYRange(max(20.0, y0), min(160.0, y0 + height), padding=0.02)
+
+            spike_line = pg.InfiniteLine(
+                pos=time_s,
+                angle=90,
+                pen=pg.mkPen((35, 35, 35), width=1.5, style=Qt.PenStyle.DashLine),
+            )
+            spike_line.setZValue(20)
+            tf_plot.addItem(spike_line)
 
         def update_zoom(row: GammaReviewRow) -> None:
             channel = str(row["channel"])
@@ -1900,10 +2059,10 @@ class ComputationPanel(QWidget):
             )
             event_type = "Gamma spike" if is_gamma_row(row) else "Non-gamma spike"
             event_color = gamma_border if is_gamma_row(row) else regular_border
-            zoom_event_info.setText(
-                f"{event_type} | Dashed line: detected spike | "
-                "Orange segment: estimated gamma activity window"
-            )
+            info_parts = [event_type, "Dashed line: detected spike"]
+            if is_gamma_row(row):
+                info_parts.append("Orange selection: estimated gamma activity window")
+            zoom_event_info.setText(" | ".join(info_parts))
             zoom_event_info.setStyleSheet(
                 f"color: #111111; background: #ffffff; border: 1px solid #d0d0d0; "
                 f"border-left: 5px solid {event_color}; border-radius: 4px; "
@@ -1931,6 +2090,7 @@ class ComputationPanel(QWidget):
             else:
                 zoom_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
             draw_analysis_markers(zoom_plot, row, times, plotted_waveform)
+            update_time_frequency(row, times, waveform)
 
             self.gammaSpikeEventActivated.emit(channel, time_s)
 
@@ -1953,7 +2113,7 @@ class ComputationPanel(QWidget):
                 return
             index = max(0, min(int(index), len(rows) - 1))
             state["index"] = index
-            state["current_page"] = index // grid_total
+            state["current_page"] = index // grid_page_size()
             state["is_zoomed"] = True
             controls_widget.setVisible(False)
             grid_panel.setVisible(False)
@@ -1984,8 +2144,11 @@ class ComputationPanel(QWidget):
             layout.addWidget(title)
 
             plot = pg.PlotWidget()
-            plot.setMinimumHeight(90)
-            plot.setMaximumHeight(130)
+            card_height = int(grid_settings["card_height"])
+            plot_height = max(70, card_height - 58)
+            card.setMinimumHeight(card_height)
+            plot.setMinimumHeight(plot_height)
+            plot.setMaximumHeight(plot_height + 30)
             plot.setMenuEnabled(False)
             plot.setBackground("w")
             plot.hideAxis("left")
@@ -2036,7 +2199,8 @@ class ComputationPanel(QWidget):
             return card
 
         def update_page_controls() -> None:
-            total_pages = max(1, (len(state["rows"]) + grid_total - 1) // grid_total)
+            page_size = grid_page_size()
+            total_pages = max(1, (len(state["rows"]) + page_size - 1) // page_size)
             state["current_page"] = max(
                 0,
                 min(int(state["current_page"]), total_pages - 1),
@@ -2049,12 +2213,35 @@ class ComputationPanel(QWidget):
             clear_grid()
             rows = list(state["rows"])
             update_page_controls()
-            start_idx = int(state["current_page"]) * grid_total
-            end_idx = min(start_idx + grid_total, len(rows))
+            columns = grid_columns()
+            page_size = grid_page_size()
+            start_idx = int(state["current_page"]) * page_size
+            end_idx = min(start_idx + page_size, len(rows))
             for local_index, row_data in enumerate(rows[start_idx:end_idx]):
-                row = local_index // grid_cols
-                col = local_index % grid_cols
+                row = local_index // columns
+                col = local_index % columns
                 grid_layout.addWidget(make_card(row_data, start_idx + local_index), row, col)
+
+            for col in range(columns):
+                grid_layout.setColumnStretch(col, 1)
+
+        def grid_columns() -> int:
+            return max(1, int(grid_settings["columns"]))
+
+        def grid_page_size() -> int:
+            return max(1, grid_columns() * max(1, int(grid_settings["rows"])))
+
+        def apply_grid_settings() -> None:
+            current_global_index = max(0, int(state["index"]))
+            grid_settings["columns"] = int(grid_cols_spin.value())
+            grid_settings["rows"] = int(grid_rows_spin.value())
+            grid_settings["card_height"] = int(card_size_spin.value())
+            if state["rows"]:
+                current_global_index = max(0, min(current_global_index, len(state["rows"]) - 1))
+                state["current_page"] = current_global_index // grid_page_size()
+            else:
+                state["current_page"] = 0
+            update_grid()
 
         def populate() -> None:
             previous_index = int(state["index"])
@@ -2078,7 +2265,7 @@ class ComputationPanel(QWidget):
                 self._pending_gamma_review_selection = None
                 if best_index is not None:
                     state["index"] = int(best_index)
-                    state["current_page"] = int(best_index) // grid_total
+                    state["current_page"] = int(best_index) // grid_page_size()
                     self.gammaSpikeMarkersChanged.emit(
                         self._gamma_spike_markers_from_review_rows(rows)
                     )
@@ -2124,6 +2311,9 @@ class ComputationPanel(QWidget):
         level_combo.currentIndexChanged.connect(lambda _index: populate())
         channel_combo.currentIndexChanged.connect(lambda _index: populate())
         min_power.valueChanged.connect(lambda _value: populate())
+        grid_cols_spin.valueChanged.connect(lambda _value: apply_grid_settings())
+        grid_rows_spin.valueChanged.connect(lambda _value: apply_grid_settings())
+        card_size_spin.valueChanged.connect(lambda _value: apply_grid_settings())
 
         populate()
 

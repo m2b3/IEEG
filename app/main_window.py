@@ -57,6 +57,7 @@ from app.viewer.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICE
 from app.viewer.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
 from app.expert_event_grid import ExpertEventGridDialog
 from app.diagnostics.performance_monitor import monitor, timed_mark
+from app.ui_busy import busy_cursor
 
 
 def _channel_label_sort_key(label: str) -> tuple:
@@ -1769,12 +1770,13 @@ class MainWindow(QMainWindow):
         if not montage.pairs:
             return False, "No valid bipolar pairs could be generated automatically."
 
-        self.viewer.set_bipolar_mode(montage)
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(True)
-        self._update_montage_label()
-        self._mark_project_dirty()
-        self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
+        with busy_cursor(self, "Switching to bipolar reference..."):
+            self.viewer.set_bipolar_mode(montage)
+            self._refresh_display_name_dependent_ui()
+            self.btn_edit_bipolar.setEnabled(True)
+            self._update_montage_label()
+            self._mark_project_dirty()
+            self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
         return True, ""
 
     def _capture_reference_state(self) -> dict:
@@ -2393,72 +2395,74 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
-        perf_start = time.perf_counter()
-        self.viewer.set_monopolar_mode()
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(False)
-        self._update_montage_label()
-        self.console.log("Reference mode: Monopolar")
-        timed_mark(
-            "after_reference_change",
-            perf_start,
-            raw=self.current_raw,
-            file_path=self.loaded_file,
-            visible_window_s=float(self.time_range.value()),
-            reference_mode=self.viewer.reference_mode(),
-            notes="monopolar",
-        )
+        with busy_cursor(self, "Switching to monopolar reference..."):
+            perf_start = time.perf_counter()
+            self.viewer.set_monopolar_mode()
+            self._refresh_display_name_dependent_ui()
+            self.btn_edit_bipolar.setEnabled(False)
+            self._update_montage_label()
+            self.console.log("Reference mode: Monopolar")
+            timed_mark(
+                "after_reference_change",
+                perf_start,
+                raw=self.current_raw,
+                file_path=self.loaded_file,
+                visible_window_s=float(self.time_range.value()),
+                reference_mode=self.viewer.reference_mode(),
+                notes="monopolar",
+            )
  
     def on_reference_average(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
-        perf_start = time.perf_counter()
-        self.viewer.set_average_mode()
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(False)
-        self._mark_project_dirty()
-        self._update_montage_label()
-        self.console.log("Reference mode: Average")
-        timed_mark(
-            "after_reference_change",
-            perf_start,
-            raw=self.current_raw,
-            file_path=self.loaded_file,
-            visible_window_s=float(self.time_range.value()),
-            reference_mode=self.viewer.reference_mode(),
-            notes="average",
-        )
+        with busy_cursor(self, "Computing average reference..."):
+            perf_start = time.perf_counter()
+            self.viewer.set_average_mode()
+            self._refresh_display_name_dependent_ui()
+            self.btn_edit_bipolar.setEnabled(False)
+            self._mark_project_dirty()
+            self._update_montage_label()
+            self.console.log("Reference mode: Average")
+            timed_mark(
+                "after_reference_change",
+                perf_start,
+                raw=self.current_raw,
+                file_path=self.loaded_file,
+                visible_window_s=float(self.time_range.value()),
+                reference_mode=self.viewer.reference_mode(),
+                notes="average",
+            )
 
     def on_reference_median(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
-        perf_start = time.perf_counter()
-        self.viewer.set_median_mode()
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(False)
-        self._mark_project_dirty()
-        self._update_montage_label()
-        self.console.log("Reference mode: Median")
-        timed_mark(
-            "after_reference_change",
-            perf_start,
-            raw=self.current_raw,
-            file_path=self.loaded_file,
-            visible_window_s=float(self.time_range.value()),
-            reference_mode=self.viewer.reference_mode(),
-            notes="median",
-        )
+        with busy_cursor(self, "Computing median reference..."):
+            perf_start = time.perf_counter()
+            self.viewer.set_median_mode()
+            self._refresh_display_name_dependent_ui()
+            self.btn_edit_bipolar.setEnabled(False)
+            self._mark_project_dirty()
+            self._update_montage_label()
+            self.console.log("Reference mode: Median")
+            timed_mark(
+                "after_reference_change",
+                perf_start,
+                raw=self.current_raw,
+                file_path=self.loaded_file,
+                visible_window_s=float(self.time_range.value()),
+                reference_mode=self.viewer.reference_mode(),
+                notes="median",
+            )
 
     def on_reference_bipolar(self) -> None:
         if self.current_raw is None:
             QMessageBox.information(self, "Re-referencing", "Load a dataset first.")
             return
 
-        perf_start = time.perf_counter()
         channel_names = self.viewer.get_raw_channel_names()
         already_bipolar = [
             name for name in channel_names
@@ -2490,17 +2494,35 @@ class MainWindow(QMainWindow):
                 "Bipolar re-referencing confirmed despite already-bipolar-looking labels."
             )
 
+        perf_start = time.perf_counter()
         montage = self._saved_bipolar_montage
 
-        if montage is None or not montage.pairs:
-            bad_channels = self.viewer.get_bad_channels()
+        with busy_cursor(self, "Computing bipolar reference..."):
+            if montage is None or not montage.pairs:
+                bad_channels = self.viewer.get_bad_channels()
 
-            montage = build_automatic_bipolar_montage(
-                channel_names,
-                bad_channels=bad_channels,
-            )
+                montage = build_automatic_bipolar_montage(
+                    channel_names,
+                    bad_channels=bad_channels,
+                )
 
-        montage = refresh_bipolar_montage_pair_names(montage)
+            montage = refresh_bipolar_montage_pair_names(montage)
+
+            if montage.pairs:
+                self.viewer.set_bipolar_mode(montage)
+                self._refresh_display_name_dependent_ui()
+                self.btn_edit_bipolar.setEnabled(True)
+                self._update_montage_label()
+                self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
+                timed_mark(
+                    "after_reference_change",
+                    perf_start,
+                    raw=self.current_raw,
+                    file_path=self.loaded_file,
+                    visible_window_s=float(self.time_range.value()),
+                    reference_mode=self.viewer.reference_mode(),
+                    notes=f"bipolar pairs={len(montage.pairs)}",
+                )
 
         if not montage.pairs:
             QMessageBox.warning(
@@ -2509,21 +2531,6 @@ class MainWindow(QMainWindow):
                 "No valid bipolar pairs could be generated automatically.",
             )
             return
-
-        self.viewer.set_bipolar_mode(montage)
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(True)
-        self._update_montage_label()
-        self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
-        timed_mark(
-            "after_reference_change",
-            perf_start,
-            raw=self.current_raw,
-            file_path=self.loaded_file,
-            visible_window_s=float(self.time_range.value()),
-            reference_mode=self.viewer.reference_mode(),
-            notes=f"bipolar pairs={len(montage.pairs)}",
-        )
 
         if self._saved_bipolar_montage is None and montage.skipped_channels:
             skipped = ", ".join(montage.skipped_channels)
@@ -2979,15 +2986,16 @@ class MainWindow(QMainWindow):
             if msg.clickedButton() is not keep_btn:
                 return
 
-        has_manual_edit = any(pair.origin == "manual" for pair in new_montage.pairs)
-        self._saved_bipolar_montage = new_montage if has_manual_edit else None
+        with busy_cursor(self, "Applying bipolar pair edits..."):
+            has_manual_edit = any(pair.origin == "manual" for pair in new_montage.pairs)
+            self._saved_bipolar_montage = new_montage if has_manual_edit else None
 
-        self.viewer.set_bipolar_mode(new_montage)
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(bool(new_montage.pairs))
-        self._mark_project_dirty()
-        self._update_montage_label()
-        self.console.log("Bipolar pairs updated.")
+            self.viewer.set_bipolar_mode(new_montage)
+            self._refresh_display_name_dependent_ui()
+            self.btn_edit_bipolar.setEnabled(bool(new_montage.pairs))
+            self._mark_project_dirty()
+            self._update_montage_label()
+            self.console.log("Bipolar pairs updated.")
  
     def on_reference_common(self) -> None:
         if self.current_raw is None:
@@ -3028,22 +3036,23 @@ class MainWindow(QMainWindow):
         if not ref_name:
             return
 
-        perf_start = time.perf_counter()
-        self.viewer.set_common_reference_mode(ref_name)
-        self._refresh_display_name_dependent_ui()
-        self.btn_edit_bipolar.setEnabled(False)
-        self._mark_project_dirty()
-        self._update_montage_label()
-        self.console.log(f"Reference mode: Common ({ref_name})")
-        timed_mark(
-            "after_reference_change",
-            perf_start,
-            raw=self.current_raw,
-            file_path=self.loaded_file,
-            visible_window_s=float(self.time_range.value()),
-            reference_mode=self.viewer.reference_mode(),
-            notes=f"common={ref_name}",
-        )
+        with busy_cursor(self, f"Computing common reference: {ref_name}..."):
+            perf_start = time.perf_counter()
+            self.viewer.set_common_reference_mode(ref_name)
+            self._refresh_display_name_dependent_ui()
+            self.btn_edit_bipolar.setEnabled(False)
+            self._mark_project_dirty()
+            self._update_montage_label()
+            self.console.log(f"Reference mode: Common ({ref_name})")
+            timed_mark(
+                "after_reference_change",
+                perf_start,
+                raw=self.current_raw,
+                file_path=self.loaded_file,
+                visible_window_s=float(self.time_range.value()),
+                reference_mode=self.viewer.reference_mode(),
+                notes=f"common={ref_name}",
+            )
 
 # ---------------- Annotations -------------
 
