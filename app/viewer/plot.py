@@ -108,6 +108,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     annotationSelected = QtCore.Signal(str)  # emitted when user clicks an annotation in the plot
     requestOpenAnnotationsPanel = Signal()
     requestEditChannelGroups = Signal()
+    gammaSpikeMarkerClicked = Signal(str, float)  # channel name, absolute time_s
     #  Saving data
     hiddenChannelsChanged = Signal()
     badChannelsChanged = Signal()
@@ -175,6 +176,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._analysis_window_marker_items: list[Any] = []
         self._recruitment_marker_times: dict[str, float] = {}
         self._recruitment_marker_items: list[Any] = []
+        self._gamma_spike_marker_events: dict[str, list[dict[str, float | str]]] = {}
+        self._gamma_spike_marker_items: list[Any] = []
         self._ei_label_styles: dict[str, dict[str, float | int]] = {}
         self._context_menu_active = False
 
@@ -576,6 +579,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_seizure_markers(t_ds)
         self._draw_analysis_window_markers(t_ds)
         self._draw_recruitment_markers(t_ds, visible_abs)
+        self._draw_gamma_spike_markers(t_ds, visible_abs)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
 
@@ -621,6 +625,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._seizure_marker_labels = []
         self._analysis_window_marker_items = []
         self._recruitment_marker_items = []
+        self._gamma_spike_marker_items = []
         self._minmax_items = []
 
     def _ensure_signal_item(self, item) -> None:
@@ -1044,6 +1049,33 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._raw is not None:
             self.render()
 
+    def set_gamma_spike_markers(
+        self,
+        markers: dict[str, list[dict[str, float | str]]] | None,
+    ) -> None:
+        cleaned: dict[str, list[dict[str, float | str]]] = {}
+        if isinstance(markers, dict):
+            for channel_name, events in markers.items():
+                if not isinstance(events, list):
+                    continue
+                cleaned_events: list[dict[str, float | str]] = []
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
+                    try:
+                        time_s = float(event.get("time_s", np.nan))
+                    except (TypeError, ValueError):
+                        continue
+                    if not np.isfinite(time_s):
+                        continue
+                    kind = str(event.get("kind", "regular"))
+                    cleaned_events.append({"time_s": time_s, "kind": kind})
+                if cleaned_events:
+                    cleaned[str(channel_name)] = cleaned_events
+        self._gamma_spike_marker_events = cleaned
+        if self._raw is not None:
+            self.render()
+
     def set_ei_label_styles(self, styles: dict[str, dict[str, float | int]] | None) -> None:
         cleaned: dict[str, dict[str, float | int]] = {}
         if isinstance(styles, dict):
@@ -1104,6 +1136,101 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             tick.setZValue(24)
             self.signal_plot.addItem(tick)
             self._recruitment_marker_items.append(tick)
+
+    def _draw_gamma_spike_markers(
+        self,
+        t_ds: np.ndarray,
+        visible_abs: list[int],
+    ) -> None:
+        if not self._gamma_spike_marker_events:
+            return
+
+        t_arr = np.asarray(t_ds, dtype=float).reshape(-1)
+        if t_arr.size < 2:
+            return
+
+        t0 = float(t_arr[0])
+        t1 = float(t_arr[-1])
+        display_names = self.get_channel_names()
+        regular_color = (64, 145, 255, 235)
+        gamma_color = (255, 151, 67, 235)
+        regular_pen = pg.mkPen(regular_color, width=3)
+        gamma_pen = pg.mkPen(gamma_color, width=3)
+        tick_half_height = 0.16 * float(self._spacing)
+        drew_any = False
+
+        for visible_row, abs_idx in enumerate(list(visible_abs)):
+            abs_idx = int(abs_idx)
+            if not (0 <= abs_idx < len(display_names)):
+                continue
+            channel_name = str(display_names[abs_idx])
+            events = self._gamma_spike_marker_events.get(channel_name, [])
+            if not events:
+                continue
+
+            y_center = (len(visible_abs) - 1 - visible_row) * float(self._spacing)
+            y0 = y_center - tick_half_height
+            y1 = y_center + tick_half_height
+            for event in events:
+                try:
+                    marker_time = float(event.get("time_s", np.nan))
+                except (TypeError, ValueError):
+                    continue
+                if not (t0 <= marker_time <= t1):
+                    continue
+                kind = str(event.get("kind", "regular"))
+                pen = gamma_pen if kind == "gamma" else regular_pen
+                tick = pg.PlotDataItem(
+                    [marker_time, marker_time],
+                    [y0, y1],
+                    pen=pen,
+                )
+                tick.setCurveClickable(True, width=8)
+                tick.sigClicked.connect(
+                    lambda _item, _event, channel=channel_name, t=marker_time: (
+                        self.gammaSpikeMarkerClicked.emit(str(channel), float(t))
+                    )
+                )
+                tick.setZValue(23)
+                self.signal_plot.addItem(tick)
+                self._gamma_spike_marker_items.append(tick)
+                drew_any = True
+
+        if drew_any:
+            self._draw_gamma_spike_marker_legend(
+                regular_color=regular_color,
+                gamma_color=gamma_color,
+            )
+
+    def _draw_gamma_spike_marker_legend(
+        self,
+        *,
+        regular_color: tuple[int, int, int, int],
+        gamma_color: tuple[int, int, int, int],
+    ) -> None:
+        x_min, x_max = self._sig_vb.viewRange()[0]
+        y_min, y_max = self._sig_vb.viewRange()[1]
+        x = float(x_max) - 0.012 * max(1e-9, float(x_max) - float(x_min))
+        y = float(y_max) - 0.05 * max(1e-9, float(y_max) - float(y_min))
+
+        regular_rgb = regular_color[:3]
+        gamma_rgb = gamma_color[:3]
+        html = (
+            "<span style='color:#111; font-weight:600;'>"
+            f"<span style='color:rgb{regular_rgb}; font-weight:800;'>|</span> Non-gamma spike&nbsp;&nbsp;"
+            f"<span style='color:rgb{gamma_rgb}; font-weight:800;'>|</span> Gamma spike"
+            "</span>"
+        )
+        label = pg.TextItem(
+            html=html,
+            anchor=(1.0, 0.0),
+            fill=pg.mkBrush(255, 255, 255, 235),
+            border=pg.mkPen(80, 80, 80, 190),
+        )
+        label.setPos(x, y)
+        label.setZValue(31)
+        self.signal_plot.addItem(label)
+        self._gamma_spike_marker_items.append(label)
 
     def _draw_cursor(self, t_ds: np.ndarray):
         t0 = float(np.asarray(t_ds).reshape(-1)[0].item())

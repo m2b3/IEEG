@@ -24,7 +24,6 @@ from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QI
 
 from app.menus import build_menubar
 from app.viewer.plot import MultiChannelViewer
-from app.console_viewer import ConsoleWindow
 from app.computation.panel import ComputationPanel
 from app.viewer.time_controls import TimeWindowControl
 from app.annotations import (
@@ -80,6 +79,16 @@ class _SortableTableWidgetItem(QTableWidgetItem):
             if left is not None and right is not None:
                 return left < right
         return super().__lt__(other)
+
+
+class _SilentConsole:
+    """Drop-in logger used when the separate Console window is disabled."""
+
+    def log(self, _message: str) -> None:
+        return
+
+    def close(self) -> None:
+        return
 
 
 class MainWindow(QMainWindow):
@@ -278,9 +287,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.timeline, 0)
 
         # ---- Console ----
-        self.console = ConsoleWindow(parent=self)
-        self.console.show()
-        self.console.log("Console ready. Load EEG data to begin analysis.")
+        # Keep existing log calls harmless without opening a separate window.
+        self.console = _SilentConsole()
 
         # ---- State ----
         self.current_raw: BaseRaw | None = None
@@ -372,6 +380,7 @@ class MainWindow(QMainWindow):
         self.viewer.requestAmpRangeDelta.connect(self._zoom_amp_range)
         self.viewer.requestOpenComputationPanel.connect(self._open_computation_panel)
         self.viewer.requestEditChannelGroups.connect(self.on_edit_channel_groups)
+        self.viewer.gammaSpikeMarkerClicked.connect(self._on_gamma_spike_marker_clicked)
 
         # Timeline sync
         self.viewer.timeWindowChanged.connect(self._sync_time_from_viewer)
@@ -394,6 +403,8 @@ class MainWindow(QMainWindow):
         self.comp_panel.eiScoreLabelsChanged.connect(self._on_ei_score_labels_changed)
         self.comp_panel.eiSummaryChannelActivated.connect(self._on_ei_summary_channel_activated)
         self.comp_panel.eiSummaryOrderChanged.connect(self._on_ei_summary_order_changed)
+        self.comp_panel.gammaSpikeMarkersChanged.connect(self._on_gamma_spike_markers_changed)
+        self.comp_panel.gammaSpikeEventActivated.connect(self._on_gamma_spike_event_activated)
         self.comp_dock.visibilityChanged.connect(self._on_computation_dock_visibility_changed)
         
         # Make computation panel follow the viewer cursor (instead of window start)
@@ -2037,6 +2048,15 @@ class MainWindow(QMainWindow):
         names = [str(name) for name in ordered_channel_names]
         self.viewer.set_display_order_by_channel_names(names)
 
+    def _on_gamma_spike_markers_changed(self, markers: dict) -> None:
+        self.viewer.set_gamma_spike_markers(markers if isinstance(markers, dict) else {})
+
+    def _on_gamma_spike_event_activated(self, channel_name: str, time_s: float) -> None:
+        self._jump_viewer_to_event(float(time_s), str(channel_name))
+
+    def _on_gamma_spike_marker_clicked(self, channel_name: str, time_s: float) -> None:
+        self.comp_panel.open_gamma_review_at(str(channel_name), float(time_s))
+
     def _on_computation_dock_visibility_changed(self, visible: bool) -> None:
         if visible:
             return
@@ -2045,6 +2065,7 @@ class MainWindow(QMainWindow):
         self.viewer.set_seizure_markers(None, None)
         self.viewer.set_analysis_window_markers(None, None)
         self.viewer.set_recruitment_markers({})
+        self.viewer.set_gamma_spike_markers({})
         self.viewer.set_ei_label_styles({})
         self.viewer.clear_display_order_override()
 

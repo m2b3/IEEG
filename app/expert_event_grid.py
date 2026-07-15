@@ -923,7 +923,10 @@ class ExpertEventGrid(QWidget):
             return False
         
         if not self._events:
-            self._info_label.setText(f"No events found for {edf_file}")
+            self._info_label.setText(
+                f"No expert HFO events found for {edf_file}. "
+                "This grid does not show gamma-spike detector output."
+            )
             self._update_grid()
             return True
         

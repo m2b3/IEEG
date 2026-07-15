@@ -85,7 +85,7 @@ def build_menubar(main_window):
     # -------- Review --------
     review_menu = menubar.addMenu("Review")
     add_action(review_menu, "Annotate", main_window.on_annotate)
-    add_action(review_menu, "Expert Event Grid", main_window.open_expert_event_grid)
+    add_action(review_menu, "Expert HFO Event Grid", main_window.open_expert_event_grid)
 
     # -------- Help --------
     help_menu = menubar.addMenu("Help")

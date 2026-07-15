@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Callable, Optional, cast
+from typing import Callable, Literal, Optional, TypedDict, cast
 
 import numpy as np
 import pyqtgraph as pg
+from scipy import signal
 from mne.io import BaseRaw
 
 from PySide6.QtCore import Qt, Slot, Signal, QRectF
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog,
     QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTabWidget, QComboBox, QSpinBox, QSplitter,
+    QHeaderView, QTabWidget, QComboBox, QSpinBox, QGridLayout, QScrollArea,
 )
 
 from app.viewer.time_controls import TimeWindowControl
@@ -27,6 +28,7 @@ from app.computation.rei.algorithm import (
 )
 from app.computation.gamma_spike.wire_algorithm import (
     GammaSpikeComputationResult,
+    GammaSpikeEventResult,
     compute_gamma_spike_for_gui,
 )
 from app.diagnostics.performance_monitor import timed_mark
@@ -59,6 +61,86 @@ class EIHeatmapRow:
     mean_hfer: float
 
 
+class GammaReviewRow(TypedDict):
+    channel: str
+    event_index: int
+    event_number: int
+    spike_label: str
+    time_s: float
+    event_start_time_s: float
+    event_stop_time_s: float
+    is_gamma: bool
+    gamma_power: float | None
+    gamma_frequency_hz: float | None
+    gamma_duration_ms: float | None
+    boundary_p1_time_s: float | None
+    boundary_n1_time_s: float | None
+    boundary_n2_time_s: float | None
+    gamma_start_time_s: float | None
+    gamma_stop_time_s: float | None
+    error: str | None
+
+
+class GammaReviewState(TypedDict):
+    rows: list[GammaReviewRow]
+    index: int
+    current_page: int
+    is_zoomed: bool
+
+
+class GammaSummaryRow(TypedDict):
+    channel: str
+    channel_sort: str
+    total_spikes: int
+    gamma_spikes: int
+    spike_gamma_rate: float
+    spike_gamma_rate_text: str
+    mean_gamma_power: float
+    mean_gamma_power_text: str
+    mean_gamma_duration: float
+    mean_gamma_duration_text: str
+
+
+class GammaSummarySortState(TypedDict):
+    column: int
+    order: Qt.SortOrder
+
+
+class EISummaryRow(TypedDict):
+    original_order: int
+    display_order: int
+    channel: str
+    channel_sort: str
+    ei_score: float
+    rank: int
+    hfer_activity: float
+    hfer_activity_text: str
+    recruitment_delay: float
+    recruitment_delay_text: str
+
+
+class EISummarySortState(TypedDict):
+    column: int
+    order: Qt.SortOrder
+    channel_mode: Literal["display", "alphabetical"]
+
+
+class _GammaSpikeCardFrame(QFrame):
+    clicked = Signal(int)
+
+    def __init__(self, event_index: int, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._event_index = int(event_index)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._event_index)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+
 class ComputationPanel(QWidget):
     """
     Dock content widget:
@@ -76,6 +158,8 @@ class ComputationPanel(QWidget):
     eiScoreLabelsChanged = Signal(dict)  # display channel name -> {score_norm, rank}
     eiSummaryChannelActivated = Signal(str)
     eiSummaryOrderChanged = Signal(list)
+    gammaSpikeMarkersChanged = Signal(dict)  # display channel name -> [{time_s, kind}]
+    gammaSpikeEventActivated = Signal(str, float)  # channel name, absolute time_s
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -102,6 +186,8 @@ class ComputationPanel(QWidget):
         self._ei_summary_row_by_channel: dict[str, int] = {}
         self._last_gamma_result: GammaSpikeComputationResult | None = None
         self._gamma_summary_dialog: QDialog | None = None
+        self._gamma_review_dialog: QDialog | None = None
+        self._pending_gamma_review_selection: tuple[str, float] | None = None
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
         self._gamma_default_window_applied = False
@@ -335,10 +421,15 @@ class ComputationPanel(QWidget):
         self.btn_open_ei_heatmap.setEnabled(False)
         p_layout.addWidget(self.btn_open_ei_heatmap)
 
-        self.btn_open_gamma_summary = QPushButton("Open gamma summary")
+        self.btn_open_gamma_summary = QPushButton("Open channel-level summary")
         self.btn_open_gamma_summary.setEnabled(False)
         self.btn_open_gamma_summary.hide()
         p_layout.addWidget(self.btn_open_gamma_summary)
+
+        self.btn_open_gamma_review = QPushButton("Open spike grid")
+        self.btn_open_gamma_review.setEnabled(False)
+        self.btn_open_gamma_review.hide()
+        p_layout.addWidget(self.btn_open_gamma_review)
 
         root.addWidget(gb_p, 0)
 
@@ -370,6 +461,7 @@ class ComputationPanel(QWidget):
         self.btn_open_ei_summary.clicked.connect(self._open_ei_summary_dialog)
         self.btn_open_ei_heatmap.clicked.connect(self._open_ei_heatmap_dialog)
         self.btn_open_gamma_summary.clicked.connect(self._open_gamma_summary_dialog)
+        self.btn_open_gamma_review.clicked.connect(self._open_gamma_review_dialog)
 
         self.btn_sel_all.clicked.connect(self._select_all_channels)
         self.btn_sel_macro.clicked.connect(lambda: self._select_group_channels("macro"))
@@ -862,6 +954,7 @@ class ComputationPanel(QWidget):
         self.btn_open_ei_summary.setVisible(is_ei)
         self.btn_open_ei_heatmap.setVisible(is_ei)
         self.btn_open_gamma_summary.setVisible(is_gamma)
+        self.btn_open_gamma_review.setVisible(is_gamma)
 
         if is_ei:
             self.btn_run.setText("Run REI")
@@ -1139,7 +1232,8 @@ class ComputationPanel(QWidget):
                     f"gamma={metadata.get('gamma_success_count', 0)}"
                 ),
             )
-            self._open_gamma_summary_dialog()
+            # Keep the computation flow quiet: users can open the summary table
+            # when needed, but it should not interrupt the main viewer.
             return
 
         QMessageBox.warning(
@@ -1249,13 +1343,29 @@ class ComputationPanel(QWidget):
     def _clear_gamma_outputs(self) -> None:
         self._last_gamma_result = None
         self._gamma_summary_dialog = None
+        self._gamma_review_dialog = None
+        self.gammaSpikeMarkersChanged.emit({})
         if hasattr(self, "btn_open_gamma_summary"):
             self.btn_open_gamma_summary.setEnabled(False)
+        if hasattr(self, "btn_open_gamma_review"):
+            self.btn_open_gamma_review.setEnabled(False)
 
     def _show_gamma_result(self, result: GammaSpikeComputationResult) -> None:
         self._last_gamma_result = result
         self._gamma_summary_dialog = None
+        self._gamma_review_dialog = None
         self.btn_open_gamma_summary.setEnabled(True)
+        self.btn_open_gamma_review.setEnabled(True)
+        self.gammaSpikeMarkersChanged.emit(
+            self._gamma_spike_markers_from_result(result, mode="all")
+        )
+
+    def open_gamma_review_at(self, channel_name: str, time_s: float) -> None:
+        self._pending_gamma_review_selection = (str(channel_name), float(time_s))
+        if self._gamma_review_dialog is not None:
+            self._gamma_review_dialog.close()
+            self._gamma_review_dialog = None
+        self._open_gamma_review_dialog()
 
     def _open_gamma_summary_dialog(self) -> None:
         result = self._last_gamma_result
@@ -1309,12 +1419,12 @@ class ComputationPanel(QWidget):
 
         all_rows = self._gamma_summary_rows(result)
 
-        sort_state = {
+        sort_state: GammaSummarySortState = {
             "column": 2,
             "order": Qt.SortOrder.DescendingOrder,
         }
 
-        def filtered_rows() -> list[dict[str, float | int | str]]:
+        def filtered_rows() -> list[GammaSummaryRow]:
             mode = str(level_combo.currentData() or "all")
             if mode == "gamma":
                 return [
@@ -1330,7 +1440,7 @@ class ComputationPanel(QWidget):
                 ]
             return list(all_rows)
 
-        def populate(rows: list[dict[str, float | int | str]]) -> None:
+        def populate(rows: list[GammaSummaryRow]) -> None:
             table.setSortingEnabled(False)
             table.setRowCount(0)
             for row_data in rows:
@@ -1358,18 +1468,20 @@ class ComputationPanel(QWidget):
                 [str(row["channel"]) for row in rows]
             )
 
-        def sort_rows(rows: list[dict[str, float | int | str]]) -> list[dict[str, float | int | str]]:
-            key_map = {
-                0: "channel_sort",
-                1: "total_spikes",
-                2: "gamma_spikes",
-                3: "spike_gamma_rate",
-                4: "mean_gamma_power",
-                5: "mean_gamma_duration",
-            }
-            key_name = key_map.get(int(sort_state["column"]), "gamma_spikes")
+        def sort_rows(rows: list[GammaSummaryRow]) -> list[GammaSummaryRow]:
+            column = int(sort_state["column"])
             reverse = sort_state["order"] == Qt.SortOrder.DescendingOrder
-            return sorted(rows, key=lambda row: row[key_name], reverse=reverse)
+            if column == 0:
+                return sorted(rows, key=lambda row: row["channel_sort"], reverse=reverse)
+            if column == 1:
+                return sorted(rows, key=lambda row: row["total_spikes"], reverse=reverse)
+            if column == 3:
+                return sorted(rows, key=lambda row: row["spike_gamma_rate"], reverse=reverse)
+            if column == 4:
+                return sorted(rows, key=lambda row: row["mean_gamma_power"], reverse=reverse)
+            if column == 5:
+                return sorted(rows, key=lambda row: row["mean_gamma_duration"], reverse=reverse)
+            return sorted(rows, key=lambda row: row["gamma_spikes"], reverse=reverse)
 
         def refresh_table() -> None:
             rows = sort_rows(filtered_rows())
@@ -1377,6 +1489,12 @@ class ComputationPanel(QWidget):
             header.setSortIndicator(
                 int(sort_state["column"]),
                 sort_state["order"],
+            )
+            self.gammaSpikeMarkersChanged.emit(
+                self._gamma_spike_markers_from_result(
+                    result,
+                    mode=str(level_combo.currentData() or "all"),
+                )
             )
 
         def sort_summary_table(column: int) -> None:
@@ -1400,11 +1518,12 @@ class ComputationPanel(QWidget):
         refresh_table()
 
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        total_gamma_spikes = sum(int(row["gamma_spikes"]) for row in all_rows)
         footer = QLabel(
             "Total spikes: "
             f"{metadata.get('total_spikes', 0)}   "
-            "Gamma features: "
-            f"{metadata.get('gamma_success_count', 0)}"
+            "Gamma-positive spikes: "
+            f"{total_gamma_spikes}"
         )
         layout.addWidget(footer)
 
@@ -1418,11 +1537,795 @@ class ComputationPanel(QWidget):
 
         self._gamma_summary_dialog = dialog
 
+    def _open_gamma_review_dialog(self) -> None:
+        result = self._last_gamma_result
+        if result is None:
+            QMessageBox.information(
+                self,
+                "Gamma review",
+                "Run the gamma spike detector first.",
+            )
+            return
+
+        all_rows = self._gamma_event_review_rows(result)
+        if not all_rows:
+            QMessageBox.information(
+                self,
+                "Gamma review",
+                "No retained spikes are available for review.",
+            )
+            return
+
+        grid_cols = 6
+        grid_rows = 4
+        grid_total = grid_cols * grid_rows
+        regular_border = "#4091ff"
+        gamma_border = "#ff9743"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Gamma spike grid")
+        dialog.resize(1180, 760)
+
+        root = QVBoxLayout(dialog)
+
+        controls_widget = QWidget()
+        controls = QHBoxLayout(controls_widget)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.addWidget(QLabel("Spike level:"))
+        level_combo = QComboBox()
+        level_combo.addItem("All spikes", userData="all")
+        level_combo.addItem("Gamma only", userData="gamma")
+        level_combo.addItem("Non-gamma only", userData="non_gamma")
+        controls.addWidget(level_combo)
+
+        controls.addWidget(QLabel("Channel:"))
+        channel_combo = QComboBox()
+        channel_combo.addItem("All channels", userData="")
+        for channel_name in sorted({str(row["channel"]) for row in all_rows}, key=str.casefold):
+            channel_combo.addItem(channel_name, userData=channel_name)
+        controls.addWidget(channel_combo)
+
+        controls.addWidget(QLabel("Min power:"))
+        min_power = QDoubleSpinBox()
+        min_power.setRange(0.0, 1e9)
+        min_power.setDecimals(4)
+        min_power.setSingleStep(0.1)
+        min_power.setValue(0.0)
+        controls.addWidget(min_power)
+
+        controls.addStretch(1)
+        root.addWidget(controls_widget)
+
+        grid_panel = QWidget()
+        grid_panel_layout = QVBoxLayout(grid_panel)
+        grid_panel_layout.setContentsMargins(0, 0, 0, 0)
+
+        page_row = QHBoxLayout()
+        prev_page_btn = QPushButton("Previous page")
+        next_page_btn = QPushButton("Next page")
+        page_label = QLabel("Page 1 / 1")
+        page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        page_row.addWidget(prev_page_btn)
+        page_row.addWidget(page_label, 1)
+        page_row.addWidget(next_page_btn)
+        grid_panel_layout.addLayout(page_row)
+
+        legend_row = QHBoxLayout()
+        gamma_legend = QLabel("Gamma spike")
+        gamma_legend.setStyleSheet(
+            f"border: 2px solid {gamma_border}; border-radius: 4px; "
+            "padding: 2px 8px; background: #ffffff; color: #111111; font-weight: 600;"
+        )
+        regular_legend = QLabel("Non-gamma spike")
+        regular_legend.setStyleSheet(
+            f"border: 2px solid {regular_border}; border-radius: 4px; "
+            "padding: 2px 8px; background: #ffffff; color: #111111; font-weight: 600;"
+        )
+        legend_row.addWidget(gamma_legend)
+        legend_row.addWidget(regular_legend)
+        legend_row.addStretch(1)
+        grid_panel_layout.addLayout(legend_row)
+
+        grid_scroll = QScrollArea()
+        grid_scroll.setWidgetResizable(True)
+        grid_widget = QWidget()
+        grid_layout = QGridLayout(grid_widget)
+        grid_layout.setSpacing(8)
+        grid_scroll.setWidget(grid_widget)
+        grid_panel_layout.addWidget(grid_scroll, 1)
+        root.addWidget(grid_panel, 1)
+
+        zoom_panel = QWidget()
+        zoom_panel.setVisible(False)
+        zoom_layout = QVBoxLayout(zoom_panel)
+        zoom_layout.setContentsMargins(0, 0, 0, 0)
+
+        zoom_nav = QHBoxLayout()
+        grid_btn = QPushButton("▦")
+        grid_btn.setToolTip("Return to spike grid")
+        prev_event_btn = QPushButton("← Previous spike")
+        next_event_btn = QPushButton("Next spike →")
+        zoom_nav.addWidget(grid_btn)
+        zoom_nav.addWidget(prev_event_btn)
+        zoom_nav.addWidget(next_event_btn)
+        gamma_filter_check = QCheckBox("Display 30-100 Hz")
+        zoom_nav.addWidget(gamma_filter_check)
+        zoom_nav.addStretch(1)
+        zoom_layout.addLayout(zoom_nav)
+
+        zoom_title = QLabel("Selected spike")
+        zoom_title.setStyleSheet("font-weight: 600;")
+        zoom_layout.addWidget(zoom_title)
+
+        zoom_event_info = QLabel("")
+        zoom_event_info.setWordWrap(True)
+        zoom_event_info.setStyleSheet(
+            "color: #111111; background: #ffffff; border: 1px solid #d0d0d0; "
+            "border-radius: 4px; padding: 4px 8px;"
+        )
+        zoom_layout.addWidget(zoom_event_info)
+
+        zoom_plot = pg.PlotWidget()
+        zoom_plot.setMinimumHeight(360)
+        zoom_plot.setBackground("w")
+        zoom_plot.setLabel("bottom", "Time", units="s")
+        zoom_plot.setLabel("left", "Amplitude", units="uV")
+        zoom_plot.showGrid(x=True, y=True, alpha=0.25)
+        zoom_layout.addWidget(zoom_plot, 1)
+
+        zoom_metrics = QTableWidget(1, 6)
+        zoom_metrics.setHorizontalHeaderLabels(
+            [
+                "Gamma power",
+                "Gamma frequency",
+                "Gamma duration",
+                "P1 boundary",
+                "N1 boundary",
+                "N2 boundary",
+            ]
+        )
+        zoom_metrics.verticalHeader().setVisible(False)
+        zoom_metrics.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        for col in range(6):
+            zoom_metrics.horizontalHeader().setSectionResizeMode(
+                col,
+                QHeaderView.ResizeMode.Stretch,
+            )
+        zoom_layout.addWidget(zoom_metrics, 0)
+
+        boundary_info = QLabel(
+            "P1/N1/N2 circles are waveform landmarks for the detected spike.  "
+            "P1: the beginning of the spike; "
+            "N1: the main spike peak; "
+            "N2: the end of the spike.  "
+            "The 30-100 Hz toggle changes display only, not saved gamma results."
+        )
+        boundary_info.setWordWrap(True)
+        boundary_info.setStyleSheet(
+            "color: #444; background: #f7f7f7; border: 1px solid #d0d0d0; "
+            "border-radius: 4px; padding: 6px;"
+        )
+        zoom_layout.addWidget(boundary_info, 0)
+        root.addWidget(zoom_panel, 1)
+
+        state: GammaReviewState = {
+            "rows": [],
+            "index": -1,
+            "current_page": 0,
+            "is_zoomed": False,
+        }
+
+        def is_gamma_row(row: GammaReviewRow) -> bool:
+            return bool(row.get("is_gamma", False))
+
+        def filtered_rows() -> list[GammaReviewRow]:
+            mode = str(level_combo.currentData() or "all")
+            channel_filter = str(channel_combo.currentData() or "")
+            power_cutoff = float(min_power.value())
+            rows: list[GammaReviewRow] = []
+            for row in all_rows:
+                if mode == "gamma" and not is_gamma_row(row):
+                    continue
+                if mode == "non_gamma" and is_gamma_row(row):
+                    continue
+                if channel_filter and str(row["channel"]) != channel_filter:
+                    continue
+                power = row.get("gamma_power")
+                if power_cutoff > 0.0:
+                    if power is None or not np.isfinite(float(power)) or float(power) < power_cutoff:
+                        continue
+                rows.append(row)
+            return rows
+
+        def format_float(value: object, decimals: int = 3) -> str:
+            if value is None:
+                return ""
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                return ""
+            if not np.isfinite(number):
+                return ""
+            return f"{number:.{decimals}f}"
+
+        def set_metric_values(values: list[str]) -> None:
+            zoom_metrics.setRowCount(1)
+            for col in range(zoom_metrics.columnCount()):
+                value = values[col] if col < len(values) else ""
+                item = QTableWidgetItem(value)
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                zoom_metrics.setItem(0, col, item)
+
+        def maybe_gamma_filter_trace(times: np.ndarray, waveform: np.ndarray) -> np.ndarray:
+            if not gamma_filter_check.isChecked():
+                return waveform
+            if times.size < 8 or waveform.size != times.size:
+                return waveform
+            dt = float(np.median(np.diff(times)))
+            if not np.isfinite(dt) or dt <= 0.0:
+                return waveform
+            fs = 1.0 / dt
+            high = min(100.0, 0.45 * fs)
+            low = 30.0
+            if high <= low:
+                return waveform
+            try:
+                sos = signal.butter(
+                    4,
+                    [low, high],
+                    btype="bandpass",
+                    fs=fs,
+                    output="sos",
+                )
+                return np.asarray(signal.sosfiltfilt(sos, waveform), dtype=float)
+            except Exception:
+                return waveform
+
+        def clear_grid() -> None:
+            while grid_layout.count():
+                item = grid_layout.takeAt(0)
+                if item is None:
+                    continue
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+
+        def draw_analysis_markers(
+            plot: pg.PlotWidget,
+            row: GammaReviewRow,
+            times: np.ndarray | None,
+            waveform: np.ndarray | None,
+        ) -> None:
+            try:
+                time_s = float(row["time_s"])
+            except (TypeError, ValueError):
+                return
+
+            t_arr = None if times is None else np.asarray(times, dtype=float).reshape(-1)
+            y_arr = None if waveform is None else np.asarray(waveform, dtype=float).reshape(-1)
+            if t_arr is None or y_arr is None or t_arr.size < 2 or t_arr.size != y_arr.size:
+                return
+
+            finite_y = y_arr[np.isfinite(y_arr)]
+            if finite_y.size:
+                y_min = float(np.min(finite_y))
+                y_max = float(np.max(finite_y))
+            else:
+                y_min, y_max = -1.0, 1.0
+            if y_max <= y_min:
+                y_min -= 1.0
+                y_max += 1.0
+            y_pad = 0.08 * (y_max - y_min)
+            marker_y0 = y_min - y_pad
+            marker_y1 = y_max + y_pad
+
+            if float(t_arr[0]) <= time_s <= float(t_arr[-1]):
+                spike_line = plot.plot(
+                    [time_s, time_s],
+                    [marker_y0, marker_y1],
+                    pen=pg.mkPen((35, 35, 35), width=2, style=Qt.PenStyle.DashLine),
+                )
+                spike_line.setZValue(15)
+
+            for label, key, color in (
+                ("P1", "boundary_p1_time_s", (80, 180, 80)),
+                ("N1", "boundary_n1_time_s", (230, 100, 80)),
+                ("N2", "boundary_n2_time_s", (180, 80, 200)),
+            ):
+                value = row.get(key)
+                if value is None:
+                    continue
+                try:
+                    x = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(x):
+                    continue
+                if x < float(t_arr[0]) or x > float(t_arr[-1]):
+                    continue
+                y = float(np.interp(x, t_arr, y_arr))
+                point = pg.ScatterPlotItem(
+                    [x],
+                    [y],
+                    size=11,
+                    pen=pg.mkPen(color, width=2),
+                    brush=pg.mkBrush(255, 255, 255, 230),
+                )
+                point.setZValue(25)
+                plot.addItem(point)
+                text = pg.TextItem(label, anchor=(0.5, 1.2), color=color)
+                text.setPos(x, y)
+                plot.addItem(text)
+
+            gamma_start = row.get("gamma_start_time_s")
+            gamma_stop = row.get("gamma_stop_time_s")
+            if gamma_start is None or gamma_stop is None:
+                return
+            try:
+                x0 = float(gamma_start)
+                x1 = float(gamma_stop)
+            except (TypeError, ValueError):
+                return
+            if np.isfinite(x0) and np.isfinite(x1) and x1 >= x0:
+                clipped_x0 = max(float(t_arr[0]), x0)
+                clipped_x1 = min(float(t_arr[-1]), x1)
+                if clipped_x1 <= clipped_x0:
+                    return
+                gamma_y = marker_y0 + 0.08 * (marker_y1 - marker_y0)
+                gamma_segment = plot.plot(
+                    [clipped_x0, clipped_x1],
+                    [gamma_y, gamma_y],
+                    pen=pg.mkPen((255, 151, 67, 190), width=8),
+                )
+                gamma_segment.setZValue(12)
+
+        def update_zoom(row: GammaReviewRow) -> None:
+            channel = str(row["channel"])
+            time_s = float(row["time_s"])
+            event_number = int(row.get("event_number", 0) or 0)
+            zoom_title.setText(
+                f"{channel} - Event {event_number}"
+                if event_number > 0
+                else channel
+            )
+            event_type = "Gamma spike" if is_gamma_row(row) else "Non-gamma spike"
+            event_color = gamma_border if is_gamma_row(row) else regular_border
+            zoom_event_info.setText(
+                f"{event_type} | Dashed line: detected spike | "
+                "Orange segment: estimated gamma activity window"
+            )
+            zoom_event_info.setStyleSheet(
+                f"color: #111111; background: #ffffff; border: 1px solid #d0d0d0; "
+                f"border-left: 5px solid {event_color}; border-radius: 4px; "
+                "padding: 4px 8px; font-weight: 600;"
+            )
+            set_metric_values(
+                [
+                    format_float(row.get("gamma_power"), 4),
+                    f"{format_float(row.get('gamma_frequency_hz'), 1)} Hz",
+                    f"{format_float(row.get('gamma_duration_ms'), 1)} ms",
+                    format_float(row.get("boundary_p1_time_s"), 4),
+                    format_float(row.get("boundary_n1_time_s"), 4),
+                    format_float(row.get("boundary_n2_time_s"), 4),
+                ]
+            )
+
+            zoom_plot.clear()
+            zoom_plot.setBackground("w")
+            times, waveform = self._fetch_gamma_event_waveform(row, half_window_s=0.45)
+            plotted_waveform = waveform
+            if times is not None and waveform is not None:
+                plotted_waveform = maybe_gamma_filter_trace(times, waveform)
+                zoom_plot.plot(times, plotted_waveform, pen=pg.mkPen("#222222", width=1.5))
+                zoom_plot.setXRange(float(times[0]), float(times[-1]), padding=0.02)
+            else:
+                zoom_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
+            draw_analysis_markers(zoom_plot, row, times, plotted_waveform)
+
+            self.gammaSpikeEventActivated.emit(channel, time_s)
+
+        def update_zoom_nav() -> None:
+            rows = list(state["rows"])
+            index = int(state["index"])
+            prev_event_btn.setEnabled(index > 0)
+            next_event_btn.setEnabled(0 <= index < len(rows) - 1)
+
+        def show_grid() -> None:
+            state["is_zoomed"] = False
+            controls_widget.setVisible(True)
+            zoom_panel.setVisible(False)
+            grid_panel.setVisible(True)
+            update_grid()
+
+        def show_zoom(index: int) -> None:
+            rows = list(state["rows"])
+            if not rows:
+                return
+            index = max(0, min(int(index), len(rows) - 1))
+            state["index"] = index
+            state["current_page"] = index // grid_total
+            state["is_zoomed"] = True
+            controls_widget.setVisible(False)
+            grid_panel.setVisible(False)
+            zoom_panel.setVisible(True)
+            update_zoom(rows[index])
+            update_zoom_nav()
+
+        def make_card(row_data: GammaReviewRow, global_index: int) -> QWidget:
+            border = gamma_border if is_gamma_row(row_data) else regular_border
+            card = _GammaSpikeCardFrame(global_index)
+            card.setFrameShape(QFrame.Shape.StyledPanel)
+            card.setStyleSheet(
+                "QFrame {"
+                f"border: 2px solid {border};"
+                "border-radius: 6px;"
+                "background-color: #ffffff;"
+                "}"
+                "QLabel { border: none; background: transparent; }"
+            )
+            layout = QVBoxLayout(card)
+            layout.setContentsMargins(6, 4, 6, 4)
+            layout.setSpacing(3)
+
+            channel_name = str(row_data.get("channel", ""))
+            event_number = int(row_data.get("event_number", int(global_index) + 1))
+            title = QLabel(f"{channel_name} | Event {event_number}")
+            title.setStyleSheet("font-weight: 600; color: #111111;")
+            layout.addWidget(title)
+
+            plot = pg.PlotWidget()
+            plot.setMinimumHeight(90)
+            plot.setMaximumHeight(130)
+            plot.setMenuEnabled(False)
+            plot.setBackground("w")
+            plot.hideAxis("left")
+            plot.hideAxis("bottom")
+            plot.showGrid(x=True, y=False, alpha=0.18)
+            times, waveform = self._fetch_gamma_event_waveform(row_data, half_window_s=0.18)
+            if times is not None and waveform is not None:
+                mini_waveform = np.asarray(waveform, dtype=float).reshape(-1)
+                plot.plot(times, mini_waveform, pen=pg.mkPen("#222222", width=1))
+                plot.setXRange(float(times[0]), float(times[-1]), padding=0.0)
+            try:
+                time_s = float(row_data.get("time_s", 0.0))
+            except (TypeError, ValueError):
+                time_s = 0.0
+            if times is not None and waveform is not None:
+                mini_times = np.asarray(times, dtype=float).reshape(-1)
+                finite_y = mini_waveform[np.isfinite(mini_waveform)]
+                if (
+                    mini_times.size >= 2
+                    and finite_y.size
+                    and float(mini_times[0]) <= time_s <= float(mini_times[-1])
+                ):
+                    y_min = float(np.min(finite_y))
+                    y_max = float(np.max(finite_y))
+                    if y_max <= y_min:
+                        y_min -= 1.0
+                        y_max += 1.0
+                    y_pad = 0.08 * (y_max - y_min)
+                    card_line = plot.plot(
+                        [time_s, time_s],
+                        [y_min - y_pad, y_max + y_pad],
+                        pen=pg.mkPen((35, 35, 35), width=1, style=Qt.PenStyle.DashLine),
+                    )
+                    card_line.setZValue(15)
+            plot.setMouseEnabled(x=False, y=False)
+            layout.addWidget(plot, 1)
+
+            start = float(row_data.get("event_start_time_s", time_s))
+            stop = float(row_data.get("event_stop_time_s", time_s))
+            footer = QLabel(f"{start:.3f} - {stop:.3f} s")
+            footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            footer.setStyleSheet("color: #555; font-size: 10px;")
+            layout.addWidget(footer)
+
+            card.clicked.connect(show_zoom)
+            plot.scene().sigMouseClicked.connect(lambda _event, idx=global_index: show_zoom(idx))
+            return card
+
+        def update_page_controls() -> None:
+            total_pages = max(1, (len(state["rows"]) + grid_total - 1) // grid_total)
+            state["current_page"] = max(
+                0,
+                min(int(state["current_page"]), total_pages - 1),
+            )
+            page_label.setText(f"Page {int(state['current_page']) + 1} / {total_pages}")
+            prev_page_btn.setEnabled(int(state["current_page"]) > 0)
+            next_page_btn.setEnabled(int(state["current_page"]) < total_pages - 1)
+
+        def update_grid() -> None:
+            clear_grid()
+            rows = list(state["rows"])
+            update_page_controls()
+            start_idx = int(state["current_page"]) * grid_total
+            end_idx = min(start_idx + grid_total, len(rows))
+            for local_index, row_data in enumerate(rows[start_idx:end_idx]):
+                row = local_index // grid_cols
+                col = local_index % grid_cols
+                grid_layout.addWidget(make_card(row_data, start_idx + local_index), row, col)
+
+        def populate() -> None:
+            previous_index = int(state["index"])
+            rows = filtered_rows()
+            state["rows"] = rows
+            pending = self._pending_gamma_review_selection
+            if pending is not None:
+                pending_channel, pending_time = pending
+                best_index = None
+                best_delta = float("inf")
+                for idx, row_data in enumerate(rows):
+                    if str(row_data.get("channel", "")) != str(pending_channel):
+                        continue
+                    try:
+                        delta = abs(float(row_data.get("time_s", np.inf)) - float(pending_time))
+                    except (TypeError, ValueError):
+                        continue
+                    if delta < best_delta:
+                        best_index = int(idx)
+                        best_delta = float(delta)
+                self._pending_gamma_review_selection = None
+                if best_index is not None:
+                    state["index"] = int(best_index)
+                    state["current_page"] = int(best_index) // grid_total
+                    self.gammaSpikeMarkersChanged.emit(
+                        self._gamma_spike_markers_from_review_rows(rows)
+                    )
+                    if state["is_zoomed"]:
+                        show_zoom(best_index)
+                    else:
+                        update_grid()
+                    return
+
+            if rows:
+                state["index"] = max(0, min(previous_index, len(rows) - 1))
+            else:
+                state["index"] = -1
+            self.gammaSpikeMarkersChanged.emit(
+                self._gamma_spike_markers_from_review_rows(rows)
+            )
+            if state["is_zoomed"] and rows:
+                show_zoom(int(state["index"]))
+            else:
+                show_grid()
+
+        def go_previous() -> None:
+            show_zoom(int(state["index"]) - 1)
+
+        def go_next() -> None:
+            show_zoom(int(state["index"]) + 1)
+
+        def prev_page() -> None:
+            if int(state["current_page"]) > 0:
+                state["current_page"] = int(state["current_page"]) - 1
+                update_grid()
+
+        def next_page() -> None:
+            state["current_page"] = int(state["current_page"]) + 1
+            update_grid()
+
+        prev_page_btn.clicked.connect(prev_page)
+        next_page_btn.clicked.connect(next_page)
+        prev_event_btn.clicked.connect(go_previous)
+        next_event_btn.clicked.connect(go_next)
+        grid_btn.clicked.connect(show_grid)
+        gamma_filter_check.toggled.connect(lambda _checked: show_zoom(int(state["index"])))
+        level_combo.currentIndexChanged.connect(lambda _index: populate())
+        channel_combo.currentIndexChanged.connect(lambda _index: populate())
+        min_power.valueChanged.connect(lambda _value: populate())
+
+        populate()
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        root.addWidget(buttons)
+
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._gamma_review_dialog = dialog
+
+    def _gamma_spike_markers_from_result(
+        self,
+        result: GammaSpikeComputationResult,
+        *,
+        mode: str,
+    ) -> dict[str, list[dict[str, float | str]]]:
+        marker_mode = str(mode or "all")
+        markers: dict[str, list[dict[str, float | str]]] = {}
+        for channel_result in result.channels:
+            gamma_events = [
+                event
+                for event in channel_result.events
+                if (
+                    event.gamma_power is not None
+                    and event.gamma_duration_ms is not None
+                    and (
+                        float(event.gamma_power) > 0.0
+                        or float(event.gamma_duration_ms) > 0.0
+                    )
+                )
+            ]
+            gamma_ids = {id(event) for event in gamma_events}
+            gamma_spikes = len(gamma_events)
+            if marker_mode == "gamma" and gamma_spikes == 0:
+                continue
+            if marker_mode == "non_gamma" and gamma_spikes > 0:
+                continue
+
+            events: list[dict[str, float | str]] = []
+            for event in channel_result.events:
+                is_gamma = id(event) in gamma_ids
+                if marker_mode == "gamma" and not is_gamma:
+                    continue
+                if marker_mode == "non_gamma" and is_gamma:
+                    continue
+                try:
+                    time_s = float(event.time_s)
+                except (TypeError, ValueError):
+                    continue
+                if not np.isfinite(time_s):
+                    continue
+                events.append(
+                    {
+                        "time_s": time_s,
+                        "kind": "gamma" if is_gamma else "regular",
+                    }
+                )
+            if events:
+                markers[str(channel_result.channel)] = events
+        return markers
+
+    def _gamma_spike_markers_from_review_rows(
+        self,
+        rows: list[GammaReviewRow],
+    ) -> dict[str, list[dict[str, float | str]]]:
+        markers: dict[str, list[dict[str, float | str]]] = {}
+        for row in rows:
+            channel = str(row.get("channel", ""))
+            if not channel:
+                continue
+            try:
+                time_s = float(row.get("time_s", np.nan))
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(time_s):
+                continue
+            kind = "gamma" if bool(row.get("is_gamma", False)) else "regular"
+            markers.setdefault(channel, []).append(
+                {
+                    "time_s": time_s,
+                    "kind": kind,
+                }
+            )
+        return markers
+
+    def _fetch_gamma_event_waveform(
+        self,
+        row: GammaReviewRow,
+        *,
+        half_window_s: float,
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        if self._ei_data_callback is None:
+            return None, None
+        try:
+            channel_name = str(row["channel"])
+            center_s = float(row["time_s"])
+        except (KeyError, TypeError, ValueError):
+            return None, None
+
+        try:
+            abs_idx = self._ch_names_displayed.index(channel_name)
+        except ValueError:
+            return None, None
+
+        start_s = max(0.0, center_s - float(half_window_s))
+        stop_s = center_s + float(half_window_s)
+        try:
+            data, fs, _names = self._ei_data_callback([int(abs_idx)], start_s, stop_s)
+        except Exception:
+            return None, None
+
+        arr = np.asarray(data, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 2:
+            return None, None
+        sfreq = float(fs)
+        if sfreq <= 0:
+            return None, None
+        waveform = np.asarray(arr[0], dtype=float).reshape(-1)
+        times = start_s + np.arange(waveform.size, dtype=float) / sfreq
+        return times, waveform
+
+    def _gamma_event_review_rows(
+        self,
+        result: GammaSpikeComputationResult,
+    ) -> list[GammaReviewRow]:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        fs = float(metadata.get("fs", 0.0) or 0.0)
+        data_start_s = float(metadata.get("data_start_s", 0.0) or 0.0)
+
+        def sample_to_time(sample0: float | None) -> float | None:
+            if sample0 is None or fs <= 0.0:
+                return None
+            try:
+                sample = float(sample0)
+            except (TypeError, ValueError):
+                return None
+            if not np.isfinite(sample):
+                return None
+            return data_start_s + sample / fs
+
+        rows: list[GammaReviewRow] = []
+        channel_counts: dict[str, int] = {}
+        for channel_result in result.channels:
+            channel_name = str(channel_result.channel)
+            for event_index, event in enumerate(channel_result.events):
+                is_gamma = self._gamma_event_is_gamma(event)
+                duration_ms = event.gamma_duration_ms
+                gamma_start_s = None
+                gamma_stop_s = None
+                if is_gamma and duration_ms is not None:
+                    try:
+                        half_duration_s = 0.5 * float(duration_ms) / 1000.0
+                    except (TypeError, ValueError):
+                        half_duration_s = 0.0
+                    if np.isfinite(half_duration_s) and half_duration_s > 0.0:
+                        gamma_start_s = float(event.time_s) - half_duration_s
+                        gamma_stop_s = float(event.time_s) + half_duration_s
+
+                p1_time = sample_to_time(event.boundary_p1_sample)
+                n1_time = sample_to_time(event.boundary_n1_sample)
+                n2_time = sample_to_time(event.boundary_n2_sample)
+                event_start_s = p1_time if p1_time is not None else float(event.time_s) - 0.075
+                event_stop_s = n2_time if n2_time is not None else float(event.time_s) + 0.075
+                if event_stop_s < event_start_s:
+                    event_start_s, event_stop_s = event_stop_s, event_start_s
+                channel_counts[channel_name] = channel_counts.get(channel_name, 0) + 1
+
+                rows.append(
+                    {
+                        "channel": channel_name,
+                        "event_index": int(event_index),
+                        "event_number": int(channel_counts[channel_name]),
+                        "spike_label": f"{channel_name}-{channel_counts[channel_name]}",
+                        "time_s": float(event.time_s),
+                        "event_start_time_s": float(event_start_s),
+                        "event_stop_time_s": float(event_stop_s),
+                        "is_gamma": bool(is_gamma),
+                        "gamma_power": event.gamma_power,
+                        "gamma_frequency_hz": event.gamma_frequency_hz,
+                        "gamma_duration_ms": event.gamma_duration_ms,
+                        "boundary_p1_time_s": p1_time,
+                        "boundary_n1_time_s": n1_time,
+                        "boundary_n2_time_s": n2_time,
+                        "gamma_start_time_s": gamma_start_s,
+                        "gamma_stop_time_s": gamma_stop_s,
+                        "error": event.error,
+                    }
+                )
+        rows.sort(key=lambda row: (str(row["channel"]).casefold(), float(row["time_s"])))
+        return rows
+
+    def _gamma_event_is_gamma(self, event: GammaSpikeEventResult) -> bool:
+        if event.gamma_power is None or event.gamma_duration_ms is None:
+            return False
+        try:
+            power = float(event.gamma_power)
+            duration = float(event.gamma_duration_ms)
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            np.isfinite(power)
+            and np.isfinite(duration)
+            and (power > 0.0 or duration > 0.0)
+        )
+
     def _gamma_summary_rows(
         self,
         result: GammaSpikeComputationResult,
-    ) -> list[dict[str, float | int | str]]:
-        rows: list[dict[str, float | int | str]] = []
+    ) -> list[GammaSummaryRow]:
+        rows: list[GammaSummaryRow] = []
         for channel_result in result.channels:
             total_spikes = int(channel_result.spike_count)
             gamma_events = [
@@ -1746,7 +2649,7 @@ class ComputationPanel(QWidget):
                         np.max(finite_values)
                     )
 
-        summary_rows: list[dict[str, float | int | str]] = []
+        summary_rows: list[EISummaryRow] = []
         for original_order, channel_result in enumerate(result.channels):
             recruitment_delay, has_delay_metadata = self._compute_recruitment_delay(
                 channel_result,
@@ -1783,7 +2686,7 @@ class ComputationPanel(QWidget):
                 }
             )
 
-        def populate_summary_table(rows: list[dict[str, float | int | str]]) -> None:
+        def populate_summary_table(rows: list[EISummaryRow]) -> None:
             table.setSortingEnabled(False)
             table.setRowCount(0)
             self._ei_summary_row_by_channel = {}
@@ -1824,7 +2727,7 @@ class ComputationPanel(QWidget):
                 channel_name = item.text()
             self.eiSummaryChannelActivated.emit(str(channel_name))
 
-        sort_state = {
+        sort_state: EISummarySortState = {
             "column": -1,
             "order": Qt.SortOrder.AscendingOrder,
             "channel_mode": "display",
@@ -1865,19 +2768,37 @@ class ComputationPanel(QWidget):
             sort_state["column"] = column
             sort_state["channel_mode"] = "display"
 
-            key_map = {
-                1: "ei_score",
-                2: "rank",
-                3: "hfer_activity",
-                4: "recruitment_delay",
-            }
-            key_name = key_map.get(column, "original_order")
             reverse = sort_state["order"] == Qt.SortOrder.DescendingOrder
-            sorted_rows = sorted(
-                summary_rows,
-                key=lambda row: row[key_name],
-                reverse=reverse,
-            )
+            if column == 1:
+                sorted_rows = sorted(
+                    summary_rows,
+                    key=lambda row: row["ei_score"],
+                    reverse=reverse,
+                )
+            elif column == 2:
+                sorted_rows = sorted(
+                    summary_rows,
+                    key=lambda row: row["rank"],
+                    reverse=reverse,
+                )
+            elif column == 3:
+                sorted_rows = sorted(
+                    summary_rows,
+                    key=lambda row: row["hfer_activity"],
+                    reverse=reverse,
+                )
+            elif column == 4:
+                sorted_rows = sorted(
+                    summary_rows,
+                    key=lambda row: row["recruitment_delay"],
+                    reverse=reverse,
+                )
+            else:
+                sorted_rows = sorted(
+                    summary_rows,
+                    key=lambda row: row["original_order"],
+                    reverse=reverse,
+                )
             header.setSortIndicator(column, sort_state["order"])
             populate_summary_table(sorted_rows)
 
