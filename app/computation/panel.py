@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import time
-from typing import Callable, Literal, Optional, TypedDict, cast
+from typing import Any, Callable, Literal, Optional, TypedDict, cast
 
 import numpy as np
 import pyqtgraph as pg
@@ -11,12 +11,14 @@ from scipy import signal
 from mne.io import BaseRaw
 
 from PySide6.QtCore import Qt, Slot, Signal, QRectF
+from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QCheckBox, QDoubleSpinBox, QPushButton, QGroupBox, QDialog,
-    QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup,
+    QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup, QAbstractButton,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
-    QHeaderView, QTabWidget, QComboBox, QSpinBox, QGridLayout, QScrollArea,
+    QHeaderView, QComboBox, QSpinBox, QGridLayout, QScrollArea,
+    QSplitter,
 )
 
 from app.viewer.time_controls import TimeWindowControl
@@ -93,6 +95,7 @@ class GammaSummaryRow(TypedDict):
     channel_sort: str
     total_spikes: int
     gamma_spikes: int
+    non_gamma_spikes: int
     spike_gamma_rate: float
     spike_gamma_rate_text: str
     mean_gamma_power: float
@@ -133,7 +136,7 @@ class _GammaSpikeCardFrame(QFrame):
         self._event_index = int(event_index)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
-    def mousePressEvent(self, event) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self._event_index)
             event.accept()
@@ -732,6 +735,8 @@ class ComputationPanel(QWidget):
     def _refresh_channel_list_titles(self) -> None:
         for row in range(self.list_channels.count()):
             item = self.list_channels.item(row)
+            if item is None:
+                continue
             abs_idx = int(item.data(Qt.ItemDataRole.UserRole))
             item.setText(self._abs_to_display_name(abs_idx))
 
@@ -797,12 +802,14 @@ class ComputationPanel(QWidget):
             text = (text or "").strip().lower()
             for i in range(lst.count()):
                 item = lst.item(i)
+                if item is None:
+                    continue
                 item.setHidden(text not in item.text().lower())
 
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
         search.textChanged.connect(apply_filter)
-        search.returnPressed.connect(
-            lambda: buttons.button(QDialogButtonBox.StandardButton.Ok).click()
-        )
+        if ok_button is not None:
+            search.returnPressed.connect(ok_button.click)
 
         buttons.accepted.connect(dlg.accept)
         buttons.rejected.connect(dlg.reject)
@@ -810,6 +817,8 @@ class ComputationPanel(QWidget):
         current = set(self.state.selected_abs)
         for i in range(lst.count()):
             item = lst.item(i)
+            if item is None:
+                continue
             abs_idx = int(item.data(Qt.ItemDataRole.UserRole))
             if abs_idx in current:
                 item.setSelected(True)
@@ -937,8 +946,8 @@ class ComputationPanel(QWidget):
         except ValueError:
             return None
 
-    def _on_algorithm_button_clicked(self, button=None) -> None:
-        if button is None or not hasattr(button, "property"):
+    def _on_algorithm_button_clicked(self, button: QAbstractButton | None = None) -> None:
+        if button is None:
             button = self.algo_buttons.checkedButton()
         if button is None:
             return
@@ -2022,7 +2031,8 @@ class ComputationPanel(QWidget):
             layout.addWidget(footer)
 
             card.clicked.connect(show_zoom)
-            plot.scene().sigMouseClicked.connect(lambda _event, idx=global_index: show_zoom(idx))
+            plot_scene = cast(Any, plot.scene())
+            plot_scene.sigMouseClicked.connect(lambda _event, idx=global_index: show_zoom(idx))
             return card
 
         def update_page_controls() -> None:
@@ -2893,15 +2903,16 @@ class ComputationPanel(QWidget):
         heatmap_plot.showGrid(x=True, y=True, alpha=0.15)
         heatmap_plot.setLabel("bottom", "Time from seizure onset (s)")
         heatmap_plot.setLabel("left", "Channel")
-        heatmap_plot.getAxis("left").setWidth(140)
-        heatmap_plot.getViewBox().invertY(True)
+        heatmap_plot_left_axis = cast(Any, heatmap_plot.getAxis("left"))
+        heatmap_plot_left_axis.setWidth(140)
+        cast(Any, heatmap_plot.getViewBox()).invertY(True)
         score_plot.setYLink(heatmap_plot)
-        score_plot.getViewBox().invertY(True)
+        cast(Any, score_plot.getViewBox()).invertY(True)
 
         heatmap_image = pg.ImageItem(axisOrder="row-major")
         heatmap_plot.addItem(heatmap_image)
-        color_map = pg.colormap.get("viridis")
-        color_bar: pg.ColorBarItem | None = None
+        color_map = cast(Any, pg.colormap.get("viridis"))
+        color_bar: Any | None = None
         if color_map is not None:
             lookup_table = np.asarray(color_map.getLookupTable(), dtype=np.float64)
             heatmap_image.setLookupTable(lookup_table)
@@ -2918,8 +2929,8 @@ class ComputationPanel(QWidget):
             pen=pg.mkPen((230, 230, 230), width=1.2, style=Qt.PenStyle.DashLine),
         )
         heatmap_plot.addItem(onset_line)
-        heatmap_view_box = heatmap_plot.getViewBox()
-        score_view_box = score_plot.getViewBox()
+        heatmap_view_box = cast(Any, heatmap_plot.getViewBox())
+        score_view_box = cast(Any, score_plot.getViewBox())
         plot_splitter = QSplitter(Qt.Orientation.Horizontal)
         plot_splitter.setChildrenCollapsible(False)
         plot_splitter.addWidget(score_plot)
@@ -3013,7 +3024,7 @@ class ComputationPanel(QWidget):
                 yRange=(-0.5, max(0.5, float(n_rows) - 0.5)),
                 padding=0.0,
             )
-            heatmap_plot.getAxis("left").setTicks(
+            heatmap_plot_left_axis.setTicks(
                 [[(row_idx, channel_name) for row_idx, channel_name in enumerate(channel_names)]]
             )
 

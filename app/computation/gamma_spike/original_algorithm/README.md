@@ -1,13 +1,13 @@
 # Python2 Segmented Spike-Gamma Pipeline
 
-This folder is the clean export target for integration into your software.
+This folder contains the integrated spike-gamma implementation used by the app.
 
-It merges:
+It was derived from:
 
 - the validated `Python2` core algorithm translation from `matlab2`
-- the segmented long-recording pipeline from `Python_segment`
+- the segmented long-recording validation pipeline
 
-Validation scripts and large output CSVs are intentionally not included here.
+Validation scripts, the old reference folder, and large output CSVs are intentionally not included here.
 
 ## Main Import
 
@@ -63,9 +63,6 @@ The pipeline can read:
 - `.fif`
 - `.ieeg` JSON metadata files that point to a source raw file
 
-## Folder Roles
+## Current Role
 
-- `app.computation.gamma_spike.original_algorithm`: clean export/integration code
-- `Python2`: preserved validated core translation
-- `Python_segment`: preserved segmented validation scripts and generated outputs
-- `testing2`: preserved MATLAB/Python validation evidence
+- `app.computation.gamma_spike.original_algorithm`: maintained implementation used by the GUI and command-line runner

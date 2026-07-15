@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 import mne
@@ -89,6 +90,31 @@ class _SilentConsole:
 
     def close(self) -> None:
         return
+
+
+class MontageEditorRowMeta(TypedDict):
+    source_pair: BipolarPair | None
+    is_new: bool
+    editable_ch1: bool
+    editable_ch2: bool
+    ch1_combo: QComboBox | None
+    ch2_combo: QComboBox | None
+
+
+class MontageEditorCurrentRow(TypedDict):
+    pair_name: str
+    ch1_value: str
+    ch2_value: str
+    origin_value: str
+    editable_ch1: bool
+    editable_ch2: bool
+    source_pair: BipolarPair | None
+    is_new: bool
+
+
+class MontageEditorSortState(TypedDict):
+    column: int | None
+    order: Qt.SortOrder
 
 
 class MainWindow(QMainWindow):
@@ -2572,8 +2598,8 @@ class MainWindow(QMainWindow):
         header.setSortIndicatorShown(False)
         layout.addWidget(table)
 
-        row_meta: list[dict] = []
-        sort_state = {
+        row_meta: list[MontageEditorRowMeta] = []
+        sort_state: MontageEditorSortState = {
             "column": None,
             "order": Qt.SortOrder.AscendingOrder,
         }
@@ -2592,7 +2618,7 @@ class MainWindow(QMainWindow):
             editable_ch2: bool,
             ch1_choices: list[str] | None = None,
             ch2_choices: list[str] | None = None,
-            source_pair=None,
+            source_pair: BipolarPair | None = None,
             is_new: bool = False,
         ) -> None:
             table.insertRow(row_index)
@@ -2678,7 +2704,7 @@ class MainWindow(QMainWindow):
                 ch2_combo.currentTextChanged.connect(lambda _text: _refresh_preview())
 
         def _rebuild_table() -> None:
-            current_rows = []
+            current_rows: list[MontageEditorCurrentRow] = []
 
             for row in range(table.rowCount()):
                 meta = row_meta[row]
@@ -2686,14 +2712,16 @@ class MainWindow(QMainWindow):
                 name_item = table.item(row, 0)
                 origin_item = table.item(row, 3)
 
-                if meta["ch1_combo"] is not None:
-                    ch1_value = meta["ch1_combo"].currentText().strip()
+                ch1_combo = meta["ch1_combo"]
+                if ch1_combo is not None:
+                    ch1_value = ch1_combo.currentText().strip()
                 else:
                     ch1_item = table.item(row, 1)
                     ch1_value = ch1_item.text().strip() if ch1_item is not None else ""
 
-                if meta["ch2_combo"] is not None:
-                    ch2_value = meta["ch2_combo"].currentText().strip()
+                ch2_combo = meta["ch2_combo"]
+                if ch2_combo is not None:
+                    ch2_value = ch2_combo.currentText().strip()
                 else:
                     ch2_item = table.item(row, 2)
                     ch2_value = ch2_item.text().strip() if ch2_item is not None else ""

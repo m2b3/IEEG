@@ -1,5 +1,5 @@
 r"""
-2-EI_algorithm.py
+app.computation.rei.algorithm
 
 Batch EI computation using your existing segment CSV.
 
@@ -26,13 +26,13 @@ Install in your VS Code .venv:
     pip install numpy scipy pandas mne
 
 Run on Windows:
-    python scripts\2-EI_algorithm.py ^
+    python -m app.computation.rei.algorithm ^
         --data_root r"C:\Users\F15\Desktop\EI_Benchmarking\data_bids" ^
         --segments_csv "C:\Users\F15\Desktop\EI_Benchmarking\expert_annotations\baseline_ictal_segments_clean.csv" ^
         --output_dir "C:\Users\F15\Desktop\EI_Benchmarking\results\2-EI_Results"
 
 Run on Mac/Linux:
-    python scripts/2-EI_algorithm.py \
+    python -m app.computation.rei.algorithm \
         --data_root ./data_bids \
         --segments_csv ./expert_annotations/baseline_ictal_segments_clean.csv \
         --output_dir ./results/2-EI_Results
