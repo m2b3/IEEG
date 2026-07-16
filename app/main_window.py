@@ -1703,6 +1703,7 @@ class MainWindow(QMainWindow):
             displayed_names,
             channel_groups=display_channel_groups,
             bad_names=self.viewer.get_bad_channels(),
+            source_file_path=self.loaded_file,
         )
         
     def _sync_comp_panel_view_state(self, t0: float | None = None) -> None:

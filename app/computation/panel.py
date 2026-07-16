@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import time
 from typing import Any, Callable, Literal, Optional, TypedDict, cast
 
@@ -18,7 +19,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup, QAbstractButton,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QSpinBox, QGridLayout, QScrollArea, QGraphicsRectItem,
-    QSplitter,
+    QSplitter, QFileDialog,
 )
 
 from app.viewer.time_controls import TimeWindowControl
@@ -33,7 +34,12 @@ from app.computation.gamma_spike.wire_algorithm import (
     GammaSpikeEventResult,
     compute_gamma_spike_for_gui,
 )
+from app.computation.exporters import (
+    export_ei_result,
+    export_gamma_spike_result,
+)
 from app.diagnostics.performance_monitor import timed_mark
+from app.preprocessing.filtering import NOTCH_OFF
 from app.ui_busy import busy_cursor
 
 
@@ -175,6 +181,7 @@ class ComputationPanel(QWidget):
 
         self._raw: BaseRaw | None = None
         self._picks: np.ndarray | None = None           # abs_idx -> raw_idx
+        self._source_file_path: Path | None = None
         self._ch_names_displayed: list[str] = []        # abs_idx -> display name
         self._channel_groups: dict[str, str] = {}   # display_name -> "macro" | "micro"
         self._bad_names: set[str] = set()
@@ -192,6 +199,7 @@ class ComputationPanel(QWidget):
         self._gamma_summary_dialog: QDialog | None = None
         self._gamma_review_dialog: QDialog | None = None
         self._pending_gamma_review_selection: tuple[str, float] | None = None
+        self._last_export_dir: Path | None = None
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
         self._gamma_default_window_applied = False
@@ -425,6 +433,10 @@ class ComputationPanel(QWidget):
         self.btn_open_ei_heatmap.setEnabled(False)
         p_layout.addWidget(self.btn_open_ei_heatmap)
 
+        self.btn_export_ei = QPushButton("Export REI results")
+        self.btn_export_ei.setEnabled(False)
+        p_layout.addWidget(self.btn_export_ei)
+
         self.btn_open_gamma_summary = QPushButton("Open channel-level summary")
         self.btn_open_gamma_summary.setEnabled(False)
         self.btn_open_gamma_summary.hide()
@@ -434,6 +446,11 @@ class ComputationPanel(QWidget):
         self.btn_open_gamma_review.setEnabled(False)
         self.btn_open_gamma_review.hide()
         p_layout.addWidget(self.btn_open_gamma_review)
+
+        self.btn_export_gamma = QPushButton("Export gamma results")
+        self.btn_export_gamma.setEnabled(False)
+        self.btn_export_gamma.hide()
+        p_layout.addWidget(self.btn_export_gamma)
 
         root.addWidget(gb_p, 0)
 
@@ -464,8 +481,10 @@ class ComputationPanel(QWidget):
         self.btn_run.clicked.connect(self._run_computation)
         self.btn_open_ei_summary.clicked.connect(self._open_ei_summary_dialog)
         self.btn_open_ei_heatmap.clicked.connect(self._open_ei_heatmap_dialog)
+        self.btn_export_ei.clicked.connect(self._export_ei_results)
         self.btn_open_gamma_summary.clicked.connect(self._open_gamma_summary_dialog)
         self.btn_open_gamma_review.clicked.connect(self._open_gamma_review_dialog)
+        self.btn_export_gamma.clicked.connect(self._export_gamma_results)
 
         self.btn_sel_all.clicked.connect(self._select_all_channels)
         self.btn_sel_macro.clicked.connect(lambda: self._select_group_channels("macro"))
@@ -484,9 +503,11 @@ class ComputationPanel(QWidget):
         displayed_names: list[str],
         channel_groups: dict[str, str] | None = None,
         bad_names: list[str] | set[str] | None = None,
+        source_file_path: Path | str | None = None,
     ) -> None:
         self._raw = raw
         self._picks = picks
+        self._source_file_path = Path(source_file_path) if source_file_path else None
         self._ch_names_displayed = list(displayed_names or [])
         self._bad_names = {str(name) for name in (bad_names or [])}
 
@@ -507,11 +528,10 @@ class ComputationPanel(QWidget):
         self._sync_list_widget_from_state()
         self._update_channels_title()
         self._update_group_button_titles()
-        if self.state.algorithm == "ei":
-            self._clear_ei_outputs()
+        self._clear_ei_outputs()
         if self.state.algorithm == "gamma_spike":
             self._set_gamma_window_to_full_recording(emit=True)
-            self._clear_gamma_outputs()
+        self._clear_gamma_outputs()
         
     def set_selected_channels_abs(self, selected_abs: list[int], *, replace: bool = True) -> None:
         cleaned = sorted(
@@ -531,10 +551,8 @@ class ComputationPanel(QWidget):
 
         self._sync_list_widget_from_state()
         self._update_channels_title()
-        if self.state.algorithm == "ei":
-            self._clear_ei_outputs()
-        if self.state.algorithm == "gamma_spike":
-            self._clear_gamma_outputs()
+        self._clear_ei_outputs()
+        self._clear_gamma_outputs()
         self.panelSelectionChanged.emit(self.state.selected_abs)
         self.settingsChanged.emit()
 
@@ -930,11 +948,74 @@ class ComputationPanel(QWidget):
             raise ValueError("Gamma analysis end must be after analysis start.")
         total_s = self._total_duration_s()
         if total_s is not None:
-            if start_s < 0.0 or end_s > total_s:
+            tolerance_s = max(1e-9, 0.5 / self._sampling_frequency_hz())
+            if start_s < 0.0 or end_s > total_s + tolerance_s:
                 raise ValueError("Gamma analysis window must stay inside the recording.")
+            end_s = min(float(end_s), float(total_s))
         self.state.gamma_start_s = float(start_s)
         self.state.gamma_end_s = float(end_s)
         return float(start_s), float(end_s)
+
+    def _choose_export_dir(self, title: str) -> Path | None:
+        start_dir = (
+            str(self._last_export_dir)
+            if self._last_export_dir is not None
+            else str(Path.home())
+        )
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            title,
+            start_dir,
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return None
+        return Path(selected)
+
+    def _confirm_export_overwrite(
+        self,
+        output_dir: Path,
+        filenames: list[str],
+        *,
+        title: str,
+    ) -> bool:
+        existing: list[str] = []
+        for name in filenames:
+            path = output_dir / name
+            if not path.exists():
+                continue
+            if path.is_dir():
+                png_count = len(list(path.glob("*.png")))
+                existing.append(
+                    f"{name}/ ({png_count} PNG files)"
+                    if png_count
+                    else f"{name}/"
+                )
+            else:
+                existing.append(name)
+        if not existing:
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle(title)
+        message.setText("Overwrite existing export files?")
+        message.setInformativeText(
+            "The selected folder already contains:\n"
+            + "\n".join(f"- {name}" for name in existing)
+            + "\n\nContinuing will replace these files."
+        )
+        message.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        message.setDefaultButton(QMessageBox.StandardButton.No)
+        result = message.exec()
+        if result == QMessageBox.StandardButton.Yes:
+            return True
+        try:
+            return int(result) == int(QMessageBox.StandardButton.Yes)
+        except (TypeError, ValueError):
+            return False
 
     # ---------- Internals : EI controls ----------
 
@@ -963,8 +1044,18 @@ class ComputationPanel(QWidget):
 
         self.btn_open_ei_summary.setVisible(is_ei)
         self.btn_open_ei_heatmap.setVisible(is_ei)
+        self.btn_export_ei.setVisible(is_ei)
         self.btn_open_gamma_summary.setVisible(is_gamma)
         self.btn_open_gamma_review.setVisible(is_gamma)
+        self.btn_export_gamma.setVisible(is_gamma)
+        self.btn_open_ei_summary.setEnabled(self._last_ei_result is not None)
+        self.btn_open_ei_heatmap.setEnabled(
+            self._last_ei_result is not None and bool(self._last_ei_result.heatmap.size)
+        )
+        self.btn_export_ei.setEnabled(self._last_ei_result is not None)
+        self.btn_open_gamma_summary.setEnabled(self._last_gamma_result is not None)
+        self.btn_open_gamma_review.setEnabled(self._last_gamma_result is not None)
+        self.btn_export_gamma.setEnabled(self._last_gamma_result is not None)
 
         if is_ei:
             self.btn_run.setText("Run REI")
@@ -982,10 +1073,6 @@ class ComputationPanel(QWidget):
         else:
             self.btn_run.setText("Run")
 
-        if is_ei:
-            self._clear_ei_outputs()
-        if is_gamma:
-            self._clear_gamma_outputs()
         if not is_gamma:
             self.gammaAnalysisWindowChanged.emit(None, None)
         self.settingsChanged.emit()
@@ -1072,6 +1159,7 @@ class ComputationPanel(QWidget):
         self.state.ictal_start_s = float(self.edit_ictal_start.value())
         self.state.ictal_end_s = float(self.edit_ictal_end.value())
         if emit:
+            self._clear_ei_outputs()
             self.settingsChanged.emit()
 
     def _read_ei_inputs_from_ui(self) -> tuple[float, float, float, float, float, float]:
@@ -1095,7 +1183,19 @@ class ComputationPanel(QWidget):
     def _total_duration_s(self) -> float | None:
         if self._raw is None or self._raw.n_times <= 1:
             return None
-        return float(self._raw.times[-1])
+        fs = self._sampling_frequency_hz()
+        if fs <= 0.0:
+            return float(self._raw.times[-1])
+        return float(self._raw.n_times) / fs
+
+    def _sampling_frequency_hz(self) -> float:
+        if self._raw is None:
+            return 1.0
+        try:
+            fs = float(self._raw.info["sfreq"])
+        except Exception:
+            return 1.0
+        return fs if np.isfinite(fs) and fs > 0.0 else 1.0
 
     def _validate_ei_inputs(self) -> tuple[bool, str]:
         if self._raw is None or self._picks is None:
@@ -1217,6 +1317,8 @@ class ComputationPanel(QWidget):
                     str(exc),
                 )
                 return
+            if not self._confirm_gamma_notch_before_run():
+                return
 
             error_message = None
             with busy_cursor(self, "Running gamma spike detector..."):
@@ -1287,7 +1389,7 @@ class ComputationPanel(QWidget):
         }
         notch_modes_by_channel = self._ei_notch_modes_for_channels(channel_names)
 
-        return compute_ei_for_gui(
+        result = compute_ei_for_gui(
             data=data,
             fs=float(fs),
             channel_names=list(channel_names),
@@ -1308,6 +1410,10 @@ class ComputationPanel(QWidget):
                 notch_modes_by_channel=notch_modes_by_channel,
             ),
         )
+        if self._source_file_path is not None:
+            result.metadata["source_file_name"] = self._source_file_path.name
+            result.metadata["source_file_path"] = str(self._source_file_path)
+        return result
 
     def _ei_notch_modes_for_channels(self, channel_names: list[str]) -> dict[str, str]:
         if self._ei_filter_callback is None:
@@ -1324,6 +1430,35 @@ class ComputationPanel(QWidget):
             mode = str(modes_by_group.get(group, modes_by_group.get("macro", "Off")))
             modes[channel_name] = mode
         return modes
+
+    def _confirm_gamma_notch_before_run(self) -> bool:
+        selected_names = [
+            str(self._ch_names_displayed[int(idx)])
+            for idx in self.state.selected_abs
+            if 0 <= int(idx) < len(self._ch_names_displayed)
+        ]
+        notch_modes = self._ei_notch_modes_for_channels(selected_names)
+        active_modes = {
+            str(mode)
+            for mode in notch_modes.values()
+            if str(mode) != NOTCH_OFF
+        }
+        if active_modes:
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("Gamma spike detector")
+        message.setText("Run gamma spike analysis without a notch filter?")
+        message.setInformativeText(
+            "No notch filter is selected for the gamma spike channels. "
+            "Line noise may affect gamma power measurements."
+        )
+        message.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        message.setDefaultButton(QMessageBox.StandardButton.No)
+        return message.exec() == QMessageBox.StandardButton.Yes
 
     def _compute_gamma_spike_result(
         self,
@@ -1348,14 +1483,20 @@ class ComputationPanel(QWidget):
             padded_start_s,
             padded_stop_s,
         )
-        return compute_gamma_spike_for_gui(
+        notch_modes_by_channel = self._ei_notch_modes_for_channels(channel_names)
+        result = compute_gamma_spike_for_gui(
             data=data,
             fs=float(fs),
             channel_names=list(channel_names),
             data_start_s=float(padded_start_s),
             analysis_window_s=(float(start_s), float(stop_s)),
             filter_context_seconds=filter_context_s,
+            notch_modes_by_channel=notch_modes_by_channel,
         )
+        if self._source_file_path is not None:
+            result.metadata["source_file_name"] = self._source_file_path.name
+            result.metadata["source_file_path"] = str(self._source_file_path)
+        return result
 
     def _clear_gamma_outputs(self) -> None:
         self._last_gamma_result = None
@@ -1366,6 +1507,8 @@ class ComputationPanel(QWidget):
             self.btn_open_gamma_summary.setEnabled(False)
         if hasattr(self, "btn_open_gamma_review"):
             self.btn_open_gamma_review.setEnabled(False)
+        if hasattr(self, "btn_export_gamma"):
+            self.btn_export_gamma.setEnabled(False)
 
     def _show_gamma_result(self, result: GammaSpikeComputationResult) -> None:
         self._last_gamma_result = result
@@ -1373,8 +1516,48 @@ class ComputationPanel(QWidget):
         self._gamma_review_dialog = None
         self.btn_open_gamma_summary.setEnabled(True)
         self.btn_open_gamma_review.setEnabled(True)
+        self.btn_export_gamma.setEnabled(True)
         self.gammaSpikeMarkersChanged.emit(
             self._gamma_spike_markers_from_result(result, mode="all")
+        )
+
+    def _export_gamma_results(self) -> None:
+        result = self._last_gamma_result
+        if result is None:
+            QMessageBox.information(
+                self,
+                "Export gamma results",
+                "Run the gamma spike detector before exporting results.",
+            )
+            return
+        output_dir = self._choose_export_dir("Select folder for gamma export")
+        if output_dir is None:
+            return
+        if not self._confirm_export_overwrite(
+            output_dir,
+            [
+                "gamma_channel_summary.csv",
+                "gamma_spike_events.csv",
+                "gamma_metadata.json",
+                "README.txt",
+            ],
+            title="Export gamma results",
+        ):
+            return
+        try:
+            written_paths = export_gamma_spike_result(output_dir, result)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Export gamma results",
+                f"Could not export gamma results:\n{exc}",
+            )
+            return
+        self._last_export_dir = output_dir
+        QMessageBox.information(
+            self,
+            "Export gamma results",
+            f"Exported {len(written_paths)} files to:\n{output_dir}",
         )
 
     def open_gamma_review_at(self, channel_name: str, time_s: float) -> None:
@@ -1960,7 +2143,7 @@ class ComputationPanel(QWidget):
             t_arr = None if times is None else np.asarray(times, dtype=float).reshape(-1)
             y_arr = None if waveform is None else np.asarray(waveform, dtype=float).reshape(-1)
             if t_arr is None or y_arr is None or t_arr.size < 16 or t_arr.size != y_arr.size:
-                tf_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
+                tf_plot.setXRange(time_s - 1.0, time_s + 1.0, padding=0.02)
                 tf_plot.setYRange(20.0, 140.0, padding=0.02)
                 return
 
@@ -1968,10 +2151,14 @@ class ComputationPanel(QWidget):
             if not np.isfinite(dt) or dt <= 0.0:
                 return
             fs = 1.0 / dt
-            nperseg = int(min(max(32, round(0.128 * fs)), y_arr.size))
+            nperseg = int(min(max(32, round(0.064 * fs)), y_arr.size))
             if nperseg < 16:
                 return
-            noverlap = int(min(nperseg - 1, max(0, round(0.85 * nperseg))))
+            hop_samples = max(1, int(round(0.006 * fs)))
+            noverlap = int(max(0, nperseg - hop_samples))
+            nfft_target = max(nperseg, int(round(0.5 * fs)))
+            nfft = int(2 ** np.ceil(np.log2(max(16, nfft_target))))
+            nfft = min(max(nfft, nperseg), 4096)
             try:
                 freqs, rel_times, power = signal.spectrogram(
                     y_arr - float(np.nanmean(y_arr)),
@@ -1979,6 +2166,7 @@ class ComputationPanel(QWidget):
                     window="hann",
                     nperseg=nperseg,
                     noverlap=noverlap,
+                    nfft=nfft,
                     detrend=False,
                     scaling="spectrum",
                     mode="magnitude",
@@ -2004,6 +2192,10 @@ class ComputationPanel(QWidget):
 
             tf_image = pg.ImageItem(axisOrder="row-major")
             tf_image.setImage(log_power, levels=(low_level, high_level), autoLevels=False)
+            try:
+                tf_image.setOpts(autoDownsample=False)
+            except Exception:
+                pass
             color_map = cast(Any, pg.colormap.get("viridis"))
             if color_map is not None:
                 tf_image.setLookupTable(np.asarray(color_map.getLookupTable(), dtype=np.float64))
@@ -2048,6 +2240,64 @@ class ComputationPanel(QWidget):
             spike_line.setZValue(20)
             tf_plot.addItem(spike_line)
 
+        def reset_waveform_view(
+            row: GammaReviewRow,
+            times: np.ndarray | None,
+            waveform: np.ndarray | None,
+        ) -> None:
+            try:
+                time_s = float(row["time_s"])
+            except (TypeError, ValueError):
+                time_s = 0.0
+            t_arr = None if times is None else np.asarray(times, dtype=float).reshape(-1)
+            y_arr = None if waveform is None else np.asarray(waveform, dtype=float).reshape(-1)
+            if t_arr is None or y_arr is None or t_arr.size < 2 or t_arr.size != y_arr.size:
+                zoom_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
+                zoom_plot.enableAutoRange(axis="y", enable=True)
+                return
+            zoom_plot.setXRange(float(t_arr[0]), float(t_arr[-1]), padding=0.02)
+            finite_y = y_arr[np.isfinite(y_arr)]
+            if not finite_y.size:
+                zoom_plot.enableAutoRange(axis="y", enable=True)
+                return
+            y_min = float(np.min(finite_y))
+            y_max = float(np.max(finite_y))
+            if y_max <= y_min:
+                y_min -= 1.0
+                y_max += 1.0
+            y_pad = 0.08 * (y_max - y_min)
+            zoom_plot.setYRange(y_min - y_pad, y_max + y_pad, padding=0.02)
+
+        def reset_current_gamma_zoom() -> None:
+            rows = list(state["rows"])
+            index = int(state["index"])
+            if index < 0 or index >= len(rows):
+                return
+            row = rows[index]
+            times, waveform = self._fetch_gamma_event_waveform(row, half_window_s=0.45)
+            tf_times, tf_waveform = self._fetch_gamma_event_waveform(row, half_window_s=1.0)
+            plotted_waveform = (
+                maybe_gamma_filter_trace(times, waveform)
+                if times is not None and waveform is not None
+                else waveform
+            )
+            reset_waveform_view(row, times, plotted_waveform)
+            update_time_frequency(row, tf_times, tf_waveform)
+            self.gammaSpikeEventActivated.emit(str(row["channel"]), float(row["time_s"]))
+
+        def on_zoom_plot_clicked(event: Any) -> None:
+            try:
+                is_double = bool(event.double())
+            except Exception:
+                is_double = False
+            if not is_double:
+                return
+            reset_current_gamma_zoom()
+            try:
+                event.accept()
+            except Exception:
+                pass
+
         def update_zoom(row: GammaReviewRow) -> None:
             channel = str(row["channel"])
             time_s = float(row["time_s"])
@@ -2082,15 +2332,16 @@ class ComputationPanel(QWidget):
             zoom_plot.clear()
             zoom_plot.setBackground("w")
             times, waveform = self._fetch_gamma_event_waveform(row, half_window_s=0.45)
+            tf_times, tf_waveform = self._fetch_gamma_event_waveform(row, half_window_s=1.0)
             plotted_waveform = waveform
             if times is not None and waveform is not None:
                 plotted_waveform = maybe_gamma_filter_trace(times, waveform)
                 zoom_plot.plot(times, plotted_waveform, pen=pg.mkPen("#222222", width=1.5))
-                zoom_plot.setXRange(float(times[0]), float(times[-1]), padding=0.02)
             else:
-                zoom_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
+                plotted_waveform = None
             draw_analysis_markers(zoom_plot, row, times, plotted_waveform)
-            update_time_frequency(row, times, waveform)
+            reset_waveform_view(row, times, plotted_waveform)
+            update_time_frequency(row, tf_times, tf_waveform)
 
             self.gammaSpikeEventActivated.emit(channel, time_s)
 
@@ -2308,6 +2559,7 @@ class ComputationPanel(QWidget):
         next_event_btn.clicked.connect(go_next)
         grid_btn.clicked.connect(show_grid)
         gamma_filter_check.toggled.connect(lambda _checked: show_zoom(int(state["index"])))
+        cast(Any, zoom_plot.scene()).sigMouseClicked.connect(on_zoom_plot_clicked)
         level_combo.currentIndexChanged.connect(lambda _index: populate())
         channel_combo.currentIndexChanged.connect(lambda _index: populate())
         min_power.valueChanged.connect(lambda _value: populate())
@@ -2693,7 +2945,7 @@ class ComputationPanel(QWidget):
                 else None
             ),
             "bad_channels_excluded": True,
-            "uses_display_filter": False,
+            "display_filter_used_for_computation": False,
             "analysis_filter": {
                 "type": "butterworth_bandpass",
                 "order": int(self.ei_params["filter_order"]),
@@ -2727,6 +2979,9 @@ class ComputationPanel(QWidget):
         if hasattr(self, "btn_open_ei_heatmap"):
             self.btn_open_ei_heatmap.setEnabled(False)
 
+        if hasattr(self, "btn_export_ei"):
+            self.btn_export_ei.setEnabled(False)
+
     def _show_ei_result(self, result: EIComputationResult) -> None:
         self._last_ei_result = result
         self.ei_result_metadata = result.metadata
@@ -2750,6 +3005,47 @@ class ComputationPanel(QWidget):
 
         self.btn_open_ei_summary.setEnabled(True)
         self.btn_open_ei_heatmap.setEnabled(bool(result.heatmap.size))
+        self.btn_export_ei.setEnabled(True)
+
+    def _export_ei_results(self) -> None:
+        result = self._last_ei_result
+        if result is None:
+            QMessageBox.information(
+                self,
+                "Export REI results",
+                "Run REI before exporting results.",
+            )
+            return
+        output_dir = self._choose_export_dir("Select folder for REI export")
+        if output_dir is None:
+            return
+        if not self._confirm_export_overwrite(
+            output_dir,
+            [
+                "rei_summary.csv",
+                "rei_heatmap.csv",
+                "rei_heatmap.png",
+                "rei_metadata.json",
+                "README.txt",
+            ],
+            title="Export REI results",
+        ):
+            return
+        try:
+            written_paths = export_ei_result(output_dir, result)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Export REI results",
+                f"Could not export REI results:\n{exc}",
+            )
+            return
+        self._last_export_dir = output_dir
+        QMessageBox.information(
+            self,
+            "Export REI results",
+            f"Exported {len(written_paths)} files to:\n{output_dir}",
+        )
 
     def _ei_score_label_styles_from_result(
         self,

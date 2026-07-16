@@ -19,6 +19,7 @@ from app.computation.gamma_spike.original_algorithm.spike_detector_hilbert_v25 i
     DetectorSettings,
     spike_detector_hilbert_v25,
 )
+from app.preprocessing.filtering import NOTCH_50_HARM, NOTCH_60_HARM, NOTCH_OFF
 
 
 @dataclass
@@ -64,6 +65,7 @@ def compute_gamma_spike_for_gui(
     analysis_window_s: tuple[float, float],
     settings: str | DetectorSettings | None = None,
     filter_context_seconds: float = 30.0,
+    notch_modes_by_channel: dict[str, str] | None = None,
 ) -> GammaSpikeComputationResult:
     """
     Run the gamma spike detector from GUI-selected data.
@@ -86,8 +88,15 @@ def compute_gamma_spike_for_gui(
     if matrix.shape[0] == 0 or matrix.shape[1] < 2:
         raise ValueError("Not enough data for gamma spike detection.")
 
+    notch_modes = _clean_notch_modes(channel_names, notch_modes_by_channel)
+    active_notch_modes = sorted({mode for mode in notch_modes.values() if mode != NOTCH_OFF})
+
     detector_data = np.ascontiguousarray(matrix.T)
-    detector_settings = DEFAULT_SETTINGS if settings is None else settings
+    detector_settings = (
+        _detector_settings_for_notch_modes(active_notch_modes)
+        if settings is None
+        else settings
+    )
     out, _discharges, _d_decim, _envelope, _background, _envelope_pdf = (
         spike_detector_hilbert_v25(detector_data, float(fs), settings=detector_settings)
     )
@@ -105,8 +114,8 @@ def compute_gamma_spike_for_gui(
     )
 
     b_boundary, a_boundary = _butter_ba(4, [10.0, 60.0], btype="bandpass", fs=float(fs))
-    b_notch, a_notch = _notch_filter_coefficients(float(fs))
     b_gamma, a_gamma = _butter_ba(4, [30.0, 100.0], btype="bandpass", fs=float(fs))
+    detector_hum_hz = _detector_hum_frequency_for_modes(active_notch_modes)
 
     channels: list[GammaSpikeChannelResult] = []
     gamma_success_count = 0
@@ -125,8 +134,7 @@ def compute_gamma_spike_for_gui(
                 spike_time_s=float(time_s),
                 b_boundary=b_boundary,
                 a_boundary=a_boundary,
-                b_notch=b_notch,
-                a_notch=a_notch,
+                notch_mode=str(notch_modes.get(str(name), NOTCH_OFF)),
                 b_gamma=b_gamma,
                 a_gamma=a_gamma,
                 filter_context_seconds=float(filter_context_seconds),
@@ -157,6 +165,9 @@ def compute_gamma_spike_for_gui(
             "n_channels": len(channel_names),
             "n_samples": int(matrix.shape[1]),
             "filter_context_seconds": float(filter_context_seconds),
+            "notch_filter": bool(active_notch_modes),
+            "notch_modes": active_notch_modes,
+            "detector_hum_filter_hz": detector_hum_hz,
             "total_spikes": int(sum(channel.spike_count for channel in channels)),
             "boundary_success_count": int(boundary_success_count),
             "gamma_success_count": int(gamma_success_count),
@@ -177,8 +188,7 @@ def _compute_spike_gamma_event(
     spike_time_s: float,
     b_boundary: np.ndarray,
     a_boundary: np.ndarray,
-    b_notch: np.ndarray,
-    a_notch: np.ndarray,
+    notch_mode: str,
     b_gamma: np.ndarray,
     a_gamma: np.ndarray,
     filter_context_seconds: float,
@@ -280,8 +290,7 @@ def _compute_spike_gamma_event(
             needed_start_sample1=gamma_start1,
             needed_stop_sample1=gamma_stop1,
             fs=fs,
-            b_notch=b_notch,
-            a_notch=a_notch,
+            notch_mode=notch_mode,
             b_gamma=b_gamma,
             a_gamma=a_gamma,
             filter_context_seconds=filter_context_seconds,
@@ -381,8 +390,7 @@ def _gamma_filtered_window(
     needed_start_sample1: int,
     needed_stop_sample1: int,
     fs: float,
-    b_notch: np.ndarray,
-    a_notch: np.ndarray,
+    notch_mode: str,
     b_gamma: np.ndarray,
     a_gamma: np.ndarray,
     filter_context_seconds: float,
@@ -391,7 +399,7 @@ def _gamma_filtered_window(
     extended_start_sample1 = max(1, int(needed_start_sample1) - context)
     extended_stop_sample1 = min(values.size, int(needed_stop_sample1) + context)
     segment = values[extended_start_sample1 - 1 : extended_stop_sample1]
-    notched = signal.filtfilt(b_notch, a_notch, segment)
+    notched = _apply_notch_mode(segment, fs, notch_mode)
     return signal.filtfilt(b_gamma, a_gamma, notched), extended_start_sample1
 
 
@@ -412,17 +420,58 @@ def _gamma_filter(values: np.ndarray, fs: float) -> np.ndarray:
     arr = np.asarray(values, dtype=float).ravel()
     if arr.size < 8:
         return arr
-    b_notch, a_notch = _notch_filter_coefficients(float(fs))
-    notched = signal.filtfilt(b_notch, a_notch, arr)
+    notched = _apply_notch_mode(arr, fs, NOTCH_60_HARM)
     return _bandpass_filter(notched, fs, 30.0, 100.0)
 
 
-def _notch_filter_coefficients(fs: float) -> tuple[np.ndarray, np.ndarray]:
-    freq = 60.0
-    r = 0.985
-    b = np.array([1.0, -2.0 * np.cos(2.0 * np.pi * freq / fs), 1.0])
-    a = np.array([1.0, -2.0 * r * np.cos(2.0 * np.pi * freq / fs), r * r])
-    return b, a
+def _clean_notch_modes(
+    channel_names: list[str],
+    notch_modes_by_channel: dict[str, str] | None,
+) -> dict[str, str]:
+    modes_by_channel = notch_modes_by_channel or {}
+    cleaned: dict[str, str] = {}
+    valid_modes = {NOTCH_OFF, NOTCH_50_HARM, NOTCH_60_HARM}
+    for channel_name in channel_names:
+        mode = str(modes_by_channel.get(str(channel_name), NOTCH_OFF))
+        cleaned[str(channel_name)] = mode if mode in valid_modes else NOTCH_OFF
+    return cleaned
+
+
+def _detector_settings_for_notch_modes(active_notch_modes: list[str]) -> str:
+    hum_hz = _detector_hum_frequency_for_modes(active_notch_modes)
+    hum_token = f"{hum_hz:g}" if hum_hz is not None else "1000000000"
+    return f"-bl 10 -bh 60 -h {hum_token} -k1 3.65 -dec 200"
+
+
+def _detector_hum_frequency_for_modes(active_notch_modes: list[str]) -> float | None:
+    if NOTCH_60_HARM in active_notch_modes:
+        return 60.0
+    if NOTCH_50_HARM in active_notch_modes:
+        return 50.0
+    return None
+
+
+def _apply_notch_mode(values: np.ndarray, fs: float, notch_mode: str) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size < 8 or notch_mode == NOTCH_OFF:
+        return arr
+    if notch_mode == NOTCH_50_HARM:
+        freqs = _harmonic_freqs(50.0, fs)
+    elif notch_mode == NOTCH_60_HARM:
+        freqs = _harmonic_freqs(60.0, fs)
+    else:
+        return arr
+    filtered = np.asarray(arr, dtype=float)
+    for freq in freqs:
+        b, a = signal.iirnotch(w0=float(freq), Q=30.0, fs=float(fs))
+        filtered = signal.filtfilt(b, a, filtered)
+    return np.asarray(filtered, dtype=float)
+
+
+def _harmonic_freqs(base_hz: float, fs: float) -> np.ndarray:
+    nyquist = 0.5 * float(fs)
+    freqs = np.arange(float(base_hz), nyquist, float(base_hz), dtype=float)
+    return freqs[freqs > 0.0]
 
 
 def _matlab_round_scalar(value: float) -> int:

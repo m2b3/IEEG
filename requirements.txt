@@ -1,5 +1,6 @@
 colorama==0.4.6
 mne>=1.0
+matplotlib>=3.8
 numpy==2.2.6
 pandas>=2.0
 pyqtgraph==0.14.0
