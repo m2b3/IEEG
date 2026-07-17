@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import time
 from typing import Any, Callable, Literal, Optional, TypedDict, cast
 
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup, QAbstractButton,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QSpinBox, QGridLayout, QScrollArea, QGraphicsRectItem,
-    QSplitter, QFileDialog,
+    QSplitter, QFileDialog, QApplication, QMainWindow, QStatusBar,
 )
 
 from app.viewer.time_controls import TimeWindowControl
@@ -1321,38 +1322,51 @@ class ComputationPanel(QWidget):
                 return
 
             error_message = None
-            with busy_cursor(self, "Running gamma spike detector..."):
-                perf_start = time.perf_counter()
-                try:
-                    result = self._compute_gamma_spike_result(start_s, stop_s)
-                except Exception as exc:
-                    timed_mark(
-                        "after_gamma_spike_detector",
-                        perf_start,
-                        raw=self._raw,
-                        visible_window_s=max(0.0, stop_s - start_s),
-                        notes=f"error: {exc}",
-                    )
-                    error_message = str(exc)
-                else:
-                    self._show_gamma_result(result)
-                    metadata = result.metadata if isinstance(result.metadata, dict) else {}
-                    timed_mark(
-                        "after_gamma_spike_detector",
-                        perf_start,
-                        raw=self._raw,
-                        visible_window_s=max(0.0, stop_s - start_s),
-                        notes=(
-                            f"channels={len(result.channels)}; "
-                            f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
-                            f"spikes={metadata.get('total_spikes', 0)}; "
-                            f"gamma={metadata.get('gamma_success_count', 0)}"
-                        ),
-                    )
-                    # Keep the computation flow quiet: users can open the summary table
-                    # when needed, but it should not interrupt the main viewer.
+            perf_start = time.perf_counter()
+            self.btn_run.setEnabled(False)
+            try:
+                with busy_cursor(self, "Running gamma spike detector..."):
+                    try:
+                        result = self._compute_gamma_spike_result(start_s, stop_s)
+                    except Exception as exc:
+                        timed_mark(
+                            "after_gamma_spike_detector",
+                            perf_start,
+                            raw=self._raw,
+                            visible_window_s=max(0.0, stop_s - start_s),
+                            notes=f"error: {exc}",
+                        )
+                        error_message = str(exc)
+                    else:
+                        self._show_gamma_result(result)
+                        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+                        timed_mark(
+                            "after_gamma_spike_detector",
+                            perf_start,
+                            raw=self._raw,
+                            visible_window_s=max(0.0, stop_s - start_s),
+                            notes=(
+                                f"channels={len(result.channels)}; "
+                                f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
+                                f"spikes={metadata.get('total_spikes', 0)}; "
+                                f"gamma={metadata.get('gamma_success_count', 0)}"
+                            ),
+                        )
+                        # Keep the computation flow quiet: users can open the summary table
+                        # when needed, but it should not interrupt the main viewer.
+            finally:
+                self.btn_run.setEnabled(True)
             if error_message is not None:
+                self._show_status_message(
+                    "Gamma spike detection failed "
+                    f"after {self._format_duration(time.perf_counter() - perf_start)}."
+                )
                 QMessageBox.warning(self, "Gamma spike detector", error_message)
+            else:
+                self._show_status_message(
+                    "Gamma spike detection completed in "
+                    f"{self._format_duration(time.perf_counter() - perf_start)}."
+                )
             return
 
         QMessageBox.warning(
@@ -1486,6 +1500,41 @@ class ComputationPanel(QWidget):
                 float(window_stop_s),
             )
 
+        def load_gamma_indexed_data(
+            selected_positions: list[int],
+            window_start_s: float,
+            window_stop_s: float,
+        ):
+            subset_abs = [
+                selected_abs[int(position)]
+                for position in selected_positions
+                if 0 <= int(position) < len(selected_abs)
+            ]
+            return self._ei_data_callback(
+                subset_abs,
+                float(window_start_s),
+                float(window_stop_s),
+            )
+
+        progress_start_s = time.perf_counter()
+
+        def report_gamma_progress(message: str) -> None:
+            elapsed_s = max(0.0, time.perf_counter() - progress_start_s)
+            progress_fraction = self._gamma_progress_fraction(str(message))
+            timing_text = f"elapsed {self._format_duration(elapsed_s)}"
+            if progress_fraction is not None and progress_fraction > 0.0:
+                eta_s = elapsed_s * (1.0 - progress_fraction) / progress_fraction
+                timing_text += f", ETA {self._format_duration(eta_s)}"
+            status_message = f"{message} ({timing_text})"
+            window = self.window()
+            if isinstance(window, QMainWindow):
+                status_bar = window.statusBar()
+                if isinstance(status_bar, QStatusBar):
+                    status_bar.showMessage(status_message)
+            app = QApplication.instance()
+            if app is not None:
+                app.processEvents()
+
         result = compute_gamma_spike_segmented_for_gui(
             data_loader=load_gamma_data,
             analysis_window_s=(float(start_s), float(stop_s)),
@@ -1494,11 +1543,49 @@ class ComputationPanel(QWidget):
             chunk_context_seconds=10.0,
             filter_context_seconds=30.0,
             notch_modes_by_channel=notch_modes_by_channel,
+            indexed_data_loader=load_gamma_indexed_data,
+            progress_callback=report_gamma_progress,
         )
         if self._source_file_path is not None:
             result.metadata["source_file_name"] = self._source_file_path.name
             result.metadata["source_file_path"] = str(self._source_file_path)
         return result
+
+    @staticmethod
+    def _gamma_progress_fraction(message: str) -> float | None:
+        fractions = [
+            (int(current), int(total))
+            for current, total in re.findall(r"(\d+)\s*/\s*(\d+)", str(message))
+            if int(total) > 0
+        ]
+        if not fractions:
+            return None
+        if len(fractions) >= 2 and "chunk" in str(message).lower():
+            chunk_current, chunk_total = fractions[0]
+            channel_current, channel_total = fractions[1]
+            total_steps = max(1, chunk_total * channel_total)
+            completed = max(0, chunk_current - 1) * channel_total + channel_current
+            return min(1.0, max(0.0, completed / total_steps))
+        current, total = fractions[-1]
+        return min(1.0, max(0.0, current / total))
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total_seconds = max(0, int(round(float(seconds))))
+        minutes, secs = divmod(total_seconds, 60)
+        hours, minutes = divmod(minutes, 60)
+        if hours:
+            return f"{hours:d}h {minutes:02d}m {secs:02d}s"
+        if minutes:
+            return f"{minutes:d}m {secs:02d}s"
+        return f"{secs:d}s"
+
+    def _show_status_message(self, message: str) -> None:
+        window = self.window()
+        if isinstance(window, QMainWindow):
+            status_bar = window.statusBar()
+            if isinstance(status_bar, QStatusBar):
+                status_bar.showMessage(str(message), 15000)
 
     def _clear_gamma_outputs(self) -> None:
         self._last_gamma_result = None

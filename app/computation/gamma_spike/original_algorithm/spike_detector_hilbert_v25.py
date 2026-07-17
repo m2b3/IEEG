@@ -65,6 +65,13 @@ class Discharges:
     MRAW: np.ndarray
 
 
+@dataclass
+class DetectorBackgroundModel:
+    fs: float
+    phat_centers_s: list[np.ndarray]
+    phat_by_channel: list[np.ndarray]
+
+
 def _filter_ba(factory: Any, *args: Any, **kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
     b, a = cast(Any, factory(*args, **kwargs))
     return np.asarray(b, dtype=float), np.asarray(a, dtype=float)
@@ -131,6 +138,8 @@ def spike_detector_hilbert_v25(
     data: np.ndarray,
     fs: float,
     settings: str | DetectorSettings | None = None,
+    background_model: DetectorBackgroundModel | None = None,
+    data_start_s: float = 0.0,
 ) -> tuple[DetectorOutput, Discharges, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Run the Janca Hilbert-envelope spike detector.
@@ -164,7 +173,13 @@ def spike_detector_hilbert_v25(
     # First pass: process as one segment. The MATLAB code supports buffered
     # matfile processing; direct ndarray processing is enough for validation.
     d_decim, envelope, background, discharges, out, envelope_pdf, _ = _spike_detector(
-        d, fs, int(round(winsize)), int(round(noverlap)), cfg
+        d,
+        fs,
+        int(round(winsize)),
+        int(round(noverlap)),
+        cfg,
+        background_model=background_model,
+        data_start_s=float(data_start_s),
     )
 
     keep = (out.pos > 2.0) & (out.pos < (d.shape[0] / fs - 2.0))
@@ -178,39 +193,111 @@ def spike_detector_hilbert_v25(
     return out, discharges, d_decim, envelope, background, envelope_pdf
 
 
+def fit_detector_background_model(
+    data: np.ndarray,
+    fs: float,
+    settings: str | DetectorSettings | None = None,
+    *,
+    data_start_s: float = 0.0,
+) -> DetectorBackgroundModel:
+    cfg = settings if isinstance(settings, DetectorSettings) else parse_settings(settings)
+    d = _as_2d(data)
+
+    winsize = cfg.winsize if cfg.winsize is not None else 5 * fs
+    noverlap = cfg.noverlap if cfg.noverlap is not None else 4 * fs
+    if cfg.decimation == 0:
+        cfg.decimation = fs
+    if cfg.bandwidth[1] > cfg.decimation:
+        raise ValueError("filter -fh frequency is bigger than fs/2")
+
+    d, fs_dec, winsize_dec, noverlap_dec, _r_factor = _resample_detector_data(
+        d,
+        float(fs),
+        int(round(winsize)),
+        int(round(noverlap)),
+        cfg,
+    )
+    d = _filt_hum(d, fs_dec, cfg.main_hum_freq, cfg.bandwidth)
+    d_band = _filtering(d, fs_dec, cfg)
+    index = _window_index(d_band.shape[0], winsize_dec, noverlap_dec)
+    phat_centers_s: list[np.ndarray] = []
+    phat_by_channel: list[np.ndarray] = []
+    for ch in range(d_band.shape[1]):
+        envelope = np.abs(signal.hilbert(d_band[:, ch]))
+        phat = _estimate_phat_windows(envelope, index, winsize_dec)
+        centers = float(data_start_s) + (index + int(round(winsize_dec / 2))) / float(fs_dec)
+        phat_centers_s.append(np.asarray(centers, dtype=float))
+        phat_by_channel.append(phat)
+    return DetectorBackgroundModel(
+        fs=float(fs_dec),
+        phat_centers_s=phat_centers_s,
+        phat_by_channel=phat_by_channel,
+    )
+
+
+def merge_detector_background_models(
+    models: list[DetectorBackgroundModel],
+    *,
+    winsize_seconds: float = 5.0,
+    step_seconds: float = 1.0,
+) -> DetectorBackgroundModel | None:
+    if not models:
+        return None
+    fs = float(models[0].fs)
+    n_channels = len(models[0].phat_by_channel)
+    merged_centers: list[np.ndarray] = []
+    merged_phat: list[np.ndarray] = []
+    smooth_len = int(round(float(winsize_seconds) / max(float(step_seconds), 1e-9)))
+
+    for ch in range(n_channels):
+        centers = np.concatenate([model.phat_centers_s[ch] for model in models])
+        phat = np.vstack([model.phat_by_channel[ch] for model in models])
+        order = np.argsort(centers)
+        centers = centers[order]
+        phat = phat[order, :]
+
+        unique_centers, inverse = np.unique(np.round(centers, decimals=9), return_inverse=True)
+        if unique_centers.size != centers.size:
+            averaged = np.zeros((unique_centers.size, 2), dtype=float)
+            counts = np.zeros(unique_centers.size, dtype=float)
+            for row_index, unique_index in enumerate(inverse):
+                averaged[unique_index, :] += phat[row_index, :]
+                counts[unique_index] += 1.0
+            phat = averaged / counts[:, None]
+            centers = unique_centers
+
+        if smooth_len > 1 and phat.shape[0] > 3 * smooth_len:
+            kernel = np.ones(smooth_len) / smooth_len
+            phat = signal.filtfilt(kernel, [1.0], phat, axis=0)
+        merged_centers.append(np.asarray(centers, dtype=float))
+        merged_phat.append(np.asarray(phat, dtype=float))
+
+    return DetectorBackgroundModel(
+        fs=fs,
+        phat_centers_s=merged_centers,
+        phat_by_channel=merged_phat,
+    )
+
+
 def _spike_detector(
     d: np.ndarray,
     fs: float,
     winsize: int,
     noverlap: int,
     cfg: DetectorSettings,
+    *,
+    background_model: DetectorBackgroundModel | None = None,
+    data_start_s: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, Discharges, DetectorOutput, np.ndarray, float]:
-    decimation = cfg.decimation
-    r_factor = fs / decimation
-
-    if r_factor > 1 or decimation != fs:
-        winsize_sec = winsize / fs
-        noverlap_sec = noverlap / fs
-        dec_iterations = max(1, int(math.ceil(math.log10(r_factor)))) if r_factor > 0 else 1
-
-        for i in range(dec_iterations):
-            if i == dec_iterations - 1:
-                fs_out = decimation
-            else:
-                fs_out = round(fs / (r_factor ** (1 / dec_iterations)))
-            d = _resample_columns(d, fs_out, fs)
-            fs = fs_out
-
-        winsize = int(round(winsize_sec * fs))
-        noverlap = int(round(noverlap_sec * fs))
-
-    if noverlap < 1:
-        step = max(1, int(round(winsize * (1 - noverlap))))
-    else:
-        step = max(1, int(winsize - noverlap))
-    index = np.arange(0, max(1, d.shape[0] - winsize + 1), step, dtype=int)
-    if index.size == 0:
-        index = np.array([0], dtype=int)
+    d, fs, winsize, noverlap, r_factor = _resample_detector_data(
+        d,
+        fs,
+        winsize,
+        noverlap,
+        cfg,
+    )
+    index = _window_index(d.shape[0], winsize, noverlap)
+    if index.size == 1 and d.shape[0] < winsize:
         winsize = d.shape[0]
 
     d = _filt_hum(d, fs, cfg.main_hum_freq, cfg.bandwidth)
@@ -246,6 +333,9 @@ def _spike_detector(
             cfg.polyspike_union_time,
             cfg.ti_switch,
             d_decim[:, ch],
+            None if background_model is None else background_model.phat_centers_s[ch],
+            None if background_model is None else background_model.phat_by_channel[ch],
+            float(data_start_s),
         )
         (
             envelope[:, ch],
@@ -280,6 +370,65 @@ def _spike_detector(
     return d_decim, envelope, background, discharges, out, envelope_pdf, r_factor
 
 
+def _resample_detector_data(
+    d: np.ndarray,
+    fs: float,
+    winsize: int,
+    noverlap: int,
+    cfg: DetectorSettings,
+) -> tuple[np.ndarray, float, int, int, float]:
+    decimation = cfg.decimation
+    r_factor = fs / decimation
+
+    if r_factor > 1 or decimation != fs:
+        winsize_sec = winsize / fs
+        noverlap_sec = noverlap / fs
+        dec_iterations = max(1, int(math.ceil(math.log10(r_factor)))) if r_factor > 0 else 1
+
+        for i in range(dec_iterations):
+            if i == dec_iterations - 1:
+                fs_out = decimation
+            else:
+                fs_out = round(fs / (r_factor ** (1 / dec_iterations)))
+            d = _resample_columns(d, fs_out, fs)
+            fs = fs_out
+
+        winsize = int(round(winsize_sec * fs))
+        noverlap = int(round(noverlap_sec * fs))
+
+    return d, float(fs), int(winsize), int(noverlap), float(r_factor)
+
+
+def _window_index(n_samples: int, winsize: int, noverlap: int) -> np.ndarray:
+    if noverlap < 1:
+        step = max(1, int(round(winsize * (1 - noverlap))))
+    else:
+        step = max(1, int(winsize - noverlap))
+    index = np.arange(0, max(1, int(n_samples) - int(winsize) + 1), step, dtype=int)
+    if index.size == 0:
+        return np.array([0], dtype=int)
+    return index
+
+
+def _estimate_phat_windows(
+    envelope: np.ndarray,
+    index: np.ndarray,
+    winsize: int,
+) -> np.ndarray:
+    phat = np.zeros((len(index), 2), dtype=float)
+    for k, start in enumerate(index):
+        stop = min(int(start) + int(winsize), envelope.size)
+        segment = envelope[int(start):stop]
+        segment = segment[segment > 0]
+        if segment.size == 0:
+            phat[k, :] = 0.0
+        else:
+            logged = np.log(segment)
+            phat[k, 0] = np.mean(logged)
+            phat[k, 1] = np.std(logged, ddof=1)
+    return phat
+
+
 def _one_channel_detect(
     d: np.ndarray,
     fs: float,
@@ -291,29 +440,29 @@ def _one_channel_detect(
     polyspike_union_time: float,
     ti_switch: int,
     d_decim: np.ndarray,
+    phat_centers_s: np.ndarray | None = None,
+    phat_values: np.ndarray | None = None,
+    data_start_s: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     envelope = np.abs(signal.hilbert(d))
 
-    phat = np.zeros((len(index), 2), dtype=float)
-    for k, start in enumerate(index):
-        stop = min(start + winsize, envelope.size)
-        segment = envelope[start:stop]
-        segment = segment[segment > 0]
-        if segment.size == 0:
-            phat[k, :] = 0.0
-        else:
-            logged = np.log(segment)
-            phat[k, 0] = np.mean(logged)
-            phat[k, 1] = np.std(logged, ddof=1)
+    if phat_centers_s is not None and phat_values is not None:
+        sample_times_s = float(data_start_s) + np.arange(envelope.size, dtype=float) / float(fs)
+        phat_int = _interpolate_phat_times(
+            np.asarray(phat_centers_s, dtype=float),
+            np.asarray(phat_values, dtype=float),
+            sample_times_s,
+        )
+    else:
+        phat = _estimate_phat_windows(envelope, index, winsize)
+        r = envelope.size / max(len(index), 1)
+        n_average = winsize / fs
+        smooth_len = int(round(n_average * fs / r)) if r else 0
+        if smooth_len > 1 and phat.shape[0] > 3 * smooth_len:
+            kernel = np.ones(smooth_len) / smooth_len
+            phat = signal.filtfilt(kernel, [1.0], phat, axis=0)
 
-    r = envelope.size / max(len(index), 1)
-    n_average = winsize / fs
-    smooth_len = int(round(n_average * fs / r)) if r else 0
-    if smooth_len > 1 and phat.shape[0] > 3 * smooth_len:
-        kernel = np.ones(smooth_len) / smooth_len
-        phat = signal.filtfilt(kernel, [1.0], phat, axis=0)
-
-    phat_int = _interpolate_phat(phat, index, winsize, envelope.size)
+        phat_int = _interpolate_phat(phat, index, winsize, envelope.size)
     sigma = np.maximum(phat_int[:, 1], np.finfo(float).eps)
 
     lognormal_mode = np.exp(phat_int[:, 0] - sigma**2)
@@ -654,6 +803,27 @@ def _interpolate_phat(phat: np.ndarray, index: np.ndarray, winsize: int, n: int)
     return out[:n, :]
 
 
+def _interpolate_phat_times(
+    centers_s: np.ndarray,
+    phat: np.ndarray,
+    sample_times_s: np.ndarray,
+) -> np.ndarray:
+    centers = np.asarray(centers_s, dtype=float).reshape(-1)
+    values = np.asarray(phat, dtype=float)
+    samples = np.asarray(sample_times_s, dtype=float).reshape(-1)
+    if centers.size == 0 or values.size == 0:
+        return np.zeros((samples.size, 2), dtype=float)
+    if centers.size == 1:
+        return np.tile(values[0], (samples.size, 1))
+    if centers.size >= 4:
+        mu = CubicSpline(centers, values[:, 0], bc_type="not-a-knot", extrapolate=True)(samples)
+        sigma = CubicSpline(centers, values[:, 1], bc_type="not-a-knot", extrapolate=True)(samples)
+    else:
+        mu = interp1d(centers, values[:, 0], kind="linear", fill_value="extrapolate")(samples)
+        sigma = interp1d(centers, values[:, 1], kind="linear", fill_value="extrapolate")(samples)
+    return np.column_stack([mu, sigma])
+
+
 def _true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     mask = np.asarray(mask, dtype=bool).ravel()
     edges = np.diff(np.r_[False, mask, False].astype(int))
@@ -722,9 +892,12 @@ def _filter_discharges(d: Discharges, keep: np.ndarray) -> Discharges:
 
 
 __all__ = [
+    "DetectorBackgroundModel",
     "DetectorOutput",
     "DetectorSettings",
     "Discharges",
+    "fit_detector_background_model",
+    "merge_detector_background_models",
     "parse_settings",
     "spike_detector_hilbert_v25",
 ]
