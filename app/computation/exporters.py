@@ -388,6 +388,10 @@ def _compact_gamma_metadata(
         "analysis_window_s": _json_safe(metadata.get("analysis_window_s")),
         "sampling_frequency_hz": fs,
         "filter_context_seconds": _finite_float(metadata.get("filter_context_seconds")),
+        "processing_mode": metadata.get("processing_mode"),
+        "chunk_minutes": _finite_float(metadata.get("chunk_minutes")),
+        "chunk_context_seconds": _finite_float(metadata.get("chunk_context_seconds")),
+        "n_chunks": int(metadata.get("n_chunks", 0) or 0),
         "notch_filter": bool(metadata.get("notch_filter", False)),
         "notch_modes": _json_safe(metadata.get("notch_modes", [])),
         "total_spikes": int(metadata.get("total_spikes", 0) or 0),
@@ -451,8 +455,8 @@ Files:
   boundaries, gamma power, gamma frequency, gamma duration, and errors.
 
 - gamma_metadata.json
-  Records the analyzed file, analysis window, sampling frequency, notch
-  filter setting, and spike counts.
+  Records the analyzed file, analysis window, sampling frequency, segmented
+  processing settings, notch filter setting, and spike counts.
 
 Notes:
 - Spikes are exported only inside the selected analysis window.

@@ -1,68 +1,48 @@
-# Python2 Segmented Spike-Gamma Pipeline
+# Core Spike-Gamma Algorithm
 
-This folder contains the integrated spike-gamma implementation used by the app.
+This folder contains the translated scientific building blocks used by the app.
 
 It was derived from:
 
 - the validated `Python2` core algorithm translation from `matlab2`
 - the segmented long-recording validation pipeline
 
-Validation scripts, the old reference folder, and large output CSVs are intentionally not included here.
+The app-level GUI wiring, chunking, metadata, and export result objects live in
+`app/computation/gamma_spike/wire_algorithm.py`.
 
-## Main Import
+## Main Components
+
+- `spike_detector_hilbert_v25.py`
+  Detects candidate spikes from multichannel data.
+
+- `postprocessing.py`
+  Cleans detector events and organizes retained spikes by channel.
+
+- `compute_spike_boundary.py`
+  Finds P1, N1, and N2 boundaries around one spike.
+
+- `compute_gamma.py`
+  Measures gamma power, frequency, and duration around one spike.
+
+- `build_gamma_masks.py`
+  Builds validity masks used during gamma measurement.
+
+- `select_max_gamma_candidate.py`
+  Selects the strongest candidate gamma event.
+
+## GUI Pipeline
+
+The computation panel calls:
 
 ```python
-from app.computation.gamma_spike.original_algorithm import run_segmented_recording
-
-result = run_segmented_recording(
-    recording_path,
-    chunk_minutes=10.0,
-    context_seconds=10.0,
-    filter_context_seconds=30.0,
-    max_spikes_for_boundary_gamma=None,
-)
+compute_gamma_spike_segmented_for_gui(...)
 ```
 
-`result` contains:
+from `wire_algorithm.py`.
 
-- `step1`: raw Janca detector detections
-- `step2`: postprocessed retained spikes by channel
-- `qc`: postprocessing QC counts
-- `step3`: spike boundaries
-- `step4`: gamma measurements
-- `summary`: one-row processing summary
+That wrapper reads GUI-selected data in 10-minute chunks with 10-second context,
+runs the detector, merges central events, postprocesses once globally, then
+computes spike boundaries and gamma measurements.
 
-## Command-Line Use
-
-From the repo root:
-
-```powershell
-python -m app.computation.gamma_spike.original_algorithm.run_segmented_file "path\to\recording.ieeg" --output-dir "path\to\outputs"
-```
-
-Useful options:
-
-```powershell
---chunk-minutes 10
---context-seconds 10
---filter-context-seconds 30
---max-spikes-for-boundary-gamma 250
-```
-
-Use `--max-spikes-for-boundary-gamma` only for validation/debugging. For full processing, omit it.
-
-## Validated Defaults
-
-Use `context_seconds=10.0` for segmented processing. In the 30-minute multi-chunk validation, 5 seconds left two chunk-boundary event differences, while 10 seconds matched full Python2 event locations and downstream outputs.
-
-## File Support
-
-The pipeline can read:
-
-- `.edf`
-- `.fif`
-- `.ieeg` JSON metadata files that point to a source raw file
-
-## Current Role
-
-- `app.computation.gamma_spike.original_algorithm`: maintained implementation used by the GUI and command-line runner
+The old file-based batch runner has been removed to avoid maintaining two
+segmentation implementations.

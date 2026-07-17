@@ -32,7 +32,7 @@ from app.computation.rei.algorithm import (
 from app.computation.gamma_spike.wire_algorithm import (
     GammaSpikeComputationResult,
     GammaSpikeEventResult,
-    compute_gamma_spike_for_gui,
+    compute_gamma_spike_segmented_for_gui,
 )
 from app.computation.exporters import (
     export_ei_result,
@@ -1458,7 +1458,10 @@ class ComputationPanel(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         message.setDefaultButton(QMessageBox.StandardButton.No)
-        return message.exec() == QMessageBox.StandardButton.Yes
+        result = message.exec()
+        return result == QMessageBox.StandardButton.Yes or result == int(
+            QMessageBox.StandardButton.Yes
+        )
 
     def _compute_gamma_spike_result(
         self,
@@ -1468,29 +1471,28 @@ class ComputationPanel(QWidget):
         if self._ei_data_callback is None:
             raise RuntimeError("Gamma spike data extraction is not available.")
 
-        filter_context_s = 30.0
-        total_s = self._total_duration_s()
-        padded_start_s = max(0.0, float(start_s) - filter_context_s)
-        padded_stop_s = float(stop_s) + filter_context_s
-        if total_s is not None:
-            padded_stop_s = min(float(total_s), padded_stop_s)
+        selected_abs = list(self.state.selected_abs)
+        selected_names = [
+            str(self._ch_names_displayed[int(idx)])
+            for idx in selected_abs
+            if 0 <= int(idx) < len(self._ch_names_displayed)
+        ]
+        notch_modes_by_channel = self._ei_notch_modes_for_channels(selected_names)
 
-        # Gamma-spike filtering is context-sensitive. Extract hidden padding so
-        # the GUI path matches the reference segmented pipeline more closely;
-        # only spikes inside the requested analysis window are reported.
-        data, fs, channel_names = self._ei_data_callback(
-            list(self.state.selected_abs),
-            padded_start_s,
-            padded_stop_s,
-        )
-        notch_modes_by_channel = self._ei_notch_modes_for_channels(channel_names)
-        result = compute_gamma_spike_for_gui(
-            data=data,
-            fs=float(fs),
-            channel_names=list(channel_names),
-            data_start_s=float(padded_start_s),
+        def load_gamma_data(window_start_s: float, window_stop_s: float):
+            return self._ei_data_callback(
+                selected_abs,
+                float(window_start_s),
+                float(window_stop_s),
+            )
+
+        result = compute_gamma_spike_segmented_for_gui(
+            data_loader=load_gamma_data,
             analysis_window_s=(float(start_s), float(stop_s)),
-            filter_context_seconds=filter_context_s,
+            recording_duration_s=self._total_duration_s(),
+            chunk_minutes=10.0,
+            chunk_context_seconds=10.0,
+            filter_context_seconds=30.0,
             notch_modes_by_channel=notch_modes_by_channel,
         )
         if self._source_file_path is not None:
