@@ -22,6 +22,10 @@ from app.computation.gamma_spike.original_algorithm.spike_detector_hilbert_v25 i
 )
 from app.preprocessing.filtering import NOTCH_50_HARM, NOTCH_60_HARM, NOTCH_OFF
 
+MATLAB2_COMPAT_SETTINGS = "-bl 10 -bh 60 -h 60 -k1 3.65 -dec 200"
+MATLAB2_COMPAT_NOTCH_FREQ_HZ = 60.0
+MATLAB2_COMPAT_NOTCH_R = 0.985
+
 
 GammaSpikeDataLoader = Callable[[float, float], tuple[np.ndarray, float, list[str]]]
 GammaSpikeIndexedDataLoader = Callable[
@@ -29,6 +33,10 @@ GammaSpikeIndexedDataLoader = Callable[
     tuple[np.ndarray, float, list[str]],
 ]
 GammaSpikeProgressCallback = Callable[[str], None]
+
+
+class GammaSpikeCancelled(RuntimeError):
+    """Raised when a running gamma spike computation is cancelled by the user."""
 
 
 @dataclass
@@ -77,6 +85,7 @@ def compute_gamma_spike_segmented_for_gui(
     notch_modes_by_channel: dict[str, str] | None = None,
     indexed_data_loader: GammaSpikeIndexedDataLoader | None = None,
     progress_callback: GammaSpikeProgressCallback | None = None,
+    matlab2_compat: bool = True,
 ) -> GammaSpikeComputationResult:
     """
     Run gamma spike detection in fixed chunks while returning one merged result.
@@ -98,18 +107,32 @@ def compute_gamma_spike_segmented_for_gui(
     chunk_context_s = max(0.0, float(chunk_context_seconds))
     filter_context_s = max(0.0, float(filter_context_seconds))
 
-    fs, channel_names, notch_modes, detector_settings, detector_hum_hz, detector_events = (
-        _detect_gamma_spikes_channel_batched(
-            data_loader=data_loader,
-            indexed_data_loader=indexed_data_loader,
-            analysis_window_s=(start_s, stop_s),
-            recording_duration_s=recording_duration_s,
-            settings=settings,
-            filter_context_seconds=filter_context_s,
-            notch_modes_by_channel=notch_modes_by_channel,
-            progress_callback=progress_callback,
+    if matlab2_compat:
+        fs, channel_names, notch_modes, detector_settings, detector_hum_hz, detector_events = (
+            _detect_gamma_spikes_segmented_matlab2_compat(
+                data_loader=data_loader,
+                analysis_window_s=(start_s, stop_s),
+                recording_duration_s=recording_duration_s,
+                settings=MATLAB2_COMPAT_SETTINGS,
+                chunk_duration_s=chunk_duration_s,
+                chunk_context_s=chunk_context_s,
+                notch_modes_by_channel=notch_modes_by_channel,
+                progress_callback=progress_callback,
+            )
         )
-    )
+    else:
+        fs, channel_names, notch_modes, detector_settings, detector_hum_hz, detector_events = (
+            _detect_gamma_spikes_channel_batched(
+                data_loader=data_loader,
+                indexed_data_loader=indexed_data_loader,
+                analysis_window_s=(start_s, stop_s),
+                recording_duration_s=recording_duration_s,
+                settings=settings,
+                filter_context_seconds=filter_context_s,
+                notch_modes_by_channel=notch_modes_by_channel,
+                progress_callback=progress_callback,
+            )
+        )
     chunk_count = int(math.ceil((stop_s - start_s) / chunk_duration_s))
 
     detector_out = _detector_output_from_events(detector_events)
@@ -137,7 +160,20 @@ def compute_gamma_spike_segmented_for_gui(
     gamma_success_count = 0
     boundary_success_count = 0
     total_postprocessed_spikes = int(sum(samples1.size for samples1 in samples1_by_channel))
-    if total_postprocessed_spikes:
+    if total_postprocessed_spikes and matlab2_compat:
+        events_by_channel, boundary_success_count, gamma_success_count = (
+            _compute_matlab2_compat_events_by_channel(
+                data_loader=data_loader,
+                indexed_data_loader=indexed_data_loader,
+                fs=float(fs),
+                channel_names=channel_names,
+                samples1_by_channel=samples1_by_channel,
+                recording_duration_s=recording_duration_s,
+                notch_modes=notch_modes,
+                progress_callback=progress_callback,
+            )
+        )
+    elif total_postprocessed_spikes:
         central_start_s = start_s
         detail_chunk_index = 0
         while central_start_s < stop_s:
@@ -248,13 +284,26 @@ def compute_gamma_spike_segmented_for_gui(
             "fs": float(fs),
             "n_channels": len(channel_names),
             "n_samples": int(round((stop_s - start_s) * float(fs))),
-            "processing_mode": "channel_batched_full_window_detector",
+            "processing_mode": (
+                "segmented_detector_full_channel_details"
+                if matlab2_compat
+                else "channel_batched_full_window_detector"
+            ),
+            "detector_window_s": [float(start_s), float(stop_s)],
+            "detector_extra_context_seconds": (
+                float(chunk_context_s) if matlab2_compat else 0.0
+            ),
+            "detail_chunk_minutes": float(chunk_minutes),
+            "detail_chunk_context_seconds": float(chunk_context_s),
             "chunk_minutes": float(chunk_minutes),
             "chunk_context_seconds": float(chunk_context_s),
             "n_chunks": int(chunk_count),
             "filter_context_seconds": float(filter_context_s),
             "notch_filter": bool(active_notch_modes),
             "notch_modes": active_notch_modes,
+            "gamma_notch_behavior": "selected_line_frequency_harmonics",
+            "notch_frequency_hz": None,
+            "notch_r": None,
             "detector_hum_filter_hz": detector_hum_hz,
             "total_spikes": int(sum(channel.spike_count for channel in channels)),
             "boundary_success_count": int(boundary_success_count),
@@ -587,10 +636,11 @@ def _detect_gamma_spikes_channel_batched(
     list[tuple[float, float, int, float, float, float]],
 ]:
     start_s, stop_s = analysis_window_s
-    padded_start_s = max(0.0, float(start_s) - float(filter_context_seconds))
-    padded_stop_s = float(stop_s) + float(filter_context_seconds)
-    if recording_duration_s is not None:
-        padded_stop_s = min(float(recording_duration_s), padded_stop_s)
+    # Match the original non-segmented detector behavior: detection sees exactly
+    # the requested analysis window. Extra context is used later for boundary
+    # and gamma measurements, not for detector threshold estimation.
+    padded_start_s = float(start_s)
+    padded_stop_s = float(stop_s)
 
     probe_stop_s = min(padded_stop_s, padded_start_s + 1.0)
     probe_data, fs, channel_names = data_loader(padded_start_s, probe_stop_s)
@@ -672,6 +722,339 @@ def _detect_gamma_spikes_channel_batched(
         detector_settings,
         detector_hum_hz,
         detector_events,
+    )
+
+
+def _detect_gamma_spikes_segmented_matlab2_compat(
+    *,
+    data_loader: GammaSpikeDataLoader,
+    analysis_window_s: tuple[float, float],
+    recording_duration_s: float | None,
+    settings: str | DetectorSettings,
+    chunk_duration_s: float,
+    chunk_context_s: float,
+    notch_modes_by_channel: dict[str, str] | None,
+    progress_callback: GammaSpikeProgressCallback | None,
+) -> tuple[
+    float,
+    list[str],
+    dict[str, str],
+    str | DetectorSettings,
+    float | None,
+    list[tuple[float, float, int, float, float, float]],
+]:
+    start_s, stop_s = analysis_window_s
+    probe_stop_s = min(float(stop_s), float(start_s) + 1.0)
+    probe_data, fs, channel_names = data_loader(float(start_s), probe_stop_s)
+    _validated_gamma_matrix(probe_data, channel_names)
+    fs = float(fs)
+    if fs <= 0.0:
+        raise ValueError("Sampling frequency must be positive.")
+    channel_names = list(map(str, channel_names))
+
+    start_sample0 = max(0, int(np.floor(float(start_s) * fs)))
+    stop_sample0 = int(np.ceil(float(stop_s) * fs))
+    if recording_duration_s is not None:
+        stop_sample0 = min(stop_sample0, int(round(float(recording_duration_s) * fs)))
+    if stop_sample0 <= start_sample0:
+        raise ValueError("Gamma analysis window is outside the recording.")
+
+    chunk_samples = max(1, int(round(float(chunk_duration_s) * fs)))
+    context_samples = max(0, int(round(float(chunk_context_s) * fs)))
+    recording_stop_sample0 = (
+        int(round(float(recording_duration_s) * fs))
+        if recording_duration_s is not None
+        else stop_sample0
+    )
+
+    detector_events: list[tuple[float, float, int, float, float, float]] = []
+    central_start0 = start_sample0
+    chunk_index = 0
+    chunk_count = int(math.ceil((stop_sample0 - start_sample0) / chunk_samples))
+    while central_start0 < stop_sample0:
+        chunk_index += 1
+        central_stop0 = min(stop_sample0, central_start0 + chunk_samples)
+        extended_start0 = max(0, central_start0 - context_samples)
+        extended_stop0 = min(recording_stop_sample0, central_stop0 + context_samples)
+        if extended_stop0 <= extended_start0:
+            break
+
+        if progress_callback is not None:
+            progress_callback(
+                "Gamma spike detection: "
+                f"chunk {chunk_index}/{chunk_count}"
+            )
+
+        extended_start_s = extended_start0 / fs
+        extended_stop_s = extended_stop0 / fs
+        chunk_data, chunk_fs, chunk_names = data_loader(extended_start_s, extended_stop_s)
+        if abs(float(chunk_fs) - fs) > 1e-6:
+            raise ValueError("Sampling frequency changed during gamma detection.")
+        if list(map(str, chunk_names)) != channel_names:
+            raise ValueError("Channel list changed during gamma detection.")
+        matrix = _validated_gamma_matrix(chunk_data, chunk_names)
+        out, _discharges, _d_decim, _envelope, _background, _envelope_pdf = (
+            spike_detector_hilbert_v25(
+                np.ascontiguousarray(matrix.T),
+                fs,
+                settings=settings,
+            )
+        )
+
+        for pos, dur, chan, con, weight, pdf_value in zip(
+            out.pos,
+            out.dur,
+            out.chan,
+            out.con,
+            out.weight,
+            out.pdf,
+        ):
+            absolute_pos_s = float(extended_start_s) + float(pos)
+            global_sample = _matlab_round_scalar(absolute_pos_s * fs)
+            if global_sample < central_start0 + 1 or global_sample > central_stop0:
+                continue
+            detector_events.append(
+                (
+                    absolute_pos_s,
+                    float(dur),
+                    int(chan),
+                    float(con),
+                    float(weight),
+                    float(pdf_value),
+                )
+            )
+
+        central_start0 = central_stop0
+
+    notch_modes = _clean_notch_modes(channel_names, notch_modes_by_channel)
+    return (
+        fs,
+        channel_names,
+        notch_modes,
+        settings,
+        MATLAB2_COMPAT_NOTCH_FREQ_HZ,
+        detector_events,
+    )
+
+
+def _compute_matlab2_compat_events_by_channel(
+    *,
+    data_loader: GammaSpikeDataLoader,
+    indexed_data_loader: GammaSpikeIndexedDataLoader | None,
+    fs: float,
+    channel_names: list[str],
+    samples1_by_channel: list[np.ndarray],
+    recording_duration_s: float | None,
+    notch_modes: dict[str, str],
+    progress_callback: GammaSpikeProgressCallback | None,
+) -> tuple[list[list[GammaSpikeEventResult]], int, int]:
+    if recording_duration_s is None:
+        max_sample1 = max(
+            (
+                float(np.nanmax(samples))
+                for samples in samples1_by_channel
+                if np.asarray(samples).size
+            ),
+            default=0.0,
+        )
+        stop_s = max(1.0 / float(fs), (max_sample1 + float(fs) + 1.0) / float(fs))
+    else:
+        stop_s = float(recording_duration_s)
+
+    b_boundary, a_boundary = _butter_ba(4, [10.0, 60.0], btype="bandpass", fs=float(fs))
+    b_gamma, a_gamma = _butter_ba(4, [30.0, 100.0], btype="bandpass", fs=float(fs))
+
+    events_by_channel: list[list[GammaSpikeEventResult]] = [
+        [] for _ in channel_names
+    ]
+    boundary_success_count = 0
+    gamma_success_count = 0
+
+    for channel_index, name in enumerate(channel_names):
+        samples1 = np.asarray(samples1_by_channel[channel_index], dtype=float)
+        if samples1.size == 0:
+            continue
+
+        if progress_callback is not None:
+            progress_callback(
+                "Gamma spike details: "
+                f"channel {channel_index + 1}/{len(channel_names)}"
+            )
+
+        if indexed_data_loader is None:
+            data, channel_fs, names = data_loader(0.0, stop_s)
+            matrix = _validated_gamma_matrix(data, names)
+            if channel_index >= matrix.shape[0]:
+                raise ValueError("Channel list changed during gamma spike details.")
+            if list(map(str, names)) != channel_names:
+                raise ValueError("Channel list changed during gamma spike details.")
+            raw_signal = matrix[channel_index, :]
+        else:
+            data, channel_fs, names = indexed_data_loader([channel_index], 0.0, stop_s)
+            matrix = _validated_gamma_matrix(data, names)
+            if list(map(str, names)) != [str(name)]:
+                raise ValueError("Channel list changed during gamma spike details.")
+            raw_signal = matrix[0, :]
+        if abs(float(channel_fs) - float(fs)) > 1e-6:
+            raise ValueError("Sampling frequency changed during gamma spike details.")
+
+        signal_notched = _apply_notch_mode(
+            np.asarray(raw_signal, dtype=float),
+            float(fs),
+            str(notch_modes.get(str(name), NOTCH_OFF)),
+        )
+        signal_boundary = signal.filtfilt(b_boundary, a_boundary, signal_notched)
+        signal_gamma = signal.filtfilt(b_gamma, a_gamma, signal_notched)
+
+        n_samples = int(signal_boundary.size)
+        for sample1 in samples1:
+            sample0 = float(sample1) - 1.0
+            time_s = sample0 / float(fs)
+            event = _compute_spike_gamma_event_matlab2_compat(
+                signal_boundary=signal_boundary,
+                signal_gamma=signal_gamma,
+                fs=float(fs),
+                spike_sample1=float(sample1),
+                gui_sample0=sample0,
+                spike_time_s=time_s,
+                n_samples=n_samples,
+            )
+            if event.boundary_p1_sample is not None:
+                boundary_success_count += 1
+            if event.gamma_power is not None:
+                gamma_success_count += 1
+            events_by_channel[channel_index].append(event)
+
+    return events_by_channel, boundary_success_count, gamma_success_count
+
+
+def _compute_spike_gamma_event_matlab2_compat(
+    *,
+    signal_boundary: np.ndarray,
+    signal_gamma: np.ndarray,
+    fs: float,
+    spike_sample1: float,
+    gui_sample0: float,
+    spike_time_s: float,
+    n_samples: int,
+) -> GammaSpikeEventResult:
+    spike_onset = float(spike_sample1 - 75e-3 * fs)
+    spike_offset = float(spike_sample1 + 225e-3 * fs)
+    start_index = _matlab_round_scalar(spike_onset)
+    stop_index = _matlab_round_scalar(spike_offset)
+    if start_index < 1 or stop_index > n_samples or stop_index <= start_index:
+        return GammaSpikeEventResult(
+            sample=gui_sample0,
+            time_s=spike_time_s,
+            boundary_p1_sample=None,
+            boundary_n1_sample=None,
+            boundary_n2_sample=None,
+            gamma_power=None,
+            gamma_frequency_hz=None,
+            gamma_duration_ms=None,
+            error="not enough data around spike for boundary detection",
+        )
+
+    try:
+        p1_boundary, n1_boundary, n2_boundary = compute_spike_boundary(
+            signal_boundary[start_index - 1 : stop_index],
+            fs,
+        )
+        if np.size(p1_boundary) == 0 or np.size(n1_boundary) == 0 or np.size(n2_boundary) == 0:
+            raise ValueError("empty boundary")
+        p1_boundary = float(np.ravel(p1_boundary)[0])
+        n1_boundary = float(np.ravel(n1_boundary)[0])
+        n2_boundary = float(np.ravel(n2_boundary)[0])
+    except Exception as exc:
+        return GammaSpikeEventResult(
+            sample=gui_sample0,
+            time_s=spike_time_s,
+            boundary_p1_sample=None,
+            boundary_n1_sample=None,
+            boundary_n2_sample=None,
+            gamma_power=None,
+            gamma_frequency_hz=None,
+            gamma_duration_ms=None,
+            error=f"boundary detection failed: {exc}",
+        )
+
+    p1_abs1 = spike_onset + p1_boundary
+    n1_abs1 = spike_onset + n1_boundary
+    n2_abs1 = spike_onset + n2_boundary
+    gamma_window = _matlab_round_array(_matlab_colon(n1_abs1 - fs, n1_abs1 + fs)).astype(int)
+    if gamma_window.size == 0 or gamma_window[0] < 1 or gamma_window[-1] > n_samples:
+        return GammaSpikeEventResult(
+            sample=gui_sample0,
+            time_s=spike_time_s,
+            boundary_p1_sample=p1_abs1 - 1.0,
+            boundary_n1_sample=n1_abs1 - 1.0,
+            boundary_n2_sample=n2_abs1 - 1.0,
+            gamma_power=None,
+            gamma_frequency_hz=None,
+            gamma_duration_ms=None,
+            error="not enough data around spike for gamma analysis",
+        )
+
+    p1_gamma = p1_abs1 - (n1_abs1 - fs)
+    n2_gamma = n2_abs1 - (n1_abs1 - fs)
+    try:
+        gamma, details = compute_gamma(
+            signal_gamma[int(gamma_window[0]) - 1 : int(gamma_window[-1])],
+            fs,
+            p1_gamma,
+            n2_gamma,
+            return_details=True,
+        )
+    except Exception as exc:
+        return GammaSpikeEventResult(
+            sample=gui_sample0,
+            time_s=spike_time_s,
+            boundary_p1_sample=p1_abs1 - 1.0,
+            boundary_n1_sample=n1_abs1 - 1.0,
+            boundary_n2_sample=n2_abs1 - 1.0,
+            gamma_power=None,
+            gamma_frequency_hz=None,
+            gamma_duration_ms=None,
+            error=f"gamma analysis failed: {exc}",
+        )
+
+    if not np.all(np.isfinite(gamma)):
+        reason = str(details.get("exclusion_reason") or "gamma analysis not evaluable")
+        return GammaSpikeEventResult(
+            sample=gui_sample0,
+            time_s=spike_time_s,
+            boundary_p1_sample=p1_abs1 - 1.0,
+            boundary_n1_sample=n1_abs1 - 1.0,
+            boundary_n2_sample=n2_abs1 - 1.0,
+            gamma_power=None,
+            gamma_frequency_hz=None,
+            gamma_duration_ms=None,
+            error=reason,
+        )
+
+    if not bool(np.any(np.asarray(gamma, dtype=float) != 0.0)):
+        return GammaSpikeEventResult(
+            sample=gui_sample0,
+            time_s=spike_time_s,
+            boundary_p1_sample=p1_abs1 - 1.0,
+            boundary_n1_sample=n1_abs1 - 1.0,
+            boundary_n2_sample=n2_abs1 - 1.0,
+            gamma_power=None,
+            gamma_frequency_hz=None,
+            gamma_duration_ms=None,
+            error=None,
+        )
+
+    return GammaSpikeEventResult(
+        sample=gui_sample0,
+        time_s=spike_time_s,
+        boundary_p1_sample=p1_abs1 - 1.0,
+        boundary_n1_sample=n1_abs1 - 1.0,
+        boundary_n2_sample=n2_abs1 - 1.0,
+        gamma_power=float(gamma[0]),
+        gamma_frequency_hz=float(gamma[1]),
+        gamma_duration_ms=float(gamma[2]),
+        error=None,
     )
 
 
@@ -901,6 +1284,14 @@ def _apply_notch_mode(values: np.ndarray, fs: float, notch_mode: str) -> np.ndar
     return np.asarray(filtered, dtype=float)
 
 
+def _matlab2_notch_coefficients(fs: float) -> tuple[np.ndarray, np.ndarray]:
+    theta = 2.0 * np.pi * MATLAB2_COMPAT_NOTCH_FREQ_HZ / float(fs)
+    r = MATLAB2_COMPAT_NOTCH_R
+    b = np.array([1.0, -2.0 * np.cos(theta), 1.0], dtype=float)
+    a = np.array([1.0, -2.0 * r * np.cos(theta), r * r], dtype=float)
+    return b, a
+
+
 def _harmonic_freqs(base_hz: float, fs: float) -> np.ndarray:
     nyquist = 0.5 * float(fs)
     freqs = np.arange(float(base_hz), nyquist, float(base_hz), dtype=float)
@@ -942,6 +1333,7 @@ __all__ = [
     "GammaSpikeChannelResult",
     "GammaSpikeComputationResult",
     "GammaSpikeEventResult",
+    "GammaSpikeCancelled",
     "compute_gamma_spike_for_gui",
     "compute_gamma_spike_segmented_for_gui",
 ]

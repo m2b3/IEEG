@@ -12,7 +12,7 @@ import pyqtgraph as pg
 from scipy import signal
 from mne.io import BaseRaw
 
-from PySide6.QtCore import Qt, Slot, Signal, QRectF
+from PySide6.QtCore import Qt, Slot, Signal, QRectF, QObject, QThread
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QLineEdit, QSizePolicy, QButtonGroup, QAbstractButton,
     QFormLayout, QFrame, QMessageBox, QTableWidget, QTableWidgetItem,
     QHeaderView, QComboBox, QSpinBox, QGridLayout, QScrollArea, QGraphicsRectItem,
-    QSplitter, QFileDialog, QApplication, QMainWindow, QStatusBar,
+    QSplitter, QFileDialog, QMainWindow, QStatusBar,
 )
 
 from app.viewer.time_controls import TimeWindowControl
@@ -31,6 +31,7 @@ from app.computation.rei.algorithm import (
     validate_gui_ei_timing,
 )
 from app.computation.gamma_spike.wire_algorithm import (
+    GammaSpikeCancelled,
     GammaSpikeComputationResult,
     GammaSpikeEventResult,
     compute_gamma_spike_segmented_for_gui,
@@ -89,6 +90,43 @@ class GammaReviewRow(TypedDict):
     gamma_start_time_s: float | None
     gamma_stop_time_s: float | None
     error: str | None
+
+
+class _GammaSpikeWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object, float)
+    failed = Signal(str, float)
+    cancelled = Signal(float)
+
+    def __init__(
+        self,
+        compute_callback: Callable[[Callable[[str], None]], GammaSpikeComputationResult],
+    ) -> None:
+        super().__init__()
+        self._compute_callback = compute_callback
+        self._cancel_requested = False
+
+    @Slot()
+    def run(self) -> None:
+        perf_start = time.perf_counter()
+        try:
+            result = self._compute_callback(self._report_progress)
+        except GammaSpikeCancelled:
+            self.cancelled.emit(time.perf_counter() - perf_start)
+        except Exception as exc:
+            self.failed.emit(str(exc), time.perf_counter() - perf_start)
+        else:
+            self.finished.emit(result, time.perf_counter() - perf_start)
+
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+
+    def _report_progress(self, message: str) -> None:
+        if self._cancel_requested:
+            raise GammaSpikeCancelled()
+        self.progress.emit(str(message))
+        if self._cancel_requested:
+            raise GammaSpikeCancelled()
 
 
 class GammaReviewState(TypedDict):
@@ -190,6 +228,10 @@ class ComputationPanel(QWidget):
         self._switch_to_bipolar_callback: Callable[[], tuple[bool, str]] | None = None
         self._ei_filter_callback: Callable[[], dict[str, str]] | None = None
         self._ei_data_callback: Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]] | None = None
+        self._ei_data_snapshot_callback: Callable[
+            [],
+            Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]],
+        ] | None = None
         self.ei_result_metadata: dict | None = None
         self._last_ei_result: EIComputationResult | None = None
         self._ei_summary_dialog: QDialog | None = None
@@ -201,6 +243,12 @@ class ComputationPanel(QWidget):
         self._gamma_review_dialog: QDialog | None = None
         self._pending_gamma_review_selection: tuple[str, float] | None = None
         self._last_export_dir: Path | None = None
+        self._gamma_cancel_requested = False
+        self._gamma_thread: QThread | None = None
+        self._gamma_worker: _GammaSpikeWorker | None = None
+        self._gamma_perf_start: float | None = None
+        self._gamma_run_window_s: tuple[float, float] | None = None
+        self._gamma_completion_status_active = False
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
         self._gamma_default_window_applied = False
@@ -426,6 +474,11 @@ class ComputationPanel(QWidget):
         self.btn_run = QPushButton("Run REI")
         p_layout.addWidget(self.btn_run)
 
+        self.btn_cancel_gamma = QPushButton("Cancel gamma run")
+        self.btn_cancel_gamma.setEnabled(False)
+        self.btn_cancel_gamma.hide()
+        p_layout.addWidget(self.btn_cancel_gamma)
+
         self.btn_open_ei_summary = QPushButton("Open REI summary")
         self.btn_open_ei_summary.setEnabled(False)
         p_layout.addWidget(self.btn_open_ei_summary)
@@ -466,7 +519,6 @@ class ComputationPanel(QWidget):
         self.time_ctl.t0Changed.connect(self._on_panel_t0_changed)
         self.edit_gamma_start.textChanged.connect(self._on_gamma_window_text_changed)
         self.edit_gamma_end.textChanged.connect(self._on_gamma_window_text_changed)
-
         self.algo_buttons.buttonClicked.connect(self._on_algorithm_button_clicked)
         self.btn_advanced.clicked.connect(self._open_advanced_dialog)
         self.btn_default_windows.clicked.connect(self._apply_default_ei_windows_from_onset)
@@ -480,6 +532,7 @@ class ComputationPanel(QWidget):
         ):
             spin.valueChanged.connect(self._sync_ei_windows_from_ui)
         self.btn_run.clicked.connect(self._run_computation)
+        self.btn_cancel_gamma.clicked.connect(self._cancel_gamma_run)
         self.btn_open_ei_summary.clicked.connect(self._open_ei_summary_dialog)
         self.btn_open_ei_heatmap.clicked.connect(self._open_ei_heatmap_dialog)
         self.btn_export_ei.clicked.connect(self._export_ei_results)
@@ -581,6 +634,12 @@ class ComputationPanel(QWidget):
     def set_main_gain_uv(self, gain_uv: float) -> None:
         del gain_uv  # kept for API compatibility; no local mean preview is shown.
 
+    def hideEvent(self, event) -> None:
+        if self._gamma_completion_status_active:
+            self._clear_status_message()
+            self._gamma_completion_status_active = False
+        super().hideEvent(event)
+
     def set_ei_montage_callbacks(
         self,
         *,
@@ -601,6 +660,15 @@ class ComputationPanel(QWidget):
         callback: Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]],
     ) -> None:
         self._ei_data_callback = callback
+
+    def set_ei_data_snapshot_callback(
+        self,
+        callback: Callable[
+            [],
+            Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]],
+        ],
+    ) -> None:
+        self._ei_data_snapshot_callback = callback
 
     def project_state(self) -> dict:
         self._sync_ei_windows_from_ui(emit=False)
@@ -1049,6 +1117,7 @@ class ComputationPanel(QWidget):
         self.btn_open_gamma_summary.setVisible(is_gamma)
         self.btn_open_gamma_review.setVisible(is_gamma)
         self.btn_export_gamma.setVisible(is_gamma)
+        self.btn_cancel_gamma.setVisible(is_gamma and self._gamma_thread is not None)
         self.btn_open_ei_summary.setEnabled(self._last_ei_result is not None)
         self.btn_open_ei_heatmap.setEnabled(
             self._last_ei_result is not None and bool(self._last_ei_result.heatmap.size)
@@ -1242,6 +1311,9 @@ class ComputationPanel(QWidget):
         return True, ""
 
     def _run_computation(self) -> None:
+        if self._gamma_completion_status_active:
+            self._clear_status_message()
+            self._gamma_completion_status_active = False
         if self.state.algorithm == "ei":
             ok, message = self._validate_ei_inputs()
             if not ok:
@@ -1286,6 +1358,13 @@ class ComputationPanel(QWidget):
             return
 
         if self.state.algorithm == "gamma_spike":
+            if self._gamma_thread is not None:
+                QMessageBox.information(
+                    self,
+                    "Gamma spike detector",
+                    "A gamma spike detection run is already in progress.",
+                )
+                return
             if self._raw is None or self._picks is None:
                 QMessageBox.warning(
                     self,
@@ -1321,52 +1400,20 @@ class ComputationPanel(QWidget):
             if not self._confirm_gamma_notch_before_run():
                 return
 
-            error_message = None
             perf_start = time.perf_counter()
-            self.btn_run.setEnabled(False)
             try:
-                with busy_cursor(self, "Running gamma spike detector..."):
-                    try:
-                        result = self._compute_gamma_spike_result(start_s, stop_s)
-                    except Exception as exc:
-                        timed_mark(
-                            "after_gamma_spike_detector",
-                            perf_start,
-                            raw=self._raw,
-                            visible_window_s=max(0.0, stop_s - start_s),
-                            notes=f"error: {exc}",
-                        )
-                        error_message = str(exc)
-                    else:
-                        self._show_gamma_result(result)
-                        metadata = result.metadata if isinstance(result.metadata, dict) else {}
-                        timed_mark(
-                            "after_gamma_spike_detector",
-                            perf_start,
-                            raw=self._raw,
-                            visible_window_s=max(0.0, stop_s - start_s),
-                            notes=(
-                                f"channels={len(result.channels)}; "
-                                f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
-                                f"spikes={metadata.get('total_spikes', 0)}; "
-                                f"gamma={metadata.get('gamma_success_count', 0)}"
-                            ),
-                        )
-                        # Keep the computation flow quiet: users can open the summary table
-                        # when needed, but it should not interrupt the main viewer.
-            finally:
-                self.btn_run.setEnabled(True)
-            if error_message is not None:
-                self._show_status_message(
-                    "Gamma spike detection failed "
-                    f"after {self._format_duration(time.perf_counter() - perf_start)}."
+                compute_callback = self._build_gamma_spike_compute_callback(start_s, stop_s)
+            except Exception as exc:
+                timed_mark(
+                    "after_gamma_spike_detector",
+                    perf_start,
+                    raw=self._raw,
+                    visible_window_s=max(0.0, stop_s - start_s),
+                    notes=f"setup error: {exc}",
                 )
-                QMessageBox.warning(self, "Gamma spike detector", error_message)
-            else:
-                self._show_status_message(
-                    "Gamma spike detection completed in "
-                    f"{self._format_duration(time.perf_counter() - perf_start)}."
-                )
+                QMessageBox.warning(self, "Gamma spike detector", str(exc))
+                return
+            self._start_gamma_worker(compute_callback, start_s, stop_s, perf_start)
             return
 
         QMessageBox.warning(
@@ -1477,12 +1524,12 @@ class ComputationPanel(QWidget):
             QMessageBox.StandardButton.Yes
         )
 
-    def _compute_gamma_spike_result(
+    def _build_gamma_spike_compute_callback(
         self,
         start_s: float,
         stop_s: float,
-    ) -> GammaSpikeComputationResult:
-        if self._ei_data_callback is None:
+    ) -> Callable[[Callable[[str], None]], GammaSpikeComputationResult]:
+        if self._ei_data_callback is None and self._ei_data_snapshot_callback is None:
             raise RuntimeError("Gamma spike data extraction is not available.")
 
         selected_abs = list(self.state.selected_abs)
@@ -1492,9 +1539,18 @@ class ComputationPanel(QWidget):
             if 0 <= int(idx) < len(self._ch_names_displayed)
         ]
         notch_modes_by_channel = self._ei_notch_modes_for_channels(selected_names)
+        recording_duration_s = self._total_duration_s()
+        source_file_path = self._source_file_path
+
+        if self._ei_data_snapshot_callback is not None:
+            data_callback = self._ei_data_snapshot_callback()
+        elif self._ei_data_callback is not None:
+            data_callback = self._ei_data_callback
+        else:
+            raise RuntimeError("Gamma spike data extraction is not available.")
 
         def load_gamma_data(window_start_s: float, window_stop_s: float):
-            return self._ei_data_callback(
+            return data_callback(
                 selected_abs,
                 float(window_start_s),
                 float(window_stop_s),
@@ -1510,46 +1566,196 @@ class ComputationPanel(QWidget):
                 for position in selected_positions
                 if 0 <= int(position) < len(selected_abs)
             ]
-            return self._ei_data_callback(
+            return data_callback(
                 subset_abs,
                 float(window_start_s),
                 float(window_stop_s),
             )
 
-        progress_start_s = time.perf_counter()
+        def compute(progress_callback: Callable[[str], None]) -> GammaSpikeComputationResult:
+            result = compute_gamma_spike_segmented_for_gui(
+                data_loader=load_gamma_data,
+                analysis_window_s=(float(start_s), float(stop_s)),
+                recording_duration_s=recording_duration_s,
+                chunk_minutes=10.0,
+                chunk_context_seconds=10.0,
+                filter_context_seconds=30.0,
+                notch_modes_by_channel=notch_modes_by_channel,
+                indexed_data_loader=load_gamma_indexed_data,
+                progress_callback=progress_callback,
+                matlab2_compat=True,
+            )
+            if source_file_path is not None:
+                result.metadata["source_file_name"] = source_file_path.name
+                result.metadata["source_file_path"] = str(source_file_path)
+            return result
 
-        def report_gamma_progress(message: str) -> None:
-            elapsed_s = max(0.0, time.perf_counter() - progress_start_s)
-            progress_fraction = self._gamma_progress_fraction(str(message))
-            timing_text = f"elapsed {self._format_duration(elapsed_s)}"
-            if progress_fraction is not None and progress_fraction > 0.0:
-                eta_s = elapsed_s * (1.0 - progress_fraction) / progress_fraction
-                timing_text += f", ETA {self._format_duration(eta_s)}"
-            status_message = f"{message} ({timing_text})"
-            window = self.window()
-            if isinstance(window, QMainWindow):
-                status_bar = window.statusBar()
-                if isinstance(status_bar, QStatusBar):
-                    status_bar.showMessage(status_message)
-            app = QApplication.instance()
-            if app is not None:
-                app.processEvents()
+        return compute
 
-        result = compute_gamma_spike_segmented_for_gui(
-            data_loader=load_gamma_data,
-            analysis_window_s=(float(start_s), float(stop_s)),
-            recording_duration_s=self._total_duration_s(),
-            chunk_minutes=10.0,
-            chunk_context_seconds=10.0,
-            filter_context_seconds=30.0,
-            notch_modes_by_channel=notch_modes_by_channel,
-            indexed_data_loader=load_gamma_indexed_data,
-            progress_callback=report_gamma_progress,
+    def _compute_gamma_spike_result(
+        self,
+        start_s: float,
+        stop_s: float,
+    ) -> GammaSpikeComputationResult:
+        return self._build_gamma_spike_compute_callback(start_s, stop_s)(lambda _msg: None)
+
+    def _start_gamma_worker(
+        self,
+        compute_callback: Callable[[Callable[[str], None]], GammaSpikeComputationResult],
+        start_s: float,
+        stop_s: float,
+        perf_start: float,
+    ) -> None:
+        thread = QThread(self)
+        worker = _GammaSpikeWorker(compute_callback)
+        worker.moveToThread(thread)
+
+        self._gamma_thread = thread
+        self._gamma_worker = worker
+        self._gamma_perf_start = perf_start
+        self._gamma_run_window_s = (float(start_s), float(stop_s))
+        self._gamma_cancel_requested = False
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_gamma_worker_progress)
+        worker.finished.connect(self._on_gamma_worker_finished)
+        worker.failed.connect(self._on_gamma_worker_failed)
+        worker.cancelled.connect(self._on_gamma_worker_cancelled)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        worker.cancelled.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_gamma_worker_refs)
+
+        self.btn_run.setEnabled(False)
+        self.btn_cancel_gamma.setVisible(True)
+        self.btn_cancel_gamma.setEnabled(True)
+        self._gamma_completion_status_active = False
+        self._show_status_message("Gamma spike detection started...")
+        thread.start()
+
+    def _cancel_gamma_run(self) -> None:
+        self._gamma_cancel_requested = True
+        if self._gamma_worker is not None:
+            self._gamma_worker.request_cancel()
+        self.btn_cancel_gamma.setEnabled(False)
+        self._show_status_message("Cancelling gamma spike detection...")
+
+    @Slot(str)
+    def _on_gamma_worker_progress(self, message: str) -> None:
+        self._gamma_completion_status_active = False
+        start = self._gamma_perf_start if self._gamma_perf_start is not None else time.perf_counter()
+        elapsed_s = max(0.0, time.perf_counter() - start)
+        progress_fraction = self._gamma_progress_fraction(str(message))
+        timing_text = f"time so far: {self._format_duration(elapsed_s)}"
+        if progress_fraction is not None and progress_fraction > 0.0:
+            eta_s = elapsed_s * (1.0 - progress_fraction) / progress_fraction
+            timing_text += f", estimated time remaining: {self._format_duration(eta_s)}"
+        self._show_status_message(
+            f"Gamma spike detection processing. {message} ({timing_text})"
         )
-        if self._source_file_path is not None:
-            result.metadata["source_file_name"] = self._source_file_path.name
-            result.metadata["source_file_path"] = str(self._source_file_path)
-        return result
+
+    @Slot(object, float)
+    def _on_gamma_worker_finished(self, result: object, elapsed_s: float) -> None:
+        if not isinstance(result, GammaSpikeComputationResult):
+            self._on_gamma_worker_failed("Gamma spike detector returned an unexpected result.", elapsed_s)
+            return
+        self._show_gamma_result(result)
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        start_s, stop_s = self._gamma_run_window_s or (0.0, 0.0)
+        perf_start = self._gamma_perf_start if self._gamma_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_gamma_spike_detector",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=max(0.0, stop_s - start_s),
+            notes=(
+                f"channels={len(result.channels)}; "
+                f"start_s={start_s:.3f}; stop_s={stop_s:.3f}; "
+                f"spikes={metadata.get('total_spikes', 0)}; "
+                f"gamma={metadata.get('gamma_success_count', 0)}"
+            ),
+        )
+        total_spikes = int(metadata.get("total_spikes", 0) or 0)
+        gamma_spikes = self._gamma_positive_count(result)
+        self._gamma_completion_status_active = True
+        self._show_status_message(
+            "Gamma spike detection completed. "
+            f"Total spikes: {total_spikes}. "
+            f"Gamma-positive spikes: {gamma_spikes}. "
+            f"Total duration of the run: {self._format_duration(elapsed_s)}.",
+            timeout_ms=0,
+        )
+        self._finish_gamma_worker_ui()
+
+    @Slot(str, float)
+    def _on_gamma_worker_failed(self, error_message: str, elapsed_s: float) -> None:
+        self._gamma_completion_status_active = False
+        start_s, stop_s = self._gamma_run_window_s or (0.0, 0.0)
+        perf_start = self._gamma_perf_start if self._gamma_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_gamma_spike_detector",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=max(0.0, stop_s - start_s),
+            notes=f"error: {error_message}",
+        )
+        self._show_status_message(
+            "Gamma spike detection failed "
+            f"after {self._format_duration(elapsed_s)}."
+        )
+        self._finish_gamma_worker_ui()
+        QMessageBox.warning(self, "Gamma spike detector", str(error_message))
+
+    @Slot(float)
+    def _on_gamma_worker_cancelled(self, elapsed_s: float) -> None:
+        self._gamma_completion_status_active = False
+        start_s, stop_s = self._gamma_run_window_s or (0.0, 0.0)
+        perf_start = self._gamma_perf_start if self._gamma_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_gamma_spike_detector",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=max(0.0, stop_s - start_s),
+            notes="cancelled",
+        )
+        self._show_status_message(
+            "Gamma spike detection cancelled after "
+            f"{self._format_duration(elapsed_s)}."
+        )
+        self._finish_gamma_worker_ui()
+
+    def _finish_gamma_worker_ui(self) -> None:
+        self.btn_run.setEnabled(True)
+        self.btn_cancel_gamma.setEnabled(False)
+        self.btn_cancel_gamma.hide()
+        self._gamma_cancel_requested = False
+
+    @Slot()
+    def _clear_gamma_worker_refs(self) -> None:
+        self._gamma_thread = None
+        self._gamma_worker = None
+        self._gamma_perf_start = None
+        self._gamma_run_window_s = None
+
+    @staticmethod
+    def _gamma_positive_count(result: GammaSpikeComputationResult) -> int:
+        total = 0
+        for channel_result in result.channels:
+            for event in channel_result.events:
+                if (
+                    event.gamma_power is not None
+                    and event.gamma_duration_ms is not None
+                    and (
+                        float(event.gamma_power) > 0.0
+                        or float(event.gamma_duration_ms) > 0.0
+                    )
+                ):
+                    total += 1
+        return int(total)
 
     @staticmethod
     def _gamma_progress_fraction(message: str) -> float | None:
@@ -1580,12 +1786,19 @@ class ComputationPanel(QWidget):
             return f"{minutes:d}m {secs:02d}s"
         return f"{secs:d}s"
 
-    def _show_status_message(self, message: str) -> None:
+    def _show_status_message(self, message: str, *, timeout_ms: int = 15000) -> None:
         window = self.window()
         if isinstance(window, QMainWindow):
             status_bar = window.statusBar()
             if isinstance(status_bar, QStatusBar):
-                status_bar.showMessage(str(message), 15000)
+                status_bar.showMessage(str(message), int(timeout_ms))
+
+    def _clear_status_message(self) -> None:
+        window = self.window()
+        if isinstance(window, QMainWindow):
+            status_bar = window.statusBar()
+            if isinstance(status_bar, QStatusBar):
+                status_bar.clearMessage()
 
     def _clear_gamma_outputs(self) -> None:
         self._last_gamma_result = None

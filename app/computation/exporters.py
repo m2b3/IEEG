@@ -297,26 +297,36 @@ def export_gamma_spike_result(
                 {
                     "channel": channel_result.channel,
                     "event_number": int(event_number),
-                    "sample": _finite_float(event.sample),
-                    "time_s": _finite_float(event.time_s),
+                    "sample": _sample0_to_export_sample1(event.sample),
+                    "time_s": _sample0_to_export_time(
+                        event.sample,
+                        fs,
+                        data_start_s,
+                    ),
                     "is_gamma": _gamma_event_is_gamma(
                         event.gamma_power,
                         event.gamma_duration_ms,
                     ),
-                    "boundary_p1_sample": _finite_float(event.boundary_p1_sample),
-                    "boundary_n1_sample": _finite_float(event.boundary_n1_sample),
-                    "boundary_n2_sample": _finite_float(event.boundary_n2_sample),
-                    "boundary_p1_time_s": _sample_to_time(
+                    "boundary_p1_sample": _sample0_to_export_sample1(
+                        event.boundary_p1_sample
+                    ),
+                    "boundary_n1_sample": _sample0_to_export_sample1(
+                        event.boundary_n1_sample
+                    ),
+                    "boundary_n2_sample": _sample0_to_export_sample1(
+                        event.boundary_n2_sample
+                    ),
+                    "boundary_p1_time_s": _sample0_to_export_time(
                         event.boundary_p1_sample,
                         fs,
                         data_start_s,
                     ),
-                    "boundary_n1_time_s": _sample_to_time(
+                    "boundary_n1_time_s": _sample0_to_export_time(
                         event.boundary_n1_sample,
                         fs,
                         data_start_s,
                     ),
-                    "boundary_n2_time_s": _sample_to_time(
+                    "boundary_n2_time_s": _sample0_to_export_time(
                         event.boundary_n2_sample,
                         fs,
                         data_start_s,
@@ -387,13 +397,35 @@ def _compact_gamma_metadata(
         "source_file_path": metadata.get("source_file_path"),
         "analysis_window_s": _json_safe(metadata.get("analysis_window_s")),
         "sampling_frequency_hz": fs,
-        "filter_context_seconds": _finite_float(metadata.get("filter_context_seconds")),
         "processing_mode": metadata.get("processing_mode"),
-        "chunk_minutes": _finite_float(metadata.get("chunk_minutes")),
-        "chunk_context_seconds": _finite_float(metadata.get("chunk_context_seconds")),
+        "detector_window_s": _json_safe(
+            metadata.get("detector_window_s", metadata.get("analysis_window_s"))
+        ),
+        "detector_extra_context_seconds": _finite_float(
+            metadata.get("detector_extra_context_seconds", 0.0)
+        ),
+        "detail_chunk_minutes": _finite_float(
+            metadata.get("detail_chunk_minutes", metadata.get("chunk_minutes"))
+        ),
+        "detail_chunk_context_seconds": _finite_float(
+            metadata.get(
+                "detail_chunk_context_seconds",
+                metadata.get("chunk_context_seconds"),
+            )
+        ),
+        "boundary_gamma_filter_context_seconds": _finite_float(
+            metadata.get("filter_context_seconds")
+        ),
+        "sample_indexing": (
+            "1-based samples in exported gamma_spike_events.csv; "
+            "time columns are derived from those exported samples"
+        ),
         "n_chunks": int(metadata.get("n_chunks", 0) or 0),
         "notch_filter": bool(metadata.get("notch_filter", False)),
         "notch_modes": _json_safe(metadata.get("notch_modes", [])),
+        "gamma_notch_behavior": metadata.get("gamma_notch_behavior"),
+        "notch_frequency_hz": _finite_float(metadata.get("notch_frequency_hz")),
+        "notch_r": _finite_float(metadata.get("notch_r")),
         "total_spikes": int(metadata.get("total_spikes", 0) or 0),
         "boundary_success_count": int(
             metadata.get("boundary_success_count", 0) or 0
@@ -453,6 +485,8 @@ Files:
 - gamma_spike_events.csv
   One row per detected spike. Includes channel, event time, spike
   boundaries, gamma power, gamma frequency, gamma duration, and errors.
+  Sample columns use 1-based indexing, and time columns are derived from those
+  exported samples, to match the original Python2 output.
 
 - gamma_metadata.json
   Records the analyzed file, analysis window, sampling frequency, segmented
@@ -460,6 +494,8 @@ Files:
 
 Notes:
 - Spikes are exported only inside the selected analysis window.
+- The detector window is exactly the selected analysis window; extra context is
+  used only for boundary and gamma detail measurements.
 - Gamma measurements use the notch setting selected before running the algorithm.
 - No gamma heatmap figures are exported.
 - Time values are in seconds.
@@ -485,11 +521,18 @@ def _finite_float(value: Any) -> float | None:
     return number if np.isfinite(number) else None
 
 
-def _sample_to_time(sample: Any, fs: float, data_start_s: float) -> float | None:
+def _sample0_to_export_time(sample: Any, fs: float, data_start_s: float) -> float | None:
     sample_value = _finite_float(sample)
     if sample_value is None or fs <= 0.0:
         return None
-    return float(data_start_s) + sample_value / float(fs)
+    return float(data_start_s) + (sample_value + 1.0) / float(fs)
+
+
+def _sample0_to_export_sample1(sample: Any) -> float | None:
+    sample_value = _finite_float(sample)
+    if sample_value is None:
+        return None
+    return float(sample_value) + 1.0
 
 
 def _gamma_event_is_gamma(power: Any, duration_ms: Any) -> bool:

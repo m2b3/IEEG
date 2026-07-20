@@ -53,8 +53,7 @@ Rendering is optimized to:
 - Review REI results in a sortable summary table and heatmap
 - Review gamma spike results in channel-level and spike-level tables with raw trace, boundary, and time-frequency views
 - Run gamma spike analysis through one segmented pipeline for short and long recordings
-- Use channel-batched gamma spike detection and 10-minute detail chunks to reduce memory use on long recordings
-- Use display notch-filter choices for gamma spike computation, with a warning when no notch filter is selected
+- Use segmented gamma spike detection with full-channel boundary/gamma measurements while keeping the selected software notch behavior
 - Export REI and gamma spike results directly from the computation panel after the algorithm has run
 - Export compact metadata JSON files, CSV summaries, and README notes for output folders
 - Export REI heatmap values and a saved REI heatmap figure
@@ -86,15 +85,17 @@ Gamma spike heatmaps are shown inside the review UI but are not saved during exp
 
 ## Gamma Spike Pipeline
 
-Gamma spike analysis uses a memory-conscious GUI pipeline:
+Gamma spike analysis uses a memory-conscious segmented pipeline:
 
-1. The detector runs over the full selected analysis window one channel at a time.
-2. Per-channel detections are merged and postprocessed once globally.
-3. Spike boundary and gamma detail measurements are computed in 10-minute chunks.
-4. Each detail chunk is read with 10 seconds of context.
+1. The detector runs in 10-minute chunks with 10 seconds of context.
+2. Detector settings are `-bl 10 -bh 60 -h 60 -k1 3.65 -dec 200`.
+3. Per-chunk detections are merged and postprocessed once globally.
+4. Spike boundary and gamma measurements are computed one channel at a time from full-channel filtered signals.
+5. Boundary/gamma filtering keeps the selected software notch behavior, including 60 Hz harmonics when selected.
 
-This avoids loading all selected channels for the full recording at once while
-keeping detector behavior close to the previous full-window method.
+This is the gamma spike pipeline used by the computation panel. The older
+Python/export behavior is kept internally for validation work, but it is not
+shown as a user-facing option.
 
 ## Installation
 

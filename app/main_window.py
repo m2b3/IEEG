@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import TypedDict
+from typing import Callable, TypedDict
 
 import numpy as np
 import mne
@@ -364,6 +364,7 @@ class MainWindow(QMainWindow):
         )
         self.comp_panel.set_ei_filter_callback(self._ei_notch_modes_by_group)
         self.comp_panel.set_ei_data_callback(self._get_ei_data_for_computation)
+        self.comp_panel.set_ei_data_snapshot_callback(self._make_ei_data_snapshot_callback)
         self.comp_dock.setWidget(self.comp_panel)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.comp_dock)
         self.comp_dock.hide()
@@ -2376,6 +2377,125 @@ class MainWindow(QMainWindow):
         min_len = min(row.size for row in rows)
         data = np.vstack([row[:min_len] for row in rows])
         return data, fs, names
+
+    def _make_ei_data_snapshot_callback(
+        self,
+    ) -> Callable[[list[int], float, float], tuple[np.ndarray, float, list[str]]]:
+        raw = self.source_raw if self.source_raw is not None else self.current_raw
+        if raw is None or self.current_picks is None:
+            raise RuntimeError("Load a dataset before running computation.")
+
+        display_names = list(self.viewer.get_channel_names())
+        raw_ch_names = list(raw.ch_names)
+        fs = float(raw.info["sfreq"])
+        picks = np.asarray(self.current_picks, dtype=int).copy()
+        mode = str(self.viewer.reference_mode())
+        bad_names = set(self.viewer.get_bad_channels())
+        common_ref_name = self.viewer.common_reference_name()
+        montage = self.viewer.get_bipolar_montage() if mode == "bipolar" else None
+        bipolar_pairs = [
+            (str(pair.name), str(pair.ch1), str(pair.ch2))
+            for pair in getattr(montage, "pairs", [])
+        ]
+
+        def snapshot_loader(
+            selected_abs: list[int],
+            start_s: float,
+            stop_s: float,
+        ) -> tuple[np.ndarray, float, list[str]]:
+            t0 = float(min(start_s, stop_s))
+            t1 = float(max(start_s, stop_s))
+            if t1 <= t0:
+                raise RuntimeError("Invalid computation data window.")
+
+            start_samp = max(0, min(int(np.floor(t0 * fs)), raw.n_times - 1))
+            stop_samp = max(start_samp + 1, min(int(np.ceil(t1 * fs)), raw.n_times))
+
+            def read_raw_segment(channel_picks: list[int] | np.ndarray) -> np.ndarray:
+                data = raw.get_data(picks=channel_picks, start=start_samp, stop=stop_samp)
+                return np.asarray(data, dtype=float)
+
+            def raw_index_for_channel(ch_name: str) -> int | None:
+                try:
+                    abs_idx = raw_ch_names.index(str(ch_name))
+                except ValueError:
+                    return None
+                if not (0 <= abs_idx < len(picks)):
+                    return None
+                return int(picks[abs_idx])
+
+            rows: list[np.ndarray] = []
+            names: list[str] = []
+
+            if mode == "bipolar":
+                pair_by_name = {
+                    pair_name: (ch1, ch2)
+                    for pair_name, ch1, ch2 in bipolar_pairs
+                }
+                for abs_idx in selected_abs:
+                    idx = int(abs_idx)
+                    if not (0 <= idx < len(display_names)):
+                        continue
+                    display_name = str(display_names[idx])
+                    pair = pair_by_name.get(display_name)
+                    if pair is None:
+                        continue
+                    ch1_pick = raw_index_for_channel(pair[0])
+                    ch2_pick = raw_index_for_channel(pair[1])
+                    if ch1_pick is None or ch2_pick is None:
+                        continue
+                    data_v = read_raw_segment([ch1_pick, ch2_pick])
+                    rows.append(np.asarray(data_v[0] - data_v[1], dtype=float) * 1e6)
+                    names.append(display_name)
+            else:
+                selected = [
+                    int(abs_idx)
+                    for abs_idx in selected_abs
+                    if 0 <= int(abs_idx) < len(display_names) and int(abs_idx) < len(picks)
+                ]
+                if not selected:
+                    raise RuntimeError("No selected channels are available for computation.")
+
+                selected_picks = picks[np.asarray(selected, dtype=int)]
+                selected_data = read_raw_segment(selected_picks)
+                selected_data = np.asarray(selected_data, dtype=float)
+
+                ref = None
+                if mode in {"average", "median"}:
+                    ref_abs = [
+                        i for i, name in enumerate(raw_ch_names)
+                        if str(name) not in bad_names and i < len(picks)
+                    ]
+                    if ref_abs:
+                        ref_picks = picks[np.asarray(ref_abs, dtype=int)]
+                        ref_data = read_raw_segment(ref_picks)
+                        ref_data = np.asarray(ref_data, dtype=float)
+                        ref = (
+                            np.nanmean(ref_data, axis=0)
+                            if mode == "average"
+                            else np.nanmedian(ref_data, axis=0)
+                        )
+                elif mode == "common" and common_ref_name:
+                    ref_pick = raw_index_for_channel(common_ref_name)
+                    if ref_pick is not None:
+                        ref_data = read_raw_segment([ref_pick])
+                        ref = np.asarray(ref_data[0], dtype=float)
+
+                for row_index, abs_idx in enumerate(selected):
+                    signal = np.asarray(selected_data[row_index], dtype=float)
+                    if ref is not None:
+                        signal = signal - ref
+                    rows.append(signal * 1e6)
+                    names.append(str(display_names[abs_idx]))
+
+            if not rows or min(row.size for row in rows) < 2:
+                raise RuntimeError("Could not extract enough selected channel data for computation.")
+
+            min_len = min(row.size for row in rows)
+            data = np.vstack([row[:min_len] for row in rows])
+            return data, fs, names
+
+        return snapshot_loader
 
     def _on_comp_panel_selection_changed(self, selected_abs: list[int]):
         # Highlight the same channels in main viewer (and treat it as selection)
