@@ -54,6 +54,7 @@ Rendering is optimized to:
 - Review gamma spike results in channel-level and spike-level tables with raw trace, boundary, and time-frequency views
 - Run gamma spike analysis through one segmented pipeline for short and long recordings
 - Use segmented gamma spike detection with full-channel boundary/gamma measurements while keeping the selected software notch behavior
+- Run gamma spike detection in the background with progress, estimated remaining time, and cancellation
 - Export REI and gamma spike results directly from the computation panel after the algorithm has run
 - Export compact metadata JSON files, CSV summaries, and README notes for output folders
 - Export REI heatmap values and a saved REI heatmap figure
@@ -81,6 +82,12 @@ Gamma spike export includes:
 - `gamma_metadata.json`
 - `README.txt`
 
+`gamma_channel_summary.csv` contains one row per channel with total spikes,
+gamma-positive spikes, non-gamma spikes, gamma rate, mean gamma power, and mean
+gamma duration. `gamma_spike_events.csv` contains one row per retained spike
+with spike timing, boundary points, gamma measurements, and any processing
+error.
+
 Gamma spike heatmaps are shown inside the review UI but are not saved during export, because saving one heatmap per spike can create very large output folders.
 
 ## Gamma Spike Pipeline
@@ -92,6 +99,12 @@ Gamma spike analysis uses a memory-conscious segmented pipeline:
 3. Per-chunk detections are merged and postprocessed once globally.
 4. Spike boundary and gamma measurements are computed one channel at a time from full-channel filtered signals.
 5. Boundary/gamma filtering keeps the selected software notch behavior, including 60 Hz harmonics when selected.
+
+The run happens in a background worker. While it is running, the bottom-left
+status area shows the current processing step, time so far, and estimated time
+remaining. When it finishes, the status area keeps a summary with total spikes,
+gamma-positive spikes, and total run duration until another computation starts
+or the computation panel is closed.
 
 This is the gamma spike pipeline used by the computation panel. The older
 Python/export behavior is kept internally for validation work, but it is not

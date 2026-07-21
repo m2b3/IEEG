@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
 
 
 class ProjectFileHelper:
-    EEG_FILE_FILTER = "EEG files (*.edf *.bdf *.fif *.vhdr *.set *.cnt *.eeg *.mff);;All files (*)"
+    EEG_FILE_FILTER = "EEG files (*.edf *.bdf *.fif *.vhdr *.set *.cnt);;All files (*)"
     PROJECT_FILE_FILTER = "iEEG Project (*.ieeg);;All files (*)"
 
     @staticmethod

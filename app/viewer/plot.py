@@ -150,7 +150,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._spacing: float = 200.0  # y spacing in "display units"
         self._vertical_margin_factor: float = 1.10
         self._vertical_view_margin_fraction: float = 0.12
-        self._fit_visible_traces: bool = False
 
         # ---- Render caches ----
         self._visible_abs: np.ndarray = np.array([], dtype=int)  # abs indices in displayed channel list
@@ -462,10 +461,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if gain is not None:
             self._gain_uv = float(gain)
 
-        self.render()
-
-    def set_fit_visible_traces(self, enabled: bool) -> None:
-        self._fit_visible_traces = bool(enabled)
         self.render()
 
     def time_start(self) -> float:
@@ -791,23 +786,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         )
         y0 = -ypad
         y1 = (n_vis - 1) * spacing + ypad
-
-        trace_margin = 0.20 * spacing
-        if self._fit_visible_traces and seg_ds_uv is not None:
-            centered = self._center_traces_for_display(seg_ds_uv)
-            if centered.ndim == 2 and centered.shape[0] > 0 and centered.shape[1] > 0:
-                n_rows = min(int(n_vis), int(centered.shape[0]))
-                displayed_rows: list[np.ndarray] = []
-                gain_factor = self._display_gain_factor()
-                for row in range(n_rows):
-                    plot_row = n_vis - 1 - row
-                    displayed_rows.append(centered[row] * gain_factor + plot_row * spacing)
-
-                displayed_y = np.concatenate(displayed_rows) if displayed_rows else np.asarray([])
-                finite_y = displayed_y[np.isfinite(displayed_y)]
-                if finite_y.size:
-                    y0 = min(y0, float(np.nanmin(finite_y)) - trace_margin)
-                    y1 = max(y1, float(np.nanmax(finite_y)) + trace_margin)
 
         if self._seizure_onset_s is not None or self._seizure_offset_s is not None:
             y1 += 0.45 * spacing

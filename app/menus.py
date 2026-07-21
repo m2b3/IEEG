@@ -9,13 +9,6 @@ def add_action(menu, name, slot):
     return action
 
 
-def add_disabled_action(menu, name):
-    action = QAction(name, menu)
-    action.setEnabled(False)
-    menu.addAction(action)
-    return action
-
-
 def build_menubar(main_window):
     menubar = main_window.menuBar()
     menubar.clear()
@@ -61,20 +54,17 @@ def build_menubar(main_window):
     channels_menu = menubar.addMenu("Channels")
     add_action(channels_menu, "Channel Groups...", main_window.on_edit_channel_groups)
     add_action(channels_menu, "Hidden Channels...", main_window._show_hidden_channels_menu)
-    act_bad_channels = add_disabled_action(
-        channels_menu,
-        "Bad Channels / Review Bad Channels",
-    )
+    add_action(channels_menu, "Bad Channels...", main_window._show_bad_channels_menu)
 
-    montage_ref_menu = channels_menu.addMenu("Montage/ Reference")
+    # -------- Preprocessing --------
+    pre_menu = menubar.addMenu("Preprocessing")
+    montage_ref_menu = pre_menu.addMenu("Montage / Reference")
     add_action(montage_ref_menu, "Monopolar", main_window.on_reference_monopolar)
     add_action(montage_ref_menu, "Bipolar", main_window.on_reference_bipolar)
     add_action(montage_ref_menu, "Average", main_window.on_reference_average)
     add_action(montage_ref_menu, "Median", main_window.on_reference_median)
     add_action(montage_ref_menu, "Common Reference...", main_window.on_reference_common)
-
-    # -------- Preprocessing --------
-    pre_menu = menubar.addMenu("Preprocessing")
+    pre_menu.addSeparator()
     add_action(pre_menu, "Display Filters...", main_window.on_toggle_permanent_filters)
     add_action(pre_menu, "Power Spectrum", main_window.open_psd_panel)
 
@@ -90,7 +80,7 @@ def build_menubar(main_window):
     # -------- Help --------
     help_menu = menubar.addMenu("Help")
     add_action(help_menu, "User Guide", main_window.on_open_user_guide)
-    act_shortcuts = add_disabled_action(help_menu, "Shortcuts")
+    add_action(help_menu, "Shortcuts", main_window.on_open_shortcuts)
 
     # Store what should be disabled until a file is loaded.
     main_window._menus_disabled_until_loaded = [
@@ -102,10 +92,6 @@ def build_menubar(main_window):
     ]
     main_window._menus_always_enabled = [file_menu, help_menu]
 
-    # Store actions that are visible placeholders but not implemented yet.
-    main_window._todo_actions = [
-        act_bad_channels,
-        act_shortcuts,
-    ]
+    main_window._todo_actions = []
 
     return act_save, act_saveas, act_close

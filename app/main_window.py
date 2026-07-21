@@ -616,12 +616,6 @@ class MainWindow(QMainWindow):
         tb.addWidget(self.gain)
         self._add_presets_button(tb, self.gain, [10, 50, 100, 200, 400, 800])
 
-        self.fit_traces = QCheckBox("Fit traces")
-        self.fit_traces.setChecked(False)
-        tb.addWidget(self.fit_traces)
-
-        tb.addSeparator()
-
         tb.addWidget(QLabel("Theme:"))
         self.display_theme = QComboBox()
         for label, key in DISPLAY_THEME_CHOICES:
@@ -636,6 +630,11 @@ class MainWindow(QMainWindow):
         self.btn_hidden.setText("Hidden...")
         self.btn_hidden.clicked.connect(self._show_hidden_channels_menu)
         tb.addWidget(self.btn_hidden)
+
+        self.btn_bad_channels = QToolButton()
+        self.btn_bad_channels.setText("Bad...")
+        self.btn_bad_channels.clicked.connect(self._show_bad_channels_menu)
+        tb.addWidget(self.btn_bad_channels)
 
         # Edit bipolar referencing 
         self.btn_edit_bipolar = QToolButton()
@@ -652,7 +651,6 @@ class MainWindow(QMainWindow):
         self.gain.valueChanged.connect(lambda _v: self._mark_project_dirty())
         self.chan_range.valueChanged.connect(lambda v: self.viewer.set_view_params(chan_range=v))
         self.chan_range.valueChanged.connect(lambda _v: self._mark_project_dirty())
-        self.fit_traces.toggled.connect(lambda checked: self.viewer.set_fit_visible_traces(checked))
 
     def _on_display_theme_changed(self, index: int) -> None:
         theme_key = self.display_theme.itemData(index)
@@ -2022,6 +2020,34 @@ class MainWindow(QMainWindow):
             for ch in hidden:
                 act = menu.addAction(f"Show {ch}")
                 act.triggered.connect(lambda checked=False, name=ch: self.viewer.unhide_channel(name))
+
+        menu.exec_(QCursor.pos())
+
+    def _show_bad_channels_menu(self):
+        bad_channels = self.viewer.get_bad_channels()
+        menu = QMenu()
+
+        if not bad_channels:
+            act = menu.addAction("(No bad channels)")
+            act.setEnabled(False)
+        else:
+            act_unmark_all = menu.addAction("Unmark all")
+            menu.addSeparator()
+
+            def unmark_all_bad():
+                self.viewer.set_bad_channels(set())
+
+            act_unmark_all.triggered.connect(unmark_all_bad)
+
+            for ch in bad_channels:
+                act = menu.addAction(f"Unmark {ch}")
+
+                def unmark_channel(checked=False, name=ch):
+                    current = set(self.viewer.get_bad_channels())
+                    current.discard(name)
+                    self.viewer.set_bad_channels(current)
+
+                act.triggered.connect(unmark_channel)
 
         menu.exec_(QCursor.pos())
 
@@ -4031,44 +4057,34 @@ class MainWindow(QMainWindow):
     def _on_filter_scope_changed(self, _text: str) -> None:
         self._push_scope_profile_to_ui()
 
-# ---------------- User guide  -------------
+# ---------------- Help documents  -------------
 
-    def on_open_user_guide(self) -> None:
-        """
-        Open the bundled markdown user guide in a simple dialog.
-        For now, this is intentionally lightweight.
-        """
-        guide_path = Path(__file__).resolve().parent / "docs" / "user_guide.md"
+    def _open_markdown_help_dialog(self, *, filename: str, title: str) -> None:
+        doc_path = Path(__file__).resolve().parent / "docs" / filename
 
-        if not guide_path.exists():
+        if not doc_path.exists():
             QMessageBox.information(
                 self,
-                "User Guide",
-                f"Guide file not found:\n{guide_path}"
+                title,
+                f"Help file not found:\n{doc_path}"
             )
             return
 
         try:
-            markdown_text = guide_path.read_text(encoding="utf-8")
+            markdown_text = doc_path.read_text(encoding="utf-8")
         except Exception as e:
-            QMessageBox.critical(self, "User Guide", f"Could not read guide:\n{e}")
+            QMessageBox.critical(self, title, f"Could not read help file:\n{e}")
             return
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("User Guide")
+        dlg.setWindowTitle(title)
         dlg.resize(900, 700)
 
         layout = QVBoxLayout(dlg)
 
         viewer = QTextBrowser(dlg)
         viewer.setOpenExternalLinks(True)
-
-        # Simple option 1: show raw markdown
-        # viewer.setPlainText(markdown_text)
-
-        # Simple option 2: let Qt display it as preformatted text
         viewer.setPlainText(markdown_text)
-
         layout.addWidget(viewer)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dlg)
@@ -4078,5 +4094,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(buttons)
 
         dlg.exec()
+
+    def on_open_user_guide(self) -> None:
+        self._open_markdown_help_dialog(filename="user_guide.md", title="User Guide")
+
+    def on_open_shortcuts(self) -> None:
+        self._open_markdown_help_dialog(filename="shortcuts.md", title="Shortcuts")
 
  
