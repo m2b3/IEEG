@@ -436,6 +436,9 @@ def _compact_gamma_metadata(
         "gamma_success_count": int(metadata.get("gamma_success_count", 0) or 0),
         "n_channels": int(metadata.get("n_channels", len(summary_rows)) or 0),
         "n_samples": n_samples,
+        "performance_assessment": _json_safe(
+            metadata.get("performance_assessment")
+        ),
         "output_files": [
             "gamma_channel_summary.csv",
             "gamma_spike_events.csv",

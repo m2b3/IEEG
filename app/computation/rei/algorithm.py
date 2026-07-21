@@ -203,22 +203,38 @@ def compute_ei_index(target: Array, base: Array, fs: float) -> tuple[Array, Arra
     return cast(Array, ei), channel_onset, target_hfer
 
 
-def bandpass_hf(data: Array, fs: float) -> Array:
+def bandpass_hf(
+    data: Array,
+    fs: float,
+    *,
+    low_freq: float = 60.0,
+    high_freq: float = 140.0,
+) -> Array:
     """
     High-frequency filtering from original code.
     Input/output: channels x time.
     """
     nyquist = fs / 2.0
+    low = float(low_freq)
+    high_requested = float(high_freq)
 
-    if nyquist <= 71:
-        raise ValueError(f"Sampling rate too low for 70 Hz high-frequency bandpass: fs={fs}")
+    if low <= 0.0 or high_requested <= low:
+        raise ValueError("REI analysis frequency range must have positive low < high values.")
+    if nyquist <= low + 1.0:
+        raise ValueError(
+            f"Sampling rate too low for {low:g} Hz REI bandpass: fs={fs}"
+        )
 
-    high = min(140, nyquist - 1)
+    high = min(high_requested, nyquist - 1.0)
+    if high <= low:
+        raise ValueError(
+            f"REI high frequency must be below Nyquist ({nyquist:g} Hz)."
+        )
     ba_coefficients = cast(
         tuple[Array, Array],
         signal.butter(
             N=4,
-            Wn=[70.0, float(high)],
+            Wn=[float(low), float(high)],
             btype="bandpass",
             analog=False,
             output="ba",
@@ -279,11 +295,19 @@ def apply_notch_by_channel(
 
 def compute_ei_from_windows(data: np.ndarray, fs: float,
                             baseline_samples: tuple[int, int],
-                            ictal_samples: tuple[int, int]) -> tuple[Array, Array, Array]:
+                            ictal_samples: tuple[int, int],
+                            *,
+                            low_freq: float = 60.0,
+                            high_freq: float = 140.0) -> tuple[Array, Array, Array]:
     """
     data shape must be channels x time.
     """
-    data_filt = bandpass_hf(cast(Array, np.asarray(data, dtype=np.float64)), fs)
+    data_filt = bandpass_hf(
+        cast(Array, np.asarray(data, dtype=np.float64)),
+        fs,
+        low_freq=float(low_freq),
+        high_freq=float(high_freq),
+    )
 
     base = data_filt[:, baseline_samples[0]:baseline_samples[1]]
     target = data_filt[:, ictal_samples[0]:ictal_samples[1]]
@@ -343,6 +367,8 @@ def compute_ei_for_gui(
     channel_groups: dict[str, str] | None = None,
     bad_channels: set[str] | None = None,
     notch_modes_by_channel: dict[str, str] | None = None,
+    low_freq: float = 60.0,
+    high_freq: float = 140.0,
     metadata: dict | None = None,
 ) -> EIComputationResult:
     """
@@ -415,6 +441,8 @@ def compute_ei_for_gui(
         fs=float(fs),
         baseline_samples=(int(b0), int(b1)),
         ictal_samples=(int(i0), int(i1)),
+        low_freq=float(low_freq),
+        high_freq=float(high_freq),
     )
 
     ranks = np.asarray(np.asarray(ei).argsort()[::-1].argsort() + 1, dtype=int)

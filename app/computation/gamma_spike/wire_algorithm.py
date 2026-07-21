@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import math
+import time
 from typing import Any, cast
 
 import numpy as np
@@ -95,6 +96,10 @@ def compute_gamma_spike_segmented_for_gui(
     postprocessed once. This keeps long recordings memory-friendly without
     changing the algorithmic path between short and long selections.
     """
+    perf_total_start = time.perf_counter()
+    perf_assessment: dict[str, float | int | str] = {
+        "purpose": "temporary performance assessment",
+    }
     start_s, stop_s = (float(analysis_window_s[0]), float(analysis_window_s[1]))
     if stop_s <= start_s:
         raise ValueError("Gamma analysis end must be after analysis start.")
@@ -107,6 +112,7 @@ def compute_gamma_spike_segmented_for_gui(
     chunk_context_s = max(0.0, float(chunk_context_seconds))
     filter_context_s = max(0.0, float(filter_context_seconds))
 
+    detection_start = time.perf_counter()
     if matlab2_compat:
         fs, channel_names, notch_modes, detector_settings, detector_hum_hz, detector_events = (
             _detect_gamma_spikes_segmented_matlab2_compat(
@@ -133,16 +139,26 @@ def compute_gamma_spike_segmented_for_gui(
                 progress_callback=progress_callback,
             )
         )
+    perf_assessment["detection_seconds"] = round(
+        time.perf_counter() - detection_start,
+        3,
+    )
     chunk_count = int(math.ceil((stop_s - start_s) / chunk_duration_s))
 
     detector_out = _detector_output_from_events(detector_events)
+    postprocessing_start = time.perf_counter()
     per_channel_samples, qc = postprocessing(
         detector_out,
         float(fs),
         len(channel_names),
         return_qc=True,
     )
+    perf_assessment["postprocessing_seconds"] = round(
+        time.perf_counter() - postprocessing_start,
+        3,
+    )
 
+    detail_start = time.perf_counter()
     b_boundary, a_boundary = _butter_ba(4, [10.0, 60.0], btype="bandpass", fs=float(fs))
     b_gamma, a_gamma = _butter_ba(4, [30.0, 100.0], btype="bandpass", fs=float(fs))
     local_radius_s = filter_context_s + 1.5
@@ -171,6 +187,7 @@ def compute_gamma_spike_segmented_for_gui(
                 recording_duration_s=recording_duration_s,
                 notch_modes=notch_modes,
                 progress_callback=progress_callback,
+                performance_assessment=perf_assessment,
             )
         )
     elif total_postprocessed_spikes:
@@ -260,6 +277,12 @@ def compute_gamma_spike_segmented_for_gui(
 
             central_start_s = central_stop_s
 
+    perf_assessment["boundary_gamma_details_seconds"] = round(
+        time.perf_counter() - detail_start,
+        3,
+    )
+
+    assembly_start = time.perf_counter()
     channels: list[GammaSpikeChannelResult] = []
     for channel_index, name in enumerate(channel_names):
         samples0 = samples0_by_channel[channel_index]
@@ -275,6 +298,25 @@ def compute_gamma_spike_segmented_for_gui(
         )
 
     active_notch_modes = sorted({mode for mode in notch_modes.values() if mode != NOTCH_OFF})
+    perf_assessment["result_assembly_seconds"] = round(
+        time.perf_counter() - assembly_start,
+        3,
+    )
+    perf_assessment["total_seconds"] = round(
+        time.perf_counter() - perf_total_start,
+        3,
+    )
+    perf_assessment["n_chunks"] = int(chunk_count)
+    perf_assessment["n_channels"] = int(len(channel_names))
+    perf_assessment["total_spikes"] = int(sum(channel.spike_count for channel in channels))
+    perf_assessment["gamma_positive_spikes"] = int(
+        sum(
+            1
+            for channel in channels
+            for event in channel.events
+            if event.gamma_power is not None
+        )
+    )
     return GammaSpikeComputationResult(
         channels=channels,
         detector_output=detector_out,
@@ -312,6 +354,7 @@ def compute_gamma_spike_segmented_for_gui(
                 detector_settings if isinstance(detector_settings, str) else "DetectorSettings"
             ),
             "postprocessing_qc": _json_safe_qc(qc),
+            "performance_assessment": perf_assessment,
         },
     )
 
@@ -847,7 +890,18 @@ def _compute_matlab2_compat_events_by_channel(
     recording_duration_s: float | None,
     notch_modes: dict[str, str],
     progress_callback: GammaSpikeProgressCallback | None,
+    performance_assessment: dict[str, float | int | str] | None = None,
 ) -> tuple[list[list[GammaSpikeEventResult]], int, int]:
+    if performance_assessment is not None:
+        performance_assessment.setdefault("detail_data_loading_seconds", 0.0)
+        performance_assessment.setdefault("detail_notch_filter_seconds", 0.0)
+        performance_assessment.setdefault("detail_boundary_filter_seconds", 0.0)
+        performance_assessment.setdefault("detail_gamma_filter_seconds", 0.0)
+        performance_assessment.setdefault("detail_boundary_measurement_seconds", 0.0)
+        performance_assessment.setdefault("detail_gamma_measurement_seconds", 0.0)
+        performance_assessment.setdefault("detail_channels_processed", 0)
+        performance_assessment.setdefault("detail_spikes_processed", 0)
+
     if recording_duration_s is None:
         max_sample1 = max(
             (
@@ -881,6 +935,7 @@ def _compute_matlab2_compat_events_by_channel(
                 f"channel {channel_index + 1}/{len(channel_names)}"
             )
 
+        load_start = time.perf_counter()
         if indexed_data_loader is None:
             data, channel_fs, names = data_loader(0.0, stop_s)
             matrix = _validated_gamma_matrix(data, names)
@@ -895,18 +950,58 @@ def _compute_matlab2_compat_events_by_channel(
             if list(map(str, names)) != [str(name)]:
                 raise ValueError("Channel list changed during gamma spike details.")
             raw_signal = matrix[0, :]
+        if performance_assessment is not None:
+            performance_assessment["detail_data_loading_seconds"] = round(
+                float(performance_assessment["detail_data_loading_seconds"])
+                + time.perf_counter()
+                - load_start,
+                3,
+            )
         if abs(float(channel_fs) - float(fs)) > 1e-6:
             raise ValueError("Sampling frequency changed during gamma spike details.")
 
+        notch_start = time.perf_counter()
         signal_notched = _apply_notch_mode(
             np.asarray(raw_signal, dtype=float),
             float(fs),
             str(notch_modes.get(str(name), NOTCH_OFF)),
         )
+        if performance_assessment is not None:
+            performance_assessment["detail_notch_filter_seconds"] = round(
+                float(performance_assessment["detail_notch_filter_seconds"])
+                + time.perf_counter()
+                - notch_start,
+                3,
+            )
+
+        boundary_filter_start = time.perf_counter()
         signal_boundary = signal.filtfilt(b_boundary, a_boundary, signal_notched)
+        if performance_assessment is not None:
+            performance_assessment["detail_boundary_filter_seconds"] = round(
+                float(performance_assessment["detail_boundary_filter_seconds"])
+                + time.perf_counter()
+                - boundary_filter_start,
+                3,
+            )
+
+        gamma_filter_start = time.perf_counter()
         signal_gamma = signal.filtfilt(b_gamma, a_gamma, signal_notched)
+        if performance_assessment is not None:
+            performance_assessment["detail_gamma_filter_seconds"] = round(
+                float(performance_assessment["detail_gamma_filter_seconds"])
+                + time.perf_counter()
+                - gamma_filter_start,
+                3,
+            )
 
         n_samples = int(signal_boundary.size)
+        if performance_assessment is not None:
+            performance_assessment["detail_channels_processed"] = (
+                int(performance_assessment["detail_channels_processed"]) + 1
+            )
+            performance_assessment["detail_spikes_processed"] = (
+                int(performance_assessment["detail_spikes_processed"]) + int(samples1.size)
+            )
         for sample1 in samples1:
             sample0 = float(sample1) - 1.0
             time_s = sample0 / float(fs)
@@ -918,6 +1013,7 @@ def _compute_matlab2_compat_events_by_channel(
                 gui_sample0=sample0,
                 spike_time_s=time_s,
                 n_samples=n_samples,
+                performance_assessment=performance_assessment,
             )
             if event.boundary_p1_sample is not None:
                 boundary_success_count += 1
@@ -937,6 +1033,7 @@ def _compute_spike_gamma_event_matlab2_compat(
     gui_sample0: float,
     spike_time_s: float,
     n_samples: int,
+    performance_assessment: dict[str, float | int | str] | None = None,
 ) -> GammaSpikeEventResult:
     spike_onset = float(spike_sample1 - 75e-3 * fs)
     spike_offset = float(spike_sample1 + 225e-3 * fs)
@@ -955,6 +1052,7 @@ def _compute_spike_gamma_event_matlab2_compat(
             error="not enough data around spike for boundary detection",
         )
 
+    boundary_measurement_start = time.perf_counter()
     try:
         p1_boundary, n1_boundary, n2_boundary = compute_spike_boundary(
             signal_boundary[start_index - 1 : stop_index],
@@ -965,7 +1063,21 @@ def _compute_spike_gamma_event_matlab2_compat(
         p1_boundary = float(np.ravel(p1_boundary)[0])
         n1_boundary = float(np.ravel(n1_boundary)[0])
         n2_boundary = float(np.ravel(n2_boundary)[0])
+        if performance_assessment is not None:
+            performance_assessment["detail_boundary_measurement_seconds"] = round(
+                float(performance_assessment["detail_boundary_measurement_seconds"])
+                + time.perf_counter()
+                - boundary_measurement_start,
+                3,
+            )
     except Exception as exc:
+        if performance_assessment is not None:
+            performance_assessment["detail_boundary_measurement_seconds"] = round(
+                float(performance_assessment["detail_boundary_measurement_seconds"])
+                + time.perf_counter()
+                - boundary_measurement_start,
+                3,
+            )
         return GammaSpikeEventResult(
             sample=gui_sample0,
             time_s=spike_time_s,
@@ -997,6 +1109,7 @@ def _compute_spike_gamma_event_matlab2_compat(
 
     p1_gamma = p1_abs1 - (n1_abs1 - fs)
     n2_gamma = n2_abs1 - (n1_abs1 - fs)
+    gamma_measurement_start = time.perf_counter()
     try:
         gamma, details = compute_gamma(
             signal_gamma[int(gamma_window[0]) - 1 : int(gamma_window[-1])],
@@ -1005,7 +1118,21 @@ def _compute_spike_gamma_event_matlab2_compat(
             n2_gamma,
             return_details=True,
         )
+        if performance_assessment is not None:
+            performance_assessment["detail_gamma_measurement_seconds"] = round(
+                float(performance_assessment["detail_gamma_measurement_seconds"])
+                + time.perf_counter()
+                - gamma_measurement_start,
+                3,
+            )
     except Exception as exc:
+        if performance_assessment is not None:
+            performance_assessment["detail_gamma_measurement_seconds"] = round(
+                float(performance_assessment["detail_gamma_measurement_seconds"])
+                + time.perf_counter()
+                - gamma_measurement_start,
+                3,
+            )
         return GammaSpikeEventResult(
             sample=gui_sample0,
             time_s=spike_time_s,

@@ -362,11 +362,15 @@ The current REI preprocessing uses:
 - input data from the current montage
 - confirmed bad channels excluded
 - display filter ignored
-- internal 70-140 Hz zero-phase 4th-order Butterworth bandpass
-- no automatic notch filter
+- internal zero-phase 4th-order Butterworth bandpass
+- default analysis frequency range: 60-140 Hz
+- analysis frequency range editable from **Advanced parameters...**
+- active notch setting used when enabled
 - no automatic common-average reference
 
 REI shows a bipolar montage recommendation before running. You can switch to Bipolar, run anyway, or cancel.
+
+If no notch filter is selected before running, the software warns you so you can confirm whether to continue.
 
 REI outputs:
 

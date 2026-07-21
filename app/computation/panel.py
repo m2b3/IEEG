@@ -258,7 +258,7 @@ class ComputationPanel(QWidget):
             "use_display_filter": False,
             "analysis_filter": "butterworth_bandpass",
             "filter_order": 4,
-            "low_freq": 70.0,
+            "low_freq": 60.0,
             "high_freq": 140.0,
             "zero_phase": True,
             "notch_filter": False,
@@ -390,7 +390,7 @@ class ComputationPanel(QWidget):
         self.btn_ei_info.setFixedSize(22, 22)
         self.btn_ei_info.setToolTip(
             "REI preprocessing: confirmed bad channels are excluded and an internal "
-            "70-140 Hz zero-phase Butterworth bandpass filter is applied."
+            "editable zero-phase Butterworth bandpass filter is applied."
         )
         self.btn_ei_info.setStyleSheet("border-radius: 11px; font-weight: bold;")
         info_layout.addWidget(self.btn_ei_info)
@@ -448,7 +448,19 @@ class ComputationPanel(QWidget):
         preprocessing_form = QFormLayout(preprocessing_box)
         preprocessing_form.addRow("Analysis filter:", QLabel("Butterworth bandpass"))
         preprocessing_form.addRow("Filter order:", QLabel("4"))
-        preprocessing_form.addRow("Bandpass:", QLabel("70-140 Hz"))
+        self.edit_ei_low_freq = QDoubleSpinBox()
+        self.edit_ei_high_freq = QDoubleSpinBox()
+        for spin, value in (
+            (self.edit_ei_low_freq, float(self.ei_params["low_freq"])),
+            (self.edit_ei_high_freq, float(self.ei_params["high_freq"])),
+        ):
+            spin.setRange(1.0, 10_000.0)
+            spin.setDecimals(1)
+            spin.setSingleStep(5.0)
+            spin.setSuffix(" Hz")
+            spin.setValue(float(value))
+        preprocessing_form.addRow("Low frequency:", self.edit_ei_low_freq)
+        preprocessing_form.addRow("High frequency:", self.edit_ei_high_freq)
         preprocessing_form.addRow("Zero phase:", QLabel("Yes"))
         preprocessing_form.addRow("Notch filter:", QLabel("Uses active notch if enabled"))
         preprocessing_form.addRow("Line frequency:", QLabel("50/60 Hz + harmonics"))
@@ -521,6 +533,8 @@ class ComputationPanel(QWidget):
         self.edit_gamma_end.textChanged.connect(self._on_gamma_window_text_changed)
         self.algo_buttons.buttonClicked.connect(self._on_algorithm_button_clicked)
         self.btn_advanced.clicked.connect(self._open_advanced_dialog)
+        self.edit_ei_low_freq.valueChanged.connect(self._on_ei_frequency_changed)
+        self.edit_ei_high_freq.valueChanged.connect(self._on_ei_frequency_changed)
         self.btn_default_windows.clicked.connect(self._apply_default_ei_windows_from_onset)
         self.edit_seizure_onset.textChanged.connect(self._on_ei_onset_text_changed)
         self.edit_seizure_offset.textChanged.connect(self._on_ei_offset_text_changed)
@@ -672,6 +686,7 @@ class ComputationPanel(QWidget):
 
     def project_state(self) -> dict:
         self._sync_ei_windows_from_ui(emit=False)
+        self._sync_ei_frequency_from_ui(emit=False)
         return {
             "algorithm": self.state.algorithm,
             "selected_abs": list(self.state.selected_abs),
@@ -775,6 +790,20 @@ class ComputationPanel(QWidget):
                 spin.blockSignals(True)
                 spin.setValue(float(value))
                 spin.blockSignals(False)
+
+        saved_params = ei.get("params")
+        if isinstance(saved_params, dict):
+            for key, spin in (
+                ("low_freq", self.edit_ei_low_freq),
+                ("high_freq", self.edit_ei_high_freq),
+            ):
+                value = saved_params.get(key)
+                if isinstance(value, (int, float)):
+                    self.ei_params[key] = float(value)
+                    spin.blockSignals(True)
+                    spin.setValue(float(value))
+                    spin.blockSignals(False)
+        self._sync_ei_frequency_from_ui(emit=False)
 
         self.state.seizure_onset_s = self._parse_float_text(self.edit_seizure_onset)
         self.state.seizure_offset_s = self._parse_float_text(self.edit_seizure_offset)
@@ -1232,6 +1261,16 @@ class ComputationPanel(QWidget):
             self._clear_ei_outputs()
             self.settingsChanged.emit()
 
+    def _sync_ei_frequency_from_ui(self, *, emit: bool = True) -> None:
+        self.ei_params["low_freq"] = float(self.edit_ei_low_freq.value())
+        self.ei_params["high_freq"] = float(self.edit_ei_high_freq.value())
+        if emit:
+            self._clear_ei_outputs()
+            self.settingsChanged.emit()
+
+    def _on_ei_frequency_changed(self, _value=None) -> None:
+        self._sync_ei_frequency_from_ui(emit=True)
+
     def _read_ei_inputs_from_ui(self) -> tuple[float, float, float, float, float, float]:
         seizure_onset = self._parse_float_text(self.edit_seizure_onset)
         seizure_offset = self._parse_float_text(self.edit_seizure_offset)
@@ -1272,6 +1311,16 @@ class ComputationPanel(QWidget):
             return False, "Load a dataset before running REI."
         if not self.state.selected_abs:
             return False, "Select at least one channel before running REI."
+
+        low_freq = float(self.edit_ei_low_freq.value())
+        high_freq = float(self.edit_ei_high_freq.value())
+        if low_freq <= 0.0 or high_freq <= low_freq:
+            return False, "REI frequency range must have positive low < high values."
+        nyquist = 0.5 * self._sampling_frequency_hz()
+        if high_freq >= nyquist:
+            return False, (
+                f"REI high frequency must be below Nyquist ({nyquist:g} Hz)."
+            )
 
         try:
             onset, offset, baseline_start, baseline_end, ictal_start, ictal_end = (
@@ -1320,6 +1369,8 @@ class ComputationPanel(QWidget):
                 QMessageBox.warning(self, "REI computation", message)
                 return
             if not self._confirm_ei_montage_before_run():
+                return
+            if not self._confirm_ei_notch_before_run():
                 return
             error_message: str | None = None
             with busy_cursor(self, "Running REI computation..."):
@@ -1434,6 +1485,7 @@ class ComputationPanel(QWidget):
             ictal_start,
             ictal_end,
         ) = self._read_ei_inputs_from_ui()
+        self._sync_ei_frequency_from_ui(emit=False)
 
         data_start_s = min(baseline_start, ictal_start)
         data_stop_s = max(baseline_end, ictal_end)
@@ -1462,6 +1514,8 @@ class ComputationPanel(QWidget):
             channel_groups=self._channel_groups,
             bad_channels=bad_channels,
             notch_modes_by_channel=notch_modes_by_channel,
+            low_freq=float(self.ei_params["low_freq"]),
+            high_freq=float(self.ei_params["high_freq"]),
             metadata=self._build_ei_metadata(
                 self._current_montage_name(),
                 seizure_onset_s=seizure_onset,
@@ -1514,6 +1568,38 @@ class ComputationPanel(QWidget):
         message.setInformativeText(
             "No notch filter is selected for the gamma spike channels. "
             "Line noise may affect gamma power measurements."
+        )
+        message.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        message.setDefaultButton(QMessageBox.StandardButton.No)
+        result = message.exec()
+        return result == QMessageBox.StandardButton.Yes or result == int(
+            QMessageBox.StandardButton.Yes
+        )
+
+    def _confirm_ei_notch_before_run(self) -> bool:
+        selected_names = [
+            str(self._ch_names_displayed[int(idx)])
+            for idx in self.state.selected_abs
+            if 0 <= int(idx) < len(self._ch_names_displayed)
+        ]
+        notch_modes = self._ei_notch_modes_for_channels(selected_names)
+        active_modes = {
+            str(mode)
+            for mode in notch_modes.values()
+            if str(mode) != NOTCH_OFF
+        }
+        if active_modes:
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Warning)
+        message.setWindowTitle("REI computation")
+        message.setText("Run REI without a notch filter?")
+        message.setInformativeText(
+            "No notch filter is selected for the REI channels. "
+            "Line noise may affect the HFER measurement."
         )
         message.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
