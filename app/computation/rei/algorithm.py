@@ -58,11 +58,15 @@ except ImportError:  # GUI EI computation does not require pandas.
 __all__ = [
     "EIChannelResult",
     "EIComputationResult",
+    "DEFAULT_REI_HIGH_FREQ_HZ",
+    "DEFAULT_REI_LOW_FREQ_HZ",
     "compute_ei_for_gui",
     "validate_gui_ei_timing",
 ]
 
 Array = NDArray[np.float64]
+DEFAULT_REI_LOW_FREQ_HZ = 60.0
+DEFAULT_REI_HIGH_FREQ_HZ = 140.0
 NOTCH_OFF = "Off"
 NOTCH_50_HARM = "50 Hz + harmonics"
 NOTCH_60_HARM = "60 Hz + harmonics"
@@ -207,8 +211,8 @@ def bandpass_hf(
     data: Array,
     fs: float,
     *,
-    low_freq: float = 60.0,
-    high_freq: float = 140.0,
+    low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
+    high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
 ) -> Array:
     """
     High-frequency filtering from original code.
@@ -297,8 +301,8 @@ def compute_ei_from_windows(data: np.ndarray, fs: float,
                             baseline_samples: tuple[int, int],
                             ictal_samples: tuple[int, int],
                             *,
-                            low_freq: float = 60.0,
-                            high_freq: float = 140.0) -> tuple[Array, Array, Array]:
+                            low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
+                            high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ) -> tuple[Array, Array, Array]:
     """
     data shape must be channels x time.
     """
@@ -367,8 +371,8 @@ def compute_ei_for_gui(
     channel_groups: dict[str, str] | None = None,
     bad_channels: set[str] | None = None,
     notch_modes_by_channel: dict[str, str] | None = None,
-    low_freq: float = 60.0,
-    high_freq: float = 140.0,
+    low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
+    high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
     metadata: dict | None = None,
 ) -> EIComputationResult:
     """

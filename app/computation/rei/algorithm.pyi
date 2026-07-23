@@ -5,6 +5,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 Array = NDArray[np.float64]
+DEFAULT_REI_LOW_FREQ_HZ: float
+DEFAULT_REI_HIGH_FREQ_HZ: float
 
 
 @dataclass
@@ -37,8 +39,8 @@ def bandpass_hf(
     data: Array,
     fs: float,
     *,
-    low_freq: float = 60.0,
-    high_freq: float = 140.0,
+    low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
+    high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
 ) -> Array: ...
 
 
@@ -55,8 +57,8 @@ def compute_ei_from_windows(
     baseline_samples: tuple[int, int],
     ictal_samples: tuple[int, int],
     *,
-    low_freq: float = 60.0,
-    high_freq: float = 140.0,
+    low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
+    high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
 ) -> tuple[Array, Array, Array]: ...
 
 
@@ -83,7 +85,7 @@ def compute_ei_for_gui(
     channel_groups: dict[str, str] | None = None,
     bad_channels: set[str] | None = None,
     notch_modes_by_channel: dict[str, str] | None = None,
-    low_freq: float = 60.0,
-    high_freq: float = 140.0,
+    low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
+    high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
     metadata: dict[str, Any] | None = None,
 ) -> EIComputationResult: ...

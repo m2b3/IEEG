@@ -25,6 +25,8 @@ from PySide6.QtWidgets import (
 
 from app.viewer.time_controls import TimeWindowControl
 from app.computation.rei.algorithm import (
+    DEFAULT_REI_HIGH_FREQ_HZ,
+    DEFAULT_REI_LOW_FREQ_HZ,
     EIChannelResult,
     EIComputationResult,
     compute_ei_for_gui,
@@ -44,6 +46,21 @@ from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
 from app.ui_busy import busy_cursor
 
+HFO_BAND_PRESETS: dict[str, tuple[float, float]] = {
+    "HFO 80-500 Hz": (80.0, 500.0),
+    "Ripple 80-250 Hz": (80.0, 250.0),
+    "Fast ripple 250-500 Hz": (250.0, 500.0),
+}
+DEFAULT_HFO_BAND_PRESET = "HFO 80-500 Hz"
+CUSTOM_HFO_BAND_PRESET = "Custom"
+HFO_DETECTOR_VERSIONS: tuple[str, ...] = (
+    "PyHFO2",
+    "PyHFO2 Omni trained",
+    "PyHFO1 Omni trained",
+    "EHFO",
+)
+DEFAULT_HFO_DETECTOR_VERSION = "PyHFO2"
+
 
 @dataclass
 class PanelState:
@@ -60,6 +77,8 @@ class PanelState:
     ictal_end_s: float = 0.0
     gamma_start_s: float | None = None
     gamma_end_s: float | None = None
+    hfo_start_s: float | None = None
+    hfo_end_s: float | None = None
 
 
 @dataclass
@@ -241,6 +260,8 @@ class ComputationPanel(QWidget):
         self._last_gamma_result: GammaSpikeComputationResult | None = None
         self._gamma_summary_dialog: QDialog | None = None
         self._gamma_review_dialog: QDialog | None = None
+        self._hfo_summary_dialog: QDialog | None = None
+        self._hfo_event_grid_dialog: QDialog | None = None
         self._pending_gamma_review_selection: tuple[str, float] | None = None
         self._last_export_dir: Path | None = None
         self._gamma_cancel_requested = False
@@ -252,20 +273,34 @@ class ComputationPanel(QWidget):
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
         self._gamma_default_window_applied = False
+        self._hfo_default_window_applied = False
         self.ei_params = {
             "expected_reference": "raw_or_bipolar",
             "exclude_bad_channels": True,
             "use_display_filter": False,
             "analysis_filter": "butterworth_bandpass",
             "filter_order": 4,
-            "low_freq": 60.0,
-            "high_freq": 140.0,
+            "low_freq": DEFAULT_REI_LOW_FREQ_HZ,
+            "high_freq": DEFAULT_REI_HIGH_FREQ_HZ,
             "zero_phase": True,
             "notch_filter": False,
             "line_freq": 60.0,
             "threshold_sigma": 10.0,
             "energy_window_sec": 0.5,
             "hfer_window_sec": 0.25,
+        }
+        default_hfo_low, default_hfo_high = HFO_BAND_PRESETS[DEFAULT_HFO_BAND_PRESET]
+        self.hfo_params = {
+            "detector_version": DEFAULT_HFO_DETECTOR_VERSION,
+            "band_preset": DEFAULT_HFO_BAND_PRESET,
+            "low_freq": default_hfo_low,
+            "high_freq": default_hfo_high,
+            "threshold_sigma": 5.0,
+            "min_duration_ms": 6.0,
+            "merge_gap_ms": 10.0,
+            "min_cycles": 4.0,
+            "notch_behavior": "Uses active notch if enabled",
+            "output_model": "expert_event_grid",
         }
 
         root = QVBoxLayout(self)
@@ -288,10 +323,16 @@ class ComputationPanel(QWidget):
         self.btn_algo_gamma.setCheckable(True)
         self.btn_algo_gamma.setProperty("algorithm", "gamma_spike")
 
+        self.btn_algo_hfo = QPushButton("HFO")
+        self.btn_algo_hfo.setCheckable(True)
+        self.btn_algo_hfo.setProperty("algorithm", "hfo")
+
         self.algo_buttons.addButton(self.btn_algo_ei)
         self.algo_buttons.addButton(self.btn_algo_gamma)
+        self.algo_buttons.addButton(self.btn_algo_hfo)
         algo_row.addWidget(self.btn_algo_ei)
         algo_row.addWidget(self.btn_algo_gamma)
+        algo_row.addWidget(self.btn_algo_hfo)
         algo_row.addStretch(1)
         root.addLayout(algo_row)
 
@@ -477,6 +518,108 @@ class ComputationPanel(QWidget):
         self.ei_time_widget.hide()
         t_layout.addWidget(self.ei_time_widget)
 
+        self.hfo_time_widget = QWidget()
+        hfo_time_layout = QVBoxLayout(self.hfo_time_widget)
+        hfo_time_layout.setContentsMargins(0, 0, 0, 0)
+        hfo_time_layout.setSpacing(8)
+
+        hfo_info_box = QGroupBox("High Frequency Oscillation (HFO) setup")
+        hfo_info_layout = QVBoxLayout(hfo_info_box)
+        hfo_time_layout.addWidget(hfo_info_box)
+
+        hfo_window_form = QFormLayout()
+        self.edit_hfo_start = QLineEdit()
+        self.edit_hfo_start.setPlaceholderText("seconds")
+        self.edit_hfo_end = QLineEdit()
+        self.edit_hfo_end.setPlaceholderText("seconds")
+        hfo_window_form.addRow("Analysis start (s):", self.edit_hfo_start)
+        hfo_window_form.addRow("Analysis end (s):", self.edit_hfo_end)
+        hfo_time_layout.addLayout(hfo_window_form)
+
+        hfo_detector_form = QFormLayout()
+        self.combo_hfo_detector_version = QComboBox()
+        for detector_version in HFO_DETECTOR_VERSIONS:
+            self.combo_hfo_detector_version.addItem(detector_version, userData=detector_version)
+        self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
+        hfo_detector_form.addRow("Detector version:", self.combo_hfo_detector_version)
+        hfo_time_layout.addLayout(hfo_detector_form)
+
+        hfo_band_form = QFormLayout()
+        self.combo_hfo_band_preset = QComboBox()
+        for preset_name in HFO_BAND_PRESETS:
+            self.combo_hfo_band_preset.addItem(preset_name, userData=preset_name)
+        self.combo_hfo_band_preset.addItem(CUSTOM_HFO_BAND_PRESET, userData=CUSTOM_HFO_BAND_PRESET)
+        self.combo_hfo_band_preset.setCurrentText(DEFAULT_HFO_BAND_PRESET)
+        hfo_band_form.addRow("Band preset:", self.combo_hfo_band_preset)
+        hfo_time_layout.addLayout(hfo_band_form)
+
+        self.btn_hfo_advanced = QPushButton("Advanced parameters...")
+        hfo_time_layout.addWidget(self.btn_hfo_advanced)
+
+        self.hfo_advanced_frame = QFrame()
+        hfo_advanced_layout = QVBoxLayout(self.hfo_advanced_frame)
+        hfo_advanced_layout.setContentsMargins(0, 0, 0, 0)
+        hfo_advanced_layout.setSpacing(8)
+
+        hfo_filter_box = QGroupBox("HFO detection")
+        hfo_filter_form = QFormLayout(hfo_filter_box)
+        self.edit_hfo_low_freq = QDoubleSpinBox()
+        self.edit_hfo_high_freq = QDoubleSpinBox()
+        for spin, value in (
+            (self.edit_hfo_low_freq, float(self.hfo_params["low_freq"])),
+            (self.edit_hfo_high_freq, float(self.hfo_params["high_freq"])),
+        ):
+            spin.setRange(1.0, 10_000.0)
+            spin.setDecimals(1)
+            spin.setSingleStep(5.0)
+            spin.setSuffix(" Hz")
+            spin.setValue(float(value))
+        hfo_filter_form.addRow("Low frequency:", self.edit_hfo_low_freq)
+        hfo_filter_form.addRow("High frequency:", self.edit_hfo_high_freq)
+        hfo_filter_form.addRow("Notch handling:", QLabel("Uses active notch if enabled"))
+        hfo_advanced_layout.addWidget(hfo_filter_box)
+
+        hfo_detection_box = QGroupBox("Event criteria")
+        hfo_detection_form = QFormLayout(hfo_detection_box)
+        self.edit_hfo_threshold_sigma = QDoubleSpinBox()
+        self.edit_hfo_threshold_sigma.setRange(0.1, 100.0)
+        self.edit_hfo_threshold_sigma.setDecimals(1)
+        self.edit_hfo_threshold_sigma.setSingleStep(0.5)
+        self.edit_hfo_threshold_sigma.setValue(float(self.hfo_params["threshold_sigma"]))
+        self.edit_hfo_min_duration = QDoubleSpinBox()
+        self.edit_hfo_min_duration.setRange(0.1, 10_000.0)
+        self.edit_hfo_min_duration.setDecimals(1)
+        self.edit_hfo_min_duration.setSingleStep(1.0)
+        self.edit_hfo_min_duration.setSuffix(" ms")
+        self.edit_hfo_min_duration.setValue(float(self.hfo_params["min_duration_ms"]))
+        self.edit_hfo_merge_gap = QDoubleSpinBox()
+        self.edit_hfo_merge_gap.setRange(0.0, 10_000.0)
+        self.edit_hfo_merge_gap.setDecimals(1)
+        self.edit_hfo_merge_gap.setSingleStep(1.0)
+        self.edit_hfo_merge_gap.setSuffix(" ms")
+        self.edit_hfo_merge_gap.setValue(float(self.hfo_params["merge_gap_ms"]))
+        self.edit_hfo_min_cycles = QDoubleSpinBox()
+        self.edit_hfo_min_cycles.setRange(0.0, 100.0)
+        self.edit_hfo_min_cycles.setDecimals(1)
+        self.edit_hfo_min_cycles.setSingleStep(0.5)
+        self.edit_hfo_min_cycles.setValue(float(self.hfo_params["min_cycles"]))
+        hfo_detection_form.addRow("Threshold sigma:", self.edit_hfo_threshold_sigma)
+        hfo_detection_form.addRow("Minimum duration:", self.edit_hfo_min_duration)
+        hfo_detection_form.addRow("Merge gap:", self.edit_hfo_merge_gap)
+        hfo_detection_form.addRow("Minimum cycles:", self.edit_hfo_min_cycles)
+        hfo_advanced_layout.addWidget(hfo_detection_box)
+
+        hfo_output_box = QGroupBox("Event-grid output")
+        hfo_output_form = QFormLayout(hfo_output_box)
+        hfo_output_form.addRow("Detector:", QLabel("Saved with every run"))
+        hfo_output_form.addRow("Rows:", QLabel("channel, start, end, peak time, band, score"))
+        hfo_output_form.addRow("Review surface:", QLabel("Expert event grid"))
+        hfo_advanced_layout.addWidget(hfo_output_box)
+
+        self.hfo_advanced_dialog: QDialog | None = None
+        self.hfo_time_widget.hide()
+        t_layout.addWidget(self.hfo_time_widget)
+
         root.addWidget(self.gb_t, 0)
 
         # --- Output actions ---
@@ -518,6 +661,21 @@ class ComputationPanel(QWidget):
         self.btn_export_gamma.hide()
         p_layout.addWidget(self.btn_export_gamma)
 
+        self.btn_open_hfo_summary = QPushButton("Open HFO summary")
+        self.btn_open_hfo_summary.setEnabled(False)
+        self.btn_open_hfo_summary.hide()
+        p_layout.addWidget(self.btn_open_hfo_summary)
+
+        self.btn_open_hfo_event_grid = QPushButton("Open HFO event grid")
+        self.btn_open_hfo_event_grid.setEnabled(False)
+        self.btn_open_hfo_event_grid.hide()
+        p_layout.addWidget(self.btn_open_hfo_event_grid)
+
+        self.btn_export_hfo = QPushButton("Export HFO events")
+        self.btn_export_hfo.setEnabled(False)
+        self.btn_export_hfo.hide()
+        p_layout.addWidget(self.btn_export_hfo)
+
         root.addWidget(gb_p, 0)
 
 
@@ -533,6 +691,19 @@ class ComputationPanel(QWidget):
         self.edit_gamma_end.textChanged.connect(self._on_gamma_window_text_changed)
         self.algo_buttons.buttonClicked.connect(self._on_algorithm_button_clicked)
         self.btn_advanced.clicked.connect(self._open_advanced_dialog)
+        self.btn_hfo_advanced.clicked.connect(self._open_hfo_advanced_dialog)
+        self.edit_hfo_start.textChanged.connect(self._on_hfo_window_text_changed)
+        self.edit_hfo_end.textChanged.connect(self._on_hfo_window_text_changed)
+        self.combo_hfo_detector_version.currentTextChanged.connect(
+            self._on_hfo_detector_version_changed
+        )
+        self.combo_hfo_band_preset.currentTextChanged.connect(self._on_hfo_band_preset_changed)
+        self.edit_hfo_low_freq.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_high_freq.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_threshold_sigma.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_min_duration.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_merge_gap.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_min_cycles.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
         self.edit_ei_low_freq.valueChanged.connect(self._on_ei_frequency_changed)
         self.edit_ei_high_freq.valueChanged.connect(self._on_ei_frequency_changed)
         self.btn_default_windows.clicked.connect(self._apply_default_ei_windows_from_onset)
@@ -553,6 +724,9 @@ class ComputationPanel(QWidget):
         self.btn_open_gamma_summary.clicked.connect(self._open_gamma_summary_dialog)
         self.btn_open_gamma_review.clicked.connect(self._open_gamma_review_dialog)
         self.btn_export_gamma.clicked.connect(self._export_gamma_results)
+        self.btn_open_hfo_summary.clicked.connect(self._open_hfo_summary_dialog)
+        self.btn_open_hfo_event_grid.clicked.connect(self._open_hfo_event_grid_dialog)
+        self.btn_export_hfo.clicked.connect(self._export_hfo_results)
 
         self.btn_sel_all.clicked.connect(self._select_all_channels)
         self.btn_sel_macro.clicked.connect(lambda: self._select_group_channels("macro"))
@@ -599,7 +773,10 @@ class ComputationPanel(QWidget):
         self._clear_ei_outputs()
         if self.state.algorithm == "gamma_spike":
             self._set_gamma_window_to_full_recording(emit=True)
+        if self.state.algorithm == "hfo":
+            self._set_hfo_window_to_full_recording(emit=True)
         self._clear_gamma_outputs()
+        self._clear_hfo_outputs()
         
     def set_selected_channels_abs(self, selected_abs: list[int], *, replace: bool = True) -> None:
         cleaned = sorted(
@@ -621,6 +798,7 @@ class ComputationPanel(QWidget):
         self._update_channels_title()
         self._clear_ei_outputs()
         self._clear_gamma_outputs()
+        self._clear_hfo_outputs()
         self.panelSelectionChanged.emit(self.state.selected_abs)
         self.settingsChanged.emit()
 
@@ -709,6 +887,11 @@ class ComputationPanel(QWidget):
                 "analysis_start_s": self._parse_float_text(self.edit_gamma_start),
                 "analysis_end_s": self._parse_float_text(self.edit_gamma_end),
             },
+            "hfo": {
+                "analysis_start_s": self._parse_float_text(self.edit_hfo_start),
+                "analysis_end_s": self._parse_float_text(self.edit_hfo_end),
+                "params": dict(self.hfo_params),
+            },
         }
 
     def restore_project_state(self, data: dict | None) -> None:
@@ -724,6 +907,9 @@ class ComputationPanel(QWidget):
         gamma = data.get("gamma_spike", {})
         if not isinstance(gamma, dict):
             gamma = {}
+        hfo = data.get("hfo", {})
+        if not isinstance(hfo, dict):
+            hfo = {}
         selected_abs = data.get("selected_abs", [])
         if isinstance(selected_abs, list):
             cleaned_abs = []
@@ -779,6 +965,21 @@ class ComputationPanel(QWidget):
             except (TypeError, ValueError):
                 _set_line_edit_float(edit, None)
 
+        for edit, value in (
+            (self.edit_hfo_start, hfo.get("analysis_start_s", 0.0)),
+            (
+                self.edit_hfo_end,
+                hfo.get(
+                    "analysis_end_s",
+                    self._total_duration_s(),
+                ),
+            ),
+        ):
+            try:
+                _set_line_edit_float(edit, value)
+            except (TypeError, ValueError):
+                _set_line_edit_float(edit, None)
+
         for spin, key in (
             (self.edit_baseline_start, "baseline_start_s"),
             (self.edit_baseline_end, "baseline_end_s"),
@@ -793,6 +994,14 @@ class ComputationPanel(QWidget):
 
         saved_params = ei.get("params")
         if isinstance(saved_params, dict):
+            saved_low = saved_params.get("low_freq")
+            saved_high = saved_params.get("high_freq")
+            if self._is_legacy_default_ei_frequency(saved_low, saved_high):
+                saved_params = {
+                    **saved_params,
+                    "low_freq": DEFAULT_REI_LOW_FREQ_HZ,
+                    "high_freq": DEFAULT_REI_HIGH_FREQ_HZ,
+                }
             for key, spin in (
                 ("low_freq", self.edit_ei_low_freq),
                 ("high_freq", self.edit_ei_high_freq),
@@ -817,6 +1026,11 @@ class ComputationPanel(QWidget):
             self.state.gamma_start_s,
             self.state.gamma_end_s,
         )
+        saved_hfo_params = hfo.get("params")
+        if isinstance(saved_hfo_params, dict):
+            self._restore_hfo_params(saved_hfo_params)
+        self.state.hfo_start_s = self._parse_float_text(self.edit_hfo_start)
+        self.state.hfo_end_s = self._parse_float_text(self.edit_hfo_end)
         self._sync_ei_windows_from_ui(emit=False)
         saved_metadata = ei.get("last_result_metadata")
         self.ei_result_metadata = saved_metadata if isinstance(saved_metadata, dict) else None
@@ -827,6 +1041,7 @@ class ComputationPanel(QWidget):
         button_by_algorithm = {
             "ei": self.btn_algo_ei,
             "gamma_spike": self.btn_algo_gamma,
+            "hfo": self.btn_algo_hfo,
         }
         button = button_by_algorithm.get(algorithm, self.btn_algo_ei)
         button.setChecked(True)
@@ -1054,6 +1269,158 @@ class ComputationPanel(QWidget):
         self.state.gamma_end_s = float(end_s)
         return float(start_s), float(end_s)
 
+    def _set_hfo_window_to_full_recording(self, *, emit: bool = True) -> None:
+        total_s = self._total_duration_s()
+        if total_s is None:
+            self._set_hfo_window_fields(0.0, max(1.0, float(self.state.win)), emit=emit)
+            return
+        self._set_hfo_window_fields(0.0, float(total_s), emit=emit)
+
+    def _set_hfo_window_fields(self, start_s: float, end_s: float, *, emit: bool = True) -> None:
+        self.edit_hfo_start.blockSignals(True)
+        self.edit_hfo_start.setText(f"{start_s:g}")
+        self.edit_hfo_start.blockSignals(False)
+        self.edit_hfo_end.blockSignals(True)
+        self.edit_hfo_end.setText(f"{end_s:g}")
+        self.edit_hfo_end.blockSignals(False)
+        self.state.hfo_start_s = float(start_s)
+        self.state.hfo_end_s = float(end_s)
+        if emit:
+            self.settingsChanged.emit()
+
+    def _on_hfo_window_text_changed(self, _text: str) -> None:
+        self.state.hfo_start_s = self._parse_float_text(self.edit_hfo_start)
+        self.state.hfo_end_s = self._parse_float_text(self.edit_hfo_end)
+        self._clear_hfo_outputs()
+        self.settingsChanged.emit()
+
+    def _read_hfo_window_from_ui(self) -> tuple[float, float]:
+        start_s = self._parse_float_text(self.edit_hfo_start)
+        end_s = self._parse_float_text(self.edit_hfo_end)
+        if start_s is None:
+            raise ValueError("Enter a valid HFO analysis start time in seconds.")
+        if end_s is None:
+            raise ValueError("Enter a valid HFO analysis end time in seconds.")
+        if end_s <= start_s:
+            raise ValueError("HFO analysis end must be after analysis start.")
+        total_s = self._total_duration_s()
+        if total_s is not None:
+            tolerance_s = max(1e-9, 0.5 / self._sampling_frequency_hz())
+            if start_s < 0.0 or end_s > total_s + tolerance_s:
+                raise ValueError("HFO analysis window must stay inside the recording.")
+            end_s = min(float(end_s), float(total_s))
+        self.state.hfo_start_s = float(start_s)
+        self.state.hfo_end_s = float(end_s)
+        return float(start_s), float(end_s)
+
+    def _on_hfo_detector_version_changed(self, _text: str) -> None:
+        detector_version = str(
+            self.combo_hfo_detector_version.currentData()
+            or DEFAULT_HFO_DETECTOR_VERSION
+        )
+        self.hfo_params["detector_version"] = detector_version
+        self._clear_hfo_outputs()
+        self.settingsChanged.emit()
+
+    def _on_hfo_band_preset_changed(self, _text: str) -> None:
+        preset = str(self.combo_hfo_band_preset.currentData() or DEFAULT_HFO_BAND_PRESET)
+        self.hfo_params["band_preset"] = preset
+        band = HFO_BAND_PRESETS.get(preset)
+        if band is not None:
+            low_freq, high_freq = band
+            for spin, value in (
+                (self.edit_hfo_low_freq, low_freq),
+                (self.edit_hfo_high_freq, high_freq),
+            ):
+                spin.blockSignals(True)
+                spin.setValue(float(value))
+                spin.blockSignals(False)
+        self._sync_hfo_params_from_ui(emit=True, update_preset=False)
+
+    def _on_hfo_advanced_parameter_changed(self, _value=None) -> None:
+        self._sync_hfo_params_from_ui(emit=True, update_preset=True)
+
+    def _sync_hfo_params_from_ui(
+        self,
+        *,
+        emit: bool = True,
+        update_preset: bool = True,
+    ) -> None:
+        low_freq = float(self.edit_hfo_low_freq.value())
+        high_freq = float(self.edit_hfo_high_freq.value())
+        detector_version = str(
+            self.combo_hfo_detector_version.currentData()
+            or DEFAULT_HFO_DETECTOR_VERSION
+        )
+        self.hfo_params["detector_version"] = detector_version
+        self.hfo_params["low_freq"] = low_freq
+        self.hfo_params["high_freq"] = high_freq
+        self.hfo_params["threshold_sigma"] = float(self.edit_hfo_threshold_sigma.value())
+        self.hfo_params["min_duration_ms"] = float(self.edit_hfo_min_duration.value())
+        self.hfo_params["merge_gap_ms"] = float(self.edit_hfo_merge_gap.value())
+        self.hfo_params["min_cycles"] = float(self.edit_hfo_min_cycles.value())
+        if update_preset:
+            matched_preset = CUSTOM_HFO_BAND_PRESET
+            for preset_name, (preset_low, preset_high) in HFO_BAND_PRESETS.items():
+                if abs(low_freq - preset_low) < 1e-9 and abs(high_freq - preset_high) < 1e-9:
+                    matched_preset = preset_name
+                    break
+            self.hfo_params["band_preset"] = matched_preset
+            if self.combo_hfo_band_preset.currentText() != matched_preset:
+                self.combo_hfo_band_preset.blockSignals(True)
+                self.combo_hfo_band_preset.setCurrentText(matched_preset)
+                self.combo_hfo_band_preset.blockSignals(False)
+        if emit:
+            self._clear_hfo_outputs()
+            self.settingsChanged.emit()
+
+    def _restore_hfo_params(self, saved_params: dict) -> None:
+        detector_version = str(
+            saved_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+        )
+        if detector_version not in HFO_DETECTOR_VERSIONS:
+            detector_version = DEFAULT_HFO_DETECTOR_VERSION
+        preset = str(saved_params.get("band_preset", DEFAULT_HFO_BAND_PRESET))
+        if preset not in HFO_BAND_PRESETS and preset != CUSTOM_HFO_BAND_PRESET:
+            preset = DEFAULT_HFO_BAND_PRESET
+        default_low, default_high = HFO_BAND_PRESETS.get(
+            preset,
+            HFO_BAND_PRESETS[DEFAULT_HFO_BAND_PRESET],
+        )
+        values = {
+            "low_freq": saved_params.get("low_freq", default_low),
+            "high_freq": saved_params.get("high_freq", default_high),
+            "threshold_sigma": saved_params.get("threshold_sigma", self.hfo_params["threshold_sigma"]),
+            "min_duration_ms": saved_params.get("min_duration_ms", self.hfo_params["min_duration_ms"]),
+            "merge_gap_ms": saved_params.get("merge_gap_ms", self.hfo_params["merge_gap_ms"]),
+            "min_cycles": saved_params.get("min_cycles", self.hfo_params["min_cycles"]),
+        }
+        spin_by_key = {
+            "low_freq": self.edit_hfo_low_freq,
+            "high_freq": self.edit_hfo_high_freq,
+            "threshold_sigma": self.edit_hfo_threshold_sigma,
+            "min_duration_ms": self.edit_hfo_min_duration,
+            "merge_gap_ms": self.edit_hfo_merge_gap,
+            "min_cycles": self.edit_hfo_min_cycles,
+        }
+        for key, spin in spin_by_key.items():
+            try:
+                value = float(values[key])
+            except (TypeError, ValueError):
+                continue
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        self.combo_hfo_detector_version.blockSignals(True)
+        self.combo_hfo_detector_version.setCurrentText(detector_version)
+        self.combo_hfo_detector_version.blockSignals(False)
+        self.combo_hfo_band_preset.blockSignals(True)
+        self.combo_hfo_band_preset.setCurrentText(preset)
+        self.combo_hfo_band_preset.blockSignals(False)
+        self.hfo_params["detector_version"] = detector_version
+        self.hfo_params["band_preset"] = preset
+        self._sync_hfo_params_from_ui(emit=False, update_preset=True)
+
     def _choose_export_dir(self, title: str) -> Path | None:
         start_dir = (
             str(self._last_export_dir)
@@ -1136,9 +1503,11 @@ class ComputationPanel(QWidget):
         self.state.algorithm = algorithm
         is_ei = algorithm == "ei"
         is_gamma = algorithm == "gamma_spike"
+        is_hfo = algorithm == "hfo"
 
         self.gamma_time_widget.setVisible(self.gb_t.isChecked() and is_gamma)
         self.ei_time_widget.setVisible(self.gb_t.isChecked() and is_ei)
+        self.hfo_time_widget.setVisible(self.gb_t.isChecked() and is_hfo)
 
         self.btn_open_ei_summary.setVisible(is_ei)
         self.btn_open_ei_heatmap.setVisible(is_ei)
@@ -1146,6 +1515,9 @@ class ComputationPanel(QWidget):
         self.btn_open_gamma_summary.setVisible(is_gamma)
         self.btn_open_gamma_review.setVisible(is_gamma)
         self.btn_export_gamma.setVisible(is_gamma)
+        self.btn_open_hfo_summary.setVisible(is_hfo)
+        self.btn_open_hfo_event_grid.setVisible(is_hfo)
+        self.btn_export_hfo.setVisible(is_hfo)
         self.btn_cancel_gamma.setVisible(is_gamma and self._gamma_thread is not None)
         self.btn_open_ei_summary.setEnabled(self._last_ei_result is not None)
         self.btn_open_ei_heatmap.setEnabled(
@@ -1155,6 +1527,9 @@ class ComputationPanel(QWidget):
         self.btn_open_gamma_summary.setEnabled(self._last_gamma_result is not None)
         self.btn_open_gamma_review.setEnabled(self._last_gamma_result is not None)
         self.btn_export_gamma.setEnabled(self._last_gamma_result is not None)
+        self.btn_open_hfo_summary.setEnabled(False)
+        self.btn_open_hfo_event_grid.setEnabled(False)
+        self.btn_export_hfo.setEnabled(False)
 
         if is_ei:
             self.btn_run.setText("Run REI")
@@ -1169,6 +1544,17 @@ class ComputationPanel(QWidget):
                 self._gamma_default_window_applied = True
             else:
                 self._on_gamma_window_text_changed("")
+        elif is_hfo:
+            self.btn_run.setText("Run HFO Detector")
+            if (
+                not self._hfo_default_window_applied
+                or self._parse_float_text(self.edit_hfo_start) is None
+                or self._parse_float_text(self.edit_hfo_end) is None
+            ):
+                self._set_hfo_window_to_full_recording(emit=True)
+                self._hfo_default_window_applied = True
+            else:
+                self._on_hfo_window_text_changed("")
         else:
             self.btn_run.setText("Run")
 
@@ -1194,6 +1580,24 @@ class ComputationPanel(QWidget):
         self.advanced_dialog.raise_()
         self.advanced_dialog.activateWindow()
 
+    def _open_hfo_advanced_dialog(self) -> None:
+        if self.hfo_advanced_dialog is None:
+            self.hfo_advanced_dialog = QDialog(self)
+            self.hfo_advanced_dialog.setWindowTitle("HFO advanced parameters")
+            self.hfo_advanced_dialog.setModal(False)
+            self.hfo_advanced_dialog.resize(460, 520)
+
+            layout = QVBoxLayout(self.hfo_advanced_dialog)
+            layout.addWidget(self.hfo_advanced_frame)
+
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+            buttons.rejected.connect(self.hfo_advanced_dialog.hide)
+            layout.addWidget(buttons)
+
+        self.hfo_advanced_dialog.show()
+        self.hfo_advanced_dialog.raise_()
+        self.hfo_advanced_dialog.activateWindow()
+
     def _sync_section_visibility(self, _checked: bool = True) -> None:
         channel_visible = self.gb_ch.isChecked()
         for widget in (
@@ -1210,8 +1614,10 @@ class ComputationPanel(QWidget):
         time_visible = self.gb_t.isChecked()
         is_ei = self.state.algorithm == "ei"
         is_gamma = self.state.algorithm == "gamma_spike"
+        is_hfo = self.state.algorithm == "hfo"
         self.gamma_time_widget.setVisible(time_visible and is_gamma)
         self.ei_time_widget.setVisible(time_visible and is_ei)
+        self.hfo_time_widget.setVisible(time_visible and is_hfo)
 
     def _on_ei_onset_text_changed(self, _text: str) -> None:
         self.state.seizure_onset_s = self._parse_float_text(self.edit_seizure_onset)
@@ -1270,6 +1676,15 @@ class ComputationPanel(QWidget):
 
     def _on_ei_frequency_changed(self, _value=None) -> None:
         self._sync_ei_frequency_from_ui(emit=True)
+
+    @staticmethod
+    def _is_legacy_default_ei_frequency(low_freq, high_freq) -> bool:
+        try:
+            low = float(low_freq)
+            high = float(high_freq)
+        except (TypeError, ValueError):
+            return False
+        return abs(low - 70.0) < 1e-9 and abs(high - DEFAULT_REI_HIGH_FREQ_HZ) < 1e-9
 
     def _read_ei_inputs_from_ui(self) -> tuple[float, float, float, float, float, float]:
         seizure_onset = self._parse_float_text(self.edit_seizure_onset)
@@ -1357,6 +1772,29 @@ class ComputationPanel(QWidget):
 
         self.state.seizure_onset_s = onset
         self.state.seizure_offset_s = offset
+        return True, ""
+
+    def _validate_hfo_inputs(self) -> tuple[bool, str]:
+        if self._raw is None or self._picks is None:
+            return False, "Load a dataset before running the HFO detector."
+        if not self.state.selected_abs:
+            return False, "Select at least one channel before running the HFO detector."
+
+        try:
+            self._read_hfo_window_from_ui()
+        except ValueError as exc:
+            return False, str(exc)
+
+        self._sync_hfo_params_from_ui(emit=False, update_preset=True)
+        low_freq = float(self.hfo_params["low_freq"])
+        high_freq = float(self.hfo_params["high_freq"])
+        if low_freq <= 0.0 or high_freq <= low_freq:
+            return False, "HFO frequency range must have positive low < high values."
+        nyquist = 0.5 * self._sampling_frequency_hz()
+        if high_freq >= nyquist:
+            return False, (
+                f"HFO high frequency must be below Nyquist ({nyquist:g} Hz)."
+            )
         return True, ""
 
     def _run_computation(self) -> None:
@@ -1467,10 +1905,18 @@ class ComputationPanel(QWidget):
             self._start_gamma_worker(compute_callback, start_s, stop_s, perf_start)
             return
 
+        if self.state.algorithm == "hfo":
+            ok, message = self._validate_hfo_inputs()
+            if not ok:
+                QMessageBox.warning(self, "HFO detector", message)
+                return
+            self._show_hfo_not_connected_message()
+            return
+
         QMessageBox.warning(
             self,
             "Computation",
-            "Select REI or the gamma spike detector before running a computation.",
+            "Select REI, the gamma spike detector, or HFO before running a computation.",
         )
 
     def _compute_ei_result(self) -> EIComputationResult:
@@ -1897,6 +2343,61 @@ class ComputationPanel(QWidget):
             self.btn_open_gamma_review.setEnabled(False)
         if hasattr(self, "btn_export_gamma"):
             self.btn_export_gamma.setEnabled(False)
+
+    def _clear_hfo_outputs(self) -> None:
+        self._hfo_summary_dialog = None
+        self._hfo_event_grid_dialog = None
+        if hasattr(self, "btn_open_hfo_summary"):
+            self.btn_open_hfo_summary.setEnabled(False)
+        if hasattr(self, "btn_open_hfo_event_grid"):
+            self.btn_open_hfo_event_grid.setEnabled(False)
+        if hasattr(self, "btn_export_hfo"):
+            self.btn_export_hfo.setEnabled(False)
+
+    def _show_hfo_not_connected_message(self) -> None:
+        start_s, stop_s = self._read_hfo_window_from_ui()
+        detector_version = str(
+            self.hfo_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+        )
+        band_label = str(self.hfo_params.get("band_preset", DEFAULT_HFO_BAND_PRESET))
+        low_freq = float(self.hfo_params["low_freq"])
+        high_freq = float(self.hfo_params["high_freq"])
+        QMessageBox.information(
+            self,
+            "HFO detector",
+            "HFO detector integration is ready in the computation panel, but no "
+            "HFO algorithm is connected yet.\n\n"
+            f"Prepared detector: {detector_version}\n"
+            f"Prepared detection window: {start_s:g}-{stop_s:g} s\n"
+            f"Prepared band: {band_label} ({low_freq:g}-{high_freq:g} Hz)\n\n"
+            "Expected output rows will follow the expert event grid model: "
+            "channel, event start, event end, peak time, duration, band, "
+            "peak frequency, score, and review status.",
+        )
+
+    def _open_hfo_summary_dialog(self) -> None:
+        QMessageBox.information(
+            self,
+            "HFO summary",
+            "Run the HFO detector first. HFO results will summarize event counts "
+            "and rates by channel.",
+        )
+
+    def _open_hfo_event_grid_dialog(self) -> None:
+        QMessageBox.information(
+            self,
+            "HFO event grid",
+            "Run the HFO detector first. HFO events will open in an expert-event-grid "
+            "style review surface.",
+        )
+
+    def _export_hfo_results(self) -> None:
+        QMessageBox.information(
+            self,
+            "Export HFO events",
+            "Run the HFO detector first. HFO exports will include event rows and "
+            "metadata for the selected band and detection parameters.",
+        )
 
     def _show_gamma_result(self, result: GammaSpikeComputationResult) -> None:
         self._last_gamma_result = result
