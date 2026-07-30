@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import csv
 import re
 import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, TypedDict
+from typing import Any, Callable, TypedDict, cast
 
 import numpy as np
 import mne
@@ -25,6 +24,7 @@ from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QI
 
 from app.menus import build_menubar
 from app.viewer.plot import MultiChannelViewer
+from app.viewer.event_timeline import EventTimelineOverlay
 from app.computation.panel import ComputationPanel
 from app.viewer.time_controls import TimeWindowControl
 from app.annotations import (
@@ -55,7 +55,6 @@ from app.preprocessing.filtering import (
 )
 from app.viewer.display_theme import DEFAULT_DISPLAY_THEME, DISPLAY_THEME_CHOICES, get_display_theme
 from app.viewer.scalogram_viewer import ScalogramViewerWindow, build_scalogram_context
-from app.expert_event_grid import ExpertEventGridDialog
 from app.diagnostics.performance_monitor import monitor, timed_mark
 from app.ui_busy import busy_cursor
 
@@ -204,6 +203,62 @@ class MainWindow(QMainWindow):
 
         top.addSpacing(16)
 
+        self.event_class_controls_widget = QWidget()
+        self.event_class_controls_widget.setObjectName("eventClassControls")
+        self.event_class_controls_widget.setStyleSheet("""
+            QWidget#eventClassControls {
+                background-color: #f8fafc;
+                border: 2px solid #475569;
+                border-radius: 4px;
+            }
+        """)
+        event_class_row = QHBoxLayout(self.event_class_controls_widget)
+        event_class_row.setContentsMargins(6, 2, 6, 2)
+        event_class_row.setSpacing(6)
+        self.lbl_show_events = QLabel("Show events:")
+        self.lbl_show_events.setStyleSheet("color: #000000; font-weight: 700; border: none; background: transparent;")
+        event_class_row.addWidget(self.lbl_show_events)
+        self.chk_show_non_gamma_spikes = QCheckBox("non-gamma")
+        self.chk_show_gamma_spikes = QCheckBox("gamma")
+        self.chk_show_hfo_artifact = QCheckBox("artifact")
+        self.chk_show_hfo_non_spike = QCheckBox("HFO")
+        self.chk_show_hfo_spike = QCheckBox("spkHFO")
+        self.chk_show_hfo_unclassified = QCheckBox("unclassified")
+        event_filter_colors = {
+            self.chk_show_non_gamma_spikes: "#4091ff",
+            self.chk_show_gamma_spikes: "#ff9743",
+            self.chk_show_hfo_artifact: "#dc3232",
+            self.chk_show_hfo_non_spike: "#3264dc",
+            self.chk_show_hfo_spike: "#32af50",
+            self.chk_show_hfo_unclassified: "#788291",
+        }
+        for checkbox, color in event_filter_colors.items():
+            checkbox.setChecked(True)
+            checkbox.setStyleSheet(f"""
+                QCheckBox {{
+                    color: {color};
+                    border: none;
+                    background: transparent;
+                    font-weight: 700;
+                }}
+                QCheckBox::indicator {{
+                    width: 13px;
+                    height: 13px;
+                    border: 1px solid #475569;
+                    background: #ffffff;
+                }}
+                QCheckBox::indicator:checked {{
+                    background: {color};
+                    border: 1px solid {color};
+                }}
+            """)
+            checkbox.toggled.connect(self._apply_event_class_visibility)
+            event_class_row.addWidget(checkbox)
+        self.event_class_controls_widget.hide()
+        top.addWidget(self.event_class_controls_widget)
+
+        top.addSpacing(16)
+
         # ---- Filter controls container ----
         self.filter_controls_widget = QWidget()
         filter_row = QHBoxLayout(self.filter_controls_widget)
@@ -290,6 +345,10 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.main_tabs, 1)
 
+        self.event_timeline = EventTimelineOverlay()
+        self.event_timeline.eventClicked.connect(self._on_event_timeline_clicked)
+        layout.addWidget(self.event_timeline, 0)
+
         # ---- Timeline (time slider) ----
         self.timeline = QFrame()
         self.timeline.setFixedHeight(70)
@@ -311,6 +370,7 @@ class MainWindow(QMainWindow):
         self._timeline_render_timer.timeout.connect(self._flush_pending_timeline_render)
 
         self.timeline.hide()
+        self.event_timeline.hide()
         layout.addWidget(self.timeline, 0)
 
         # ---- Console ----
@@ -327,12 +387,15 @@ class MainWindow(QMainWindow):
         self._saved_bipolar_montage: BipolarMontage | None = None
 
         self.source_raw: BaseRaw | None = None   # original, never modified
+        self._active_event_marker_source: str | None = None
+        self._raw_gamma_marker_events: dict = {}
+        self._raw_hfo_marker_events: dict = {}
+        self._timeline_gamma_events: list[dict] = []
+        self._timeline_hfo_events: list[dict] = []
 
         self.filter_profiles = FilterProfiles()
         self._psd_interval: tuple[float, float] | None = None
         self._scalogram_windows: list[ScalogramViewerWindow] = []
-        self._expert_event_grid_dialog: ExpertEventGridDialog | None = None
-        self._expert_event_grid_loaded_file: Path | None = None
 
         self.channel_groups: dict[str, str] = {}
 
@@ -409,6 +472,7 @@ class MainWindow(QMainWindow):
         self.viewer.requestOpenComputationPanel.connect(self._open_computation_panel)
         self.viewer.requestEditChannelGroups.connect(self.on_edit_channel_groups)
         self.viewer.gammaSpikeMarkerClicked.connect(self._on_gamma_spike_marker_clicked)
+        self.viewer.hfoMarkerClicked.connect(self._on_hfo_marker_clicked)
 
         # Timeline sync
         self.viewer.timeWindowChanged.connect(self._sync_time_from_viewer)
@@ -433,6 +497,8 @@ class MainWindow(QMainWindow):
         self.comp_panel.eiSummaryOrderChanged.connect(self._on_ei_summary_order_changed)
         self.comp_panel.gammaSpikeMarkersChanged.connect(self._on_gamma_spike_markers_changed)
         self.comp_panel.gammaSpikeEventActivated.connect(self._on_gamma_spike_event_activated)
+        self.comp_panel.hfoMarkersChanged.connect(self._on_hfo_markers_changed)
+        self.comp_panel.hfoEventActivated.connect(self._on_hfo_event_activated)
         self.comp_dock.visibilityChanged.connect(self._on_computation_dock_visibility_changed)
         
         # Make computation panel follow the viewer cursor (instead of window start)
@@ -504,8 +570,6 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if self._expert_event_grid_dialog is not None:
-                self._expert_event_grid_dialog.close()
             if hasattr(self, "console") and self.console is not None:
                 self.console.close()
         finally:
@@ -541,13 +605,19 @@ class MainWindow(QMainWindow):
 
         self.tb.setEnabled(False)
         self.timeline.hide()
+        self._active_event_marker_source = None
+        self._raw_gamma_marker_events = {}
+        self._raw_hfo_marker_events = {}
+        self._timeline_gamma_events = []
+        self._timeline_hfo_events = []
+        self.event_timeline.clear_events()
+        self.event_timeline.set_duration(None)
+        self.event_timeline.hide()
+        self.event_class_controls_widget.hide()
         self.time_ctl.set_range(0.0, 0.0, 0.0)
 
         self.comp_dock.hide()
         self.anno_dock.hide()
-        if self._expert_event_grid_dialog is not None:
-            self._expert_event_grid_dialog.close()
-        self._expert_event_grid_loaded_file = None
         self.anno_list.clear()
         self._anno_items_by_id.clear()
 
@@ -635,6 +705,12 @@ class MainWindow(QMainWindow):
         self.btn_bad_channels.setText("Bad...")
         self.btn_bad_channels.clicked.connect(self._show_bad_channels_menu)
         tb.addWidget(self.btn_bad_channels)
+
+        self.btn_hide_all_bad = QToolButton()
+        self.btn_hide_all_bad.setText("Hide all Bad")
+        self.btn_hide_all_bad.setToolTip("Hide every channel currently marked as bad.")
+        self.btn_hide_all_bad.clicked.connect(self._hide_all_bad_channels)
+        tb.addWidget(self.btn_hide_all_bad)
 
         # Edit bipolar referencing 
         self.btn_edit_bipolar = QToolButton()
@@ -875,7 +951,6 @@ class MainWindow(QMainWindow):
 
         self.project_path = None
         self.project_dirty = False
-        self._expert_event_grid_loaded_file = None
 
         self._enable_loaded_ui()
         self._act_save.setEnabled(False)
@@ -1631,6 +1706,8 @@ class MainWindow(QMainWindow):
     def _enable_loaded_ui(self) -> None:
         self.tb.setEnabled(True)
         self.timeline.show()
+        self.event_timeline.set_duration(self._current_recording_duration_s())
+        self._refresh_event_timeline()
 
         if hasattr(self, "filter_controls_widget"):
             self.filter_controls_widget.hide()
@@ -1722,15 +1799,28 @@ class MainWindow(QMainWindow):
     def _sync_time_from_viewer(self, t0: float):
         # viewer scrolled/updated time -> update main timeline control
         self.time_ctl.set_t0(float(t0))
+        self.event_timeline.set_view_window(float(t0), float(self.time_range.value()))
+
+    def _current_recording_duration_s(self) -> float | None:
+        if self.current_raw is None or self.current_raw.n_times <= 1:
+            return None
+        try:
+            return float(self.current_raw.times[-1])
+        except Exception:
+            fs = float(self.current_raw.info.get("sfreq", 0.0) or 0.0)
+            return float(self.current_raw.n_times) / fs if fs > 0.0 else None
 
     def _update_time_slider_range(self):
         if self.current_raw is None or self.current_raw.n_times <= 1:
             self.time_ctl.set_range(0.0, 0.0, 0.0)
+            self.event_timeline.set_duration(None)
             return
 
         total_s = float(self.current_raw.times[-1])
         window_s = float(self.time_range.value())
         self.time_ctl.set_range(total_s, window_s, float(self.viewer.time_start()))
+        self.event_timeline.set_duration(total_s)
+        self.event_timeline.set_view_window(float(self.viewer.time_start()), window_s)
 
     def _update_montage_label(self) -> None:
         self.montage_label.setText(f"Montage: {self._current_montage_for_ei()}")
@@ -2051,6 +2141,16 @@ class MainWindow(QMainWindow):
 
         menu.exec_(QCursor.pos())
 
+    def _hide_all_bad_channels(self) -> None:
+        bad_channels = set(self.viewer.get_bad_channels())
+        if not bad_channels:
+            QMessageBox.information(self, "Hide all Bad", "No channels are currently marked as bad.")
+            return
+        hidden_channels = set(self.viewer.get_hidden_channels())
+        hidden_channels.update(bad_channels)
+        self.viewer.set_hidden_channels(hidden_channels)
+        self.console.log(f"Hidden bad channels: {', '.join(sorted(bad_channels))}")
+
     def _on_time_ctl_t0_changed(self, t0: float):
         # User moved the main timeline slider. Debounce expensive render/read
         # work during drags; this improves UI smoothness, not data accuracy.
@@ -2105,13 +2205,200 @@ class MainWindow(QMainWindow):
         self.viewer.set_display_order_by_channel_names(names)
 
     def _on_gamma_spike_markers_changed(self, markers: dict) -> None:
-        self.viewer.set_gamma_spike_markers(markers if isinstance(markers, dict) else {})
+        self._raw_gamma_marker_events = markers if isinstance(markers, dict) else {}
+        self._active_event_marker_source = "gamma"
+        self._apply_event_class_visibility()
 
     def _on_gamma_spike_event_activated(self, channel_name: str, time_s: float) -> None:
         self._jump_viewer_to_event(float(time_s), str(channel_name))
 
     def _on_gamma_spike_marker_clicked(self, channel_name: str, time_s: float) -> None:
         self.comp_panel.open_gamma_review_at(str(channel_name), float(time_s))
+
+    def _on_hfo_markers_changed(self, markers: dict) -> None:
+        self._raw_hfo_marker_events = markers if isinstance(markers, dict) else {}
+        self._active_event_marker_source = "hfo"
+        self._apply_event_class_visibility()
+
+    def _on_hfo_event_activated(self, channel_name: str, time_s: float) -> None:
+        self._jump_viewer_to_event(float(time_s), str(channel_name))
+
+    def _on_hfo_marker_clicked(self, channel_name: str, time_s: float) -> None:
+        self.comp_panel.open_hfo_event_at(str(channel_name), float(time_s))
+
+    def _on_event_timeline_clicked(self, source: str, channel_name: str, time_s: float) -> None:
+        self._jump_viewer_to_event(float(time_s), str(channel_name))
+
+    def _refresh_event_timeline(self) -> None:
+        if self._active_event_marker_source == "gamma":
+            events = list(self._timeline_gamma_events)
+        elif self._active_event_marker_source == "hfo":
+            events = list(self._timeline_hfo_events)
+        else:
+            events = []
+        self.event_timeline.set_duration(self._current_recording_duration_s())
+        self.event_timeline.set_view_window(
+            float(self.viewer.time_start()),
+            float(self.time_range.value()),
+        )
+        self.event_timeline.set_events(events)
+
+    def _apply_event_class_visibility(self, _checked: bool | None = None) -> None:
+        if self._active_event_marker_source == "gamma":
+            gamma_markers = self._filtered_gamma_marker_events(self._raw_gamma_marker_events)
+            hfo_markers: dict = {}
+        elif self._active_event_marker_source == "hfo":
+            gamma_markers = {}
+            hfo_markers = self._filtered_hfo_marker_events(self._raw_hfo_marker_events)
+        else:
+            gamma_markers = {}
+            hfo_markers = {}
+        self.viewer.set_gamma_spike_markers(gamma_markers)
+        self.viewer.set_hfo_markers(hfo_markers)
+        self._timeline_gamma_events = self._timeline_events_from_marker_dict(
+            gamma_markers,
+            source="gamma",
+        )
+        self._timeline_hfo_events = self._timeline_events_from_marker_dict(
+            hfo_markers,
+            source="hfo",
+        )
+        self._refresh_event_timeline()
+        self._sync_event_class_controls_visibility()
+
+    def _sync_event_class_controls_visibility(self) -> None:
+        has_gamma = any(
+            isinstance(events, list) and bool(events)
+            for events in self._raw_gamma_marker_events.values()
+        )
+        has_hfo = any(
+            isinstance(events, list) and bool(events)
+            for events in self._raw_hfo_marker_events.values()
+        )
+        show_gamma_controls = self._active_event_marker_source == "gamma" and has_gamma
+        show_hfo_controls = self._active_event_marker_source == "hfo" and has_hfo
+        for checkbox in (self.chk_show_non_gamma_spikes, self.chk_show_gamma_spikes):
+            checkbox.setVisible(show_gamma_controls)
+        for checkbox in (
+            self.chk_show_hfo_artifact,
+            self.chk_show_hfo_non_spike,
+            self.chk_show_hfo_spike,
+            self.chk_show_hfo_unclassified,
+        ):
+            checkbox.setVisible(show_hfo_controls)
+        self.event_class_controls_widget.setVisible(bool(show_gamma_controls or show_hfo_controls))
+
+    def _filtered_gamma_marker_events(self, markers: dict) -> dict:
+        show_regular = self.chk_show_non_gamma_spikes.isChecked()
+        show_gamma = self.chk_show_gamma_spikes.isChecked()
+        filtered: dict[str, list[dict]] = {}
+        if not isinstance(markers, dict):
+            return filtered
+        for channel_name, events in markers.items():
+            if not isinstance(events, list):
+                continue
+            kept: list[dict] = []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                kind = str(event.get("kind", "regular")).strip().lower()
+                if kind == "gamma" and not show_gamma:
+                    continue
+                if kind != "gamma" and not show_regular:
+                    continue
+                kept.append(dict(event))
+            if kept:
+                filtered[str(channel_name)] = kept
+        return filtered
+
+    def _filtered_hfo_marker_events(self, markers: dict) -> dict:
+        filtered: dict[str, list[dict]] = {}
+        if not isinstance(markers, dict):
+            return filtered
+        for channel_name, events in markers.items():
+            if not isinstance(events, list):
+                continue
+            kept: list[dict] = []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                if not self._hfo_marker_kind_visible(str(event.get("kind", "unclassified"))):
+                    continue
+                kept.append(dict(event))
+            if kept:
+                filtered[str(channel_name)] = kept
+        return filtered
+
+    def _hfo_marker_kind_visible(self, kind: str) -> bool:
+        normalized = str(kind).strip().lower().replace("_", "-")
+        if "artifact" in normalized:
+            return self.chk_show_hfo_artifact.isChecked()
+        if "spike" in normalized and "non-spike" not in normalized:
+            return self.chk_show_hfo_spike.isChecked()
+        if "non-spike" in normalized or normalized in {"hfo", "real-hfo", "real hfo"}:
+            return self.chk_show_hfo_non_spike.isChecked()
+        return self.chk_show_hfo_unclassified.isChecked()
+
+    def _timeline_events_from_marker_dict(
+        self,
+        markers: dict,
+        *,
+        source: str,
+    ) -> list[dict]:
+        events: list[dict] = []
+        if not isinstance(markers, dict):
+            return events
+        source_key = str(source).strip().lower()
+        for channel_name, channel_events in markers.items():
+            if not isinstance(channel_events, list):
+                continue
+            for item in channel_events:
+                if not isinstance(item, dict):
+                    continue
+                center_s = self._timeline_float(item.get("time_s"), np.nan)
+                if not np.isfinite(center_s):
+                    continue
+                start_s = self._timeline_float(item.get("start_time_s"), center_s)
+                end_s = self._timeline_float(item.get("end_time_s"), center_s)
+                if end_s < start_s:
+                    start_s, end_s = end_s, start_s
+                label = str(item.get("kind", ""))
+                events.append(
+                    {
+                        "source": source_key,
+                        "channel": str(channel_name),
+                        "start_s": start_s,
+                        "end_s": end_s,
+                        "label": label,
+                        "color": self._timeline_event_color(source_key, label),
+                        "event_id": str(item.get("event_id", "")),
+                    }
+                )
+        return events
+
+    @staticmethod
+    def _timeline_float(value: object, fallback: float) -> float:
+        try:
+            numeric = float(cast(Any, value))
+        except (TypeError, ValueError):
+            return float(fallback)
+        return numeric if np.isfinite(numeric) else float(fallback)
+
+    @staticmethod
+    def _timeline_event_color(source: str, label: str) -> str:
+        source_key = str(source).strip().lower()
+        normalized = str(label).strip().lower().replace("_", "-")
+        if source_key == "gamma":
+            return "#ff9743" if normalized == "gamma" else "#4091ff"
+        if source_key == "hfo":
+            if "artifact" in normalized:
+                return "#dc3232"
+            if "spike" in normalized and "non-spike" not in normalized:
+                return "#32af50"
+            if "non-spike" in normalized or "hfo" in normalized:
+                return "#3264dc"
+            return "#788291"
+        return "#788291"
 
     def _on_computation_dock_visibility_changed(self, visible: bool) -> None:
         if visible:
@@ -2122,8 +2409,16 @@ class MainWindow(QMainWindow):
         self.viewer.set_analysis_window_markers(None, None)
         self.viewer.set_recruitment_markers({})
         self.viewer.set_gamma_spike_markers({})
+        self.viewer.set_hfo_markers({})
         self.viewer.set_ei_label_styles({})
         self.viewer.clear_display_order_override()
+        self._active_event_marker_source = None
+        self._raw_gamma_marker_events = {}
+        self._raw_hfo_marker_events = {}
+        self._timeline_gamma_events = []
+        self._timeline_hfo_events = []
+        self.event_timeline.clear_events()
+        self.event_class_controls_widget.hide()
 
     def _refresh_display_name_dependent_ui(self) -> None:
         self._sync_comp_panel_context()
@@ -2811,7 +3106,7 @@ class MainWindow(QMainWindow):
             origin_item.setFlags(origin_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(row_index, 3, origin_item)
 
-            meta = {
+            meta: MontageEditorRowMeta = {
                 "source_pair": source_pair,
                 "is_new": is_new,
                 "editable_ch1": editable_ch1,
@@ -3570,180 +3865,7 @@ class MainWindow(QMainWindow):
         if self.current_raw is not None:
             self._sync_comp_panel_context()
 
-    # ---------------- Expert Event Grid -------------
-
-    def open_expert_event_grid(self) -> None:
-        """Open the Expert Event Grid as a separate window."""
-        if self.loaded_file is None:
-            QMessageBox.information(
-                self,
-                "Expert Event Grid",
-                "Load an EDF file first."
-            )
-            return
-
-        if self._expert_event_grid_dialog is None:
-            dlg = ExpertEventGridDialog(self)
-            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-            dlg.destroyed.connect(lambda *_args: setattr(self, "_expert_event_grid_dialog", None))
-            dlg.grid.requestJumpToTime.connect(self._jump_viewer_to_event)
-            dlg.grid.eventClicked.connect(self._on_expert_event_clicked)
-            self._expert_event_grid_dialog = dlg
-
-        self._expert_event_grid_dialog.set_edf_path(self.loaded_file)
-        self._expert_event_grid_dialog.grid.set_raw(self.source_raw or self.current_raw)
-        self._expert_event_grid_dialog.grid.set_waveform_callback(self._extract_waveform_from_raw)
-
-        if self._expert_event_grid_loaded_file != self.loaded_file:
-            auto_path = self._find_expert_hfo_events_path(self.loaded_file)
-            if auto_path is not None:
-                if self._expert_event_grid_dialog.load_events_for_edf(self.loaded_file, auto_path):
-                    self._expert_event_grid_loaded_file = self.loaded_file
-                    self.console.log(f"Auto-loaded expert HFO events: {auto_path}")
-            else:
-                self.console.log("No matching expert HFO events file found automatically.")
-
-        self._expert_event_grid_dialog.show()
-        self._expert_event_grid_dialog.raise_()
-        self._expert_event_grid_dialog.activateWindow()
-
-    def _find_expert_hfo_manifest(self, raw_path: Path) -> Path | None:
-        """Find the expert recording manifest near the BIDS package or known local complement."""
-        raw_path = Path(raw_path)
-        candidates: list[Path] = []
-
-        for parent in [raw_path.parent, *raw_path.parents]:
-            candidates.append(parent / "manifest" / "expert_recording_manifest.csv")
-            candidates.append(parent / "updated_dataset" / "manifest" / "expert_recording_manifest.csv")
-            if parent.name.lower() == "bids":
-                candidates.append(parent.parent / "manifest" / "expert_recording_manifest.csv")
-                candidates.append(parent.parent / "updated_dataset" / "manifest" / "expert_recording_manifest.csv")
-
-        complement_root = Path.home() / "Documents" / "omni dataset complement"
-        candidates.append(complement_root / "manifest" / "expert_recording_manifest.csv")
-        candidates.append(complement_root / "updated_dataset" / "manifest" / "expert_recording_manifest.csv")
-
-        seen: set[Path] = set()
-        for candidate in candidates:
-            try:
-                resolved = candidate.expanduser().resolve()
-            except OSError:
-                resolved = candidate.expanduser()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            if resolved.exists():
-                return resolved
-
-        return None
-
-    def _paths_match_manifest_entry(self, manifest_path: Path, raw_path: Path, entry_path: str) -> bool:
-        if not entry_path:
-            return False
-
-        raw_resolved = raw_path.expanduser().resolve()
-        entry = Path(entry_path)
-        entry_candidates = [entry]
-        if not entry.is_absolute():
-            entry_candidates.append(manifest_path.parent.parent / entry)
-
-        for candidate in entry_candidates:
-            try:
-                if candidate.expanduser().resolve() == raw_resolved:
-                    return True
-            except OSError:
-                pass
-
-        raw_parts = tuple(p.lower() for p in raw_path.parts)
-        entry_parts = tuple(p.lower() for p in entry.parts)
-        if "bids" in raw_parts and "bids" in entry_parts:
-            raw_bids = raw_parts[raw_parts.index("bids"):]
-            entry_bids = entry_parts[entry_parts.index("bids"):]
-            if raw_bids == entry_bids:
-                return True
-
-        return bool(entry_parts) and len(entry_parts) <= len(raw_parts) and raw_parts[-len(entry_parts):] == entry_parts
-
-    def _resolve_manifest_annotation_path(self, manifest_path: Path, annotation_path: str) -> Path | None:
-        if not annotation_path:
-            return None
-
-        path = Path(annotation_path)
-        candidates = [path]
-        package_root = manifest_path.parent.parent
-        if not path.is_absolute():
-            candidates.append(package_root / path)
-        elif package_root.name.lower() == "updated_dataset":
-            parts_lower = [part.lower() for part in path.parts]
-            try:
-                complement_idx = parts_lower.index("omni dataset complement")
-            except ValueError:
-                complement_idx = -1
-            if complement_idx >= 0 and complement_idx + 1 < len(path.parts):
-                suffix = Path(*path.parts[complement_idx + 1:])
-                candidates.append(package_root / suffix)
-
-        for candidate in candidates:
-            resolved = candidate.expanduser()
-            if resolved.exists():
-                return resolved
-
-        return None
-
-    def _find_expert_hfo_events_path(self, raw_path: Path) -> Path | None:
-        raw_path = Path(raw_path)
-        manifest_path = self._find_expert_hfo_manifest(raw_path)
-
-        if manifest_path is not None:
-            try:
-                with manifest_path.open("r", newline="", encoding="utf-8-sig") as f:
-                    for row in csv.DictReader(f):
-                        edf_entries = [
-                            (row.get("package_bids_edf_path") or "").strip(),
-                            (row.get("local_raw_edf_path") or "").strip(),
-                        ]
-                        if not any(
-                            self._paths_match_manifest_entry(manifest_path, raw_path, edf_entry)
-                            for edf_entry in edf_entries
-                        ):
-                            continue
-
-                        annotation_path = self._resolve_manifest_annotation_path(
-                            manifest_path,
-                            (row.get("package_annotation_path") or "").strip(),
-                        )
-                        match_status = (row.get("match_status") or "").strip()
-                        if annotation_path is not None:
-                            if match_status:
-                                self.console.log(f"Expert HFO manifest match: {match_status}")
-                            return annotation_path
-                        if match_status:
-                            self.console.log(
-                                f"Expert HFO manifest row matched, but annotation file was not found ({match_status})."
-                            )
-                        return None
-            except Exception as e:
-                self.console.log(f"Could not read expert HFO manifest: {e}")
-
-        return self._find_expert_hfo_events_by_convention(raw_path)
-
-    def _find_expert_hfo_events_by_convention(self, raw_path: Path) -> Path | None:
-        raw_path = Path(raw_path)
-        parts_lower = [part.lower() for part in raw_path.parts]
-        try:
-            bids_idx = parts_lower.index("bids")
-        except ValueError:
-            return None
-
-        package_root = Path(*raw_path.parts[:bids_idx])
-        relative_to_bids = Path(*raw_path.parts[bids_idx + 1:])
-        expected = (
-            package_root
-            / "derivatives"
-            / "expert_hfo"
-            / relative_to_bids.with_name(f"{raw_path.stem}_expert_hfo_events.csv")
-        )
-        return expected if expected.exists() else None
+    # ---------------- Event Review Helpers -------------
 
     def _channel_match_key(self, label: str) -> str:
         text = str(label or "").strip()
@@ -3786,13 +3908,13 @@ class MainWindow(QMainWindow):
             return None
         return parts[0], parts[1]
 
-    def _find_display_channel_index_for_expert_channel(self, channel: str) -> int | None:
+    def _find_display_channel_index_for_event_channel(self, channel: str) -> int | None:
         display_names = self.viewer.get_channel_names()
         idx = self._find_channel_index_by_label(display_names, channel)
         if idx is not None:
             return idx
 
-        # If the expert event is a bipolar derivation but the main display is
+        # If the event is a bipolar derivation but the main display is
         # monopolar, select the first source contact so the jump still lands nearby.
         pair = self._split_bipolar_event_label(channel)
         if pair is None:
@@ -3830,55 +3952,13 @@ class MainWindow(QMainWindow):
         target_t0 = max(0.0, float(time_s) - 0.5 * view_range)
         self.viewer.set_time_start(target_t0)
 
-        idx = self._find_display_channel_index_for_expert_channel(channel)
+        idx = self._find_display_channel_index_for_event_channel(channel)
         if idx is not None:
             self.viewer.set_channel_start(max(0, idx - 5))
             self.viewer.set_selected_abs([idx], anchor=idx, emit=True)
 
         # Update time controls
         self.time_ctl.set_t0(self.viewer.time_start())
-
-    def _on_expert_event_clicked(self, event) -> None:
-        """Handle when an expert event is clicked in the grid."""
-        # The requestJumpToTime signal already handles jumping to the event
-        # This is for any additional handling if needed
-        self.console.log(f"Event clicked: {event.channel} at {event.start:.3f}s")
-
-    def load_expert_events(self, events_path: Path) -> bool:
-        """
-        Load expert events from a file for the currently loaded EDF.
-
-        Args:
-            events_path: Path to the events CSV/JSON file
-
-        Returns:
-            True if events loaded successfully
-        """
-        if self.loaded_file is None:
-            QMessageBox.warning(
-                self,
-                "No EDF Loaded",
-                "Please load an EDF file before loading events."
-            )
-            return False
-
-        if self._expert_event_grid_dialog is None:
-            self.open_expert_event_grid()
-            if self._expert_event_grid_dialog is None:
-                return False
-
-        self._expert_event_grid_dialog.grid.set_raw(self.source_raw or self.current_raw)
-        self._expert_event_grid_dialog.grid.set_waveform_callback(self._extract_waveform_from_raw)
-        success = self._expert_event_grid_dialog.load_events_for_edf(self.loaded_file, events_path)
-
-        if success and self._expert_event_grid_dialog.grid.events:
-            self._expert_event_grid_loaded_file = self.loaded_file
-            self._expert_event_grid_dialog.show()
-            self.console.log(
-                f"Loaded {len(self._expert_event_grid_dialog.grid.events)} expert events"
-            )
-
-        return success
 
     def _extract_waveform_from_raw(self, channel: str, start_s: float, end_s: float) -> tuple[np.ndarray, np.ndarray]:
         """
@@ -3899,7 +3979,7 @@ class MainWindow(QMainWindow):
         try:
             resolved = self._resolve_raw_waveform_channels(raw, channel)
             if resolved is None:
-                self.console.log(f"Expert event waveform: channel not found in raw data ({channel})")
+                self.console.log(f"Event waveform: channel not found in raw data ({channel})")
                 return np.array([]), np.array([])
 
             left_idx, right_idx = resolved

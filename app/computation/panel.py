@@ -1,8 +1,10 @@
 # app/computation/panel.py
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import re
 import time
 from typing import Any, Callable, Literal, Optional, TypedDict, cast
@@ -12,7 +14,7 @@ import pyqtgraph as pg
 from scipy import signal
 from mne.io import BaseRaw
 
-from PySide6.QtCore import Qt, Slot, Signal, QRectF, QObject, QThread
+from PySide6.QtCore import Qt, Slot, Signal, QRectF, QObject, QThread, QTimer, QSettings
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
@@ -38,28 +40,51 @@ from app.computation.gamma_spike.wire_algorithm import (
     GammaSpikeEventResult,
     compute_gamma_spike_segmented_for_gui,
 )
+from app.computation.hfo import HFOComputationResult, compute_hfo_for_gui
+from app.computation.hfo.algorithm import (
+    HFO_CLASSIFIER_EHFO,
+    HFO_CLASSIFIER_PYHFO_OMNI_LEGACY,
+    HFO_CLASSIFIER_PYHFO_PYBRAIN,
+)
+from app.computation.hfo.detectors.omni_hfo_detector import DEFAULT_CANDIDATE_DETECTORS, OMNI_TARGET_FS_HZ
 from app.computation.exporters import (
     export_ei_result,
     export_gamma_spike_result,
+    export_hfo_result,
 )
+from app.computation.importers import ImportedComputationResult, import_computation_result
+from app.expert_event_grid import ExpertEvent, ExpertEventGrid
 from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
 from app.ui_busy import busy_cursor
 
 HFO_BAND_PRESETS: dict[str, tuple[float, float]] = {
-    "HFO 80-500 Hz": (80.0, 500.0),
+    "HFO 80-300 Hz": (80.0, 300.0),
+    "pyhfo_pybrain 80-500 Hz": (80.0, 500.0),
     "Ripple 80-250 Hz": (80.0, 250.0),
     "Fast ripple 250-500 Hz": (250.0, 500.0),
 }
-DEFAULT_HFO_BAND_PRESET = "HFO 80-500 Hz"
+OMNI_LEGACY_HFO_BAND_PRESET = "HFO 80-300 Hz"
+PYBRAIN_HFO_BAND_PRESET = "pyhfo_pybrain 80-500 Hz"
+DEFAULT_HFO_BAND_PRESET = PYBRAIN_HFO_BAND_PRESET
 CUSTOM_HFO_BAND_PRESET = "Custom"
+DISABLED_HFO_BAND_PRESETS = {
+    "Ripple 80-250 Hz",
+    "Fast ripple 250-500 Hz",
+    CUSTOM_HFO_BAND_PRESET,
+}
 HFO_DETECTOR_VERSIONS: tuple[str, ...] = (
-    "PyHFO2",
-    "PyHFO2 Omni trained",
-    "PyHFO1 Omni trained",
-    "EHFO",
+    HFO_CLASSIFIER_PYHFO_PYBRAIN,
+    HFO_CLASSIFIER_PYHFO_OMNI_LEGACY,
+    HFO_CLASSIFIER_EHFO,
 )
-DEFAULT_HFO_DETECTOR_VERSION = "PyHFO2"
+DEFAULT_HFO_DETECTOR_VERSION = HFO_CLASSIFIER_PYHFO_PYBRAIN
+DISABLED_HFO_CLASSIFIER_OPTIONS = {
+    HFO_CLASSIFIER_EHFO,
+}
+HFO_GUI_SETTINGS_ORG = "EpilepsyTools"
+HFO_GUI_SETTINGS_APP = "I_EEG"
+HFO_GUI_SETTINGS_KEY = "hfo/advanced_defaults"
 
 
 @dataclass
@@ -108,6 +133,10 @@ class GammaReviewRow(TypedDict):
     boundary_n2_time_s: float | None
     gamma_start_time_s: float | None
     gamma_stop_time_s: float | None
+    model_class: str
+    manual_class: str | None
+    manual_review_status: str
+    source_event: GammaSpikeEventResult
     error: str | None
 
 
@@ -146,6 +175,41 @@ class _GammaSpikeWorker(QObject):
         self.progress.emit(str(message))
         if self._cancel_requested:
             raise GammaSpikeCancelled()
+
+
+class _HFOWorker(QObject):
+    finished = Signal(object, float)
+    failed = Signal(str, float)
+    cancelled = Signal(float)
+
+    def __init__(
+        self,
+        compute_callback: Callable[[Callable[[], None]], HFOComputationResult],
+    ) -> None:
+        super().__init__()
+        self._compute_callback = compute_callback
+        self._cancel_requested = False
+
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+
+    def _raise_if_cancelled(self) -> None:
+        if self._cancel_requested:
+            raise GammaSpikeCancelled()
+
+    @Slot()
+    def run(self) -> None:
+        perf_start = time.perf_counter()
+        try:
+            self._raise_if_cancelled()
+            result = self._compute_callback(self._raise_if_cancelled)
+            self._raise_if_cancelled()
+        except GammaSpikeCancelled:
+            self.cancelled.emit(time.perf_counter() - perf_start)
+        except Exception as exc:
+            self.failed.emit(str(exc), time.perf_counter() - perf_start)
+        else:
+            self.finished.emit(result, time.perf_counter() - perf_start)
 
 
 class GammaReviewState(TypedDict):
@@ -228,6 +292,8 @@ class ComputationPanel(QWidget):
     eiSummaryOrderChanged = Signal(list)
     gammaSpikeMarkersChanged = Signal(dict)  # display channel name -> [{time_s, kind}]
     gammaSpikeEventActivated = Signal(str, float)  # channel name, absolute time_s
+    hfoMarkersChanged = Signal(dict)  # display channel name -> [{time_s, kind, event_id}]
+    hfoEventActivated = Signal(str, float)  # channel name, absolute time_s
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -262,6 +328,8 @@ class ComputationPanel(QWidget):
         self._gamma_review_dialog: QDialog | None = None
         self._hfo_summary_dialog: QDialog | None = None
         self._hfo_event_grid_dialog: QDialog | None = None
+        self._last_hfo_result: HFOComputationResult | None = None
+        self._pending_hfo_event_selection: tuple[str, float] | None = None
         self._pending_gamma_review_selection: tuple[str, float] | None = None
         self._last_export_dir: Path | None = None
         self._gamma_cancel_requested = False
@@ -270,6 +338,15 @@ class ComputationPanel(QWidget):
         self._gamma_perf_start: float | None = None
         self._gamma_run_window_s: tuple[float, float] | None = None
         self._gamma_completion_status_active = False
+        self._hfo_thread: QThread | None = None
+        self._hfo_worker: _HFOWorker | None = None
+        self._hfo_status_timer: QTimer | None = None
+        self._hfo_perf_start: float | None = None
+        self._hfo_run_window_s: tuple[float, float] | None = None
+        self._hfo_cancel_requested = False
+        self._hfo_expected_runtime_s: float | None = None
+        self._hfo_runtime_complexity: float | None = None
+        self._hfo_seconds_per_complexity_unit: float | None = None
 
         self.state = PanelState(selected_abs=[], t0=0.0, win=5.0, link_time=True)
         self._gamma_default_window_applied = False
@@ -292,16 +369,48 @@ class ComputationPanel(QWidget):
         default_hfo_low, default_hfo_high = HFO_BAND_PRESETS[DEFAULT_HFO_BAND_PRESET]
         self.hfo_params = {
             "detector_version": DEFAULT_HFO_DETECTOR_VERSION,
+            "active_candidate_detectors": list(DEFAULT_CANDIDATE_DETECTORS),
             "band_preset": DEFAULT_HFO_BAND_PRESET,
             "low_freq": default_hfo_low,
             "high_freq": default_hfo_high,
             "threshold_sigma": 5.0,
             "min_duration_ms": 6.0,
+            "max_duration_ms": 500.0,
+            "boundary_padding_s": 1.0,
             "merge_gap_ms": 10.0,
-            "min_cycles": 4.0,
+            "min_cycles": 6.0,
+            "detector_parameters": {
+                "ste": {
+                    "rms_window_s": 0.003,
+                    "min_window_s": 0.006,
+                    "min_gap_s": 0.010,
+                    "epoch_len": 600,
+                    "min_osc": 6,
+                    "rms_thres": 5.0,
+                    "peak_thres": 3.0,
+                },
+                "mni": {
+                    "epoch_time_s": 10.0,
+                    "epo_chf_hz": 60.0,
+                    "per_chf": 0.95,
+                    "min_win_s": 0.010,
+                    "min_gap_s": 0.010,
+                    "threshold_percentile": 0.999999,
+                    "base_seg_s": 0.125,
+                    "base_shift_s": 0.5,
+                    "base_threshold": 0.67,
+                    "base_min": 5,
+                },
+                "hilbert": {
+                    "sd_threshold": 5.0,
+                    "min_window_s": 0.010,
+                    "epoch_len_s": 3600.0,
+                },
+            },
             "notch_behavior": "Uses active notch if enabled",
             "output_model": "expert_event_grid",
         }
+        self._built_in_hfo_params = deepcopy(self.hfo_params)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -541,7 +650,8 @@ class ComputationPanel(QWidget):
         for detector_version in HFO_DETECTOR_VERSIONS:
             self.combo_hfo_detector_version.addItem(detector_version, userData=detector_version)
         self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
-        hfo_detector_form.addRow("Detector version:", self.combo_hfo_detector_version)
+        self._disable_unvalidated_hfo_classifier_options()
+        hfo_detector_form.addRow("Classifier:", self.combo_hfo_detector_version)
         hfo_time_layout.addLayout(hfo_detector_form)
 
         hfo_band_form = QFormLayout()
@@ -549,6 +659,7 @@ class ComputationPanel(QWidget):
         for preset_name in HFO_BAND_PRESETS:
             self.combo_hfo_band_preset.addItem(preset_name, userData=preset_name)
         self.combo_hfo_band_preset.addItem(CUSTOM_HFO_BAND_PRESET, userData=CUSTOM_HFO_BAND_PRESET)
+        self._disable_unvalidated_hfo_band_presets()
         self.combo_hfo_band_preset.setCurrentText(DEFAULT_HFO_BAND_PRESET)
         hfo_band_form.addRow("Band preset:", self.combo_hfo_band_preset)
         hfo_time_layout.addLayout(hfo_band_form)
@@ -574,24 +685,47 @@ class ComputationPanel(QWidget):
             spin.setSingleStep(5.0)
             spin.setSuffix(" Hz")
             spin.setValue(float(value))
-        hfo_filter_form.addRow("Low frequency:", self.edit_hfo_low_freq)
-        hfo_filter_form.addRow("High frequency:", self.edit_hfo_high_freq)
+        hfo_filter_form.addRow("Low frequency:", QLabel(f"{self.hfo_params['low_freq']:g} Hz"))
+        hfo_filter_form.addRow("High frequency:", QLabel(f"{self.hfo_params['high_freq']:g} Hz"))
         hfo_filter_form.addRow("Notch handling:", QLabel("Uses active notch if enabled"))
         hfo_advanced_layout.addWidget(hfo_filter_box)
 
-        hfo_detection_box = QGroupBox("Event criteria")
+        hfo_detection_box = QGroupBox("Detector parameters")
         hfo_detection_form = QFormLayout(hfo_detection_box)
+        self.chk_hfo_ste = QCheckBox("STE")
+        self.chk_hfo_mni = QCheckBox("MNI")
+        self.chk_hfo_hilbert = QCheckBox("Hilbert")
+        for checkbox in (self.chk_hfo_ste, self.chk_hfo_mni, self.chk_hfo_hilbert):
+            checkbox.setChecked(True)
+        detector_row = QHBoxLayout()
+        detector_row.addWidget(self.chk_hfo_ste)
+        detector_row.addWidget(self.chk_hfo_mni)
+        detector_row.addWidget(self.chk_hfo_hilbert)
+        detector_row.addStretch(1)
+        hfo_detection_form.addRow("Candidate detectors:", detector_row)
         self.edit_hfo_threshold_sigma = QDoubleSpinBox()
         self.edit_hfo_threshold_sigma.setRange(0.1, 100.0)
         self.edit_hfo_threshold_sigma.setDecimals(1)
         self.edit_hfo_threshold_sigma.setSingleStep(0.5)
         self.edit_hfo_threshold_sigma.setValue(float(self.hfo_params["threshold_sigma"]))
         self.edit_hfo_min_duration = QDoubleSpinBox()
-        self.edit_hfo_min_duration.setRange(0.1, 10_000.0)
+        self.edit_hfo_min_duration.setRange(1.0, 10_000.0)
         self.edit_hfo_min_duration.setDecimals(1)
         self.edit_hfo_min_duration.setSingleStep(1.0)
         self.edit_hfo_min_duration.setSuffix(" ms")
         self.edit_hfo_min_duration.setValue(float(self.hfo_params["min_duration_ms"]))
+        self.edit_hfo_max_duration = QDoubleSpinBox()
+        self.edit_hfo_max_duration.setRange(1.0, 60_000.0)
+        self.edit_hfo_max_duration.setDecimals(1)
+        self.edit_hfo_max_duration.setSingleStep(10.0)
+        self.edit_hfo_max_duration.setSuffix(" ms")
+        self.edit_hfo_max_duration.setValue(float(self.hfo_params["max_duration_ms"]))
+        self.edit_hfo_boundary_padding = QDoubleSpinBox()
+        self.edit_hfo_boundary_padding.setRange(0.0, 10.0)
+        self.edit_hfo_boundary_padding.setDecimals(3)
+        self.edit_hfo_boundary_padding.setSingleStep(0.5)
+        self.edit_hfo_boundary_padding.setSuffix(" s")
+        self.edit_hfo_boundary_padding.setValue(float(self.hfo_params["boundary_padding_s"]))
         self.edit_hfo_merge_gap = QDoubleSpinBox()
         self.edit_hfo_merge_gap.setRange(0.0, 10_000.0)
         self.edit_hfo_merge_gap.setDecimals(1)
@@ -599,22 +733,61 @@ class ComputationPanel(QWidget):
         self.edit_hfo_merge_gap.setSuffix(" ms")
         self.edit_hfo_merge_gap.setValue(float(self.hfo_params["merge_gap_ms"]))
         self.edit_hfo_min_cycles = QDoubleSpinBox()
-        self.edit_hfo_min_cycles.setRange(0.0, 100.0)
+        self.edit_hfo_min_cycles.setRange(1.0, 100.0)
         self.edit_hfo_min_cycles.setDecimals(1)
         self.edit_hfo_min_cycles.setSingleStep(0.5)
         self.edit_hfo_min_cycles.setValue(float(self.hfo_params["min_cycles"]))
         hfo_detection_form.addRow("Threshold sigma:", self.edit_hfo_threshold_sigma)
         hfo_detection_form.addRow("Minimum duration:", self.edit_hfo_min_duration)
+        hfo_detection_form.addRow("Maximum duration:", self.edit_hfo_max_duration)
+        hfo_detection_form.addRow("Ignore edges:", self.edit_hfo_boundary_padding)
         hfo_detection_form.addRow("Merge gap:", self.edit_hfo_merge_gap)
         hfo_detection_form.addRow("Minimum cycles:", self.edit_hfo_min_cycles)
+        self._hfo_detector_param_spins: dict[tuple[str, str], QDoubleSpinBox | QSpinBox] = {}
+        self._hfo_detector_param_boxes: dict[str, QGroupBox] = {}
         hfo_advanced_layout.addWidget(hfo_detection_box)
-
-        hfo_output_box = QGroupBox("Event-grid output")
-        hfo_output_form = QFormLayout(hfo_output_box)
-        hfo_output_form.addRow("Detector:", QLabel("Saved with every run"))
-        hfo_output_form.addRow("Rows:", QLabel("channel, start, end, peak time, band, score"))
-        hfo_output_form.addRow("Review surface:", QLabel("Expert event grid"))
-        hfo_advanced_layout.addWidget(hfo_output_box)
+        self._add_hfo_detector_parameter_box(
+            hfo_advanced_layout,
+            "STE parameters",
+            "ste",
+            [
+                ("rms_window_s", "RMS window", " s", 0.001, 10.0, 4, 0.001, "float"),
+                ("min_window_s", "Minimum window", " s", 0.001, 10.0, 4, 0.001, "float"),
+                ("min_gap_s", "Minimum gap", " s", 0.0, 10.0, 4, 0.001, "float"),
+                ("epoch_len", "Epoch length", " s", 1, 100000, 0, 1, "int"),
+                ("min_osc", "Minimum oscillations", "", 1, 100, 0, 1, "int"),
+                ("rms_thres", "RMS threshold", "", 0.1, 100.0, 2, 0.5, "float"),
+                ("peak_thres", "Peak threshold", "", 0.1, 100.0, 2, 0.5, "float"),
+            ],
+        )
+        self._add_hfo_detector_parameter_box(
+            hfo_advanced_layout,
+            "MNI parameters",
+            "mni",
+            [
+                ("epoch_time_s", "Epoch time", " s", 0.1, 100000.0, 2, 1.0, "float"),
+                ("epo_chf_hz", "Epoch CHF", " Hz", 0.1, 10000.0, 2, 1.0, "float"),
+                ("per_chf", "Percent CHF", "", 0.0001, 1.0, 4, 0.01, "float"),
+                ("min_win_s", "Minimum window", " s", 0.001, 10.0, 4, 0.001, "float"),
+                ("min_gap_s", "Minimum gap", " s", 0.0, 10.0, 4, 0.001, "float"),
+                ("threshold_percentile", "Threshold percentile", "", 0.000001, 0.999999, 6, 0.000001, "float"),
+                ("base_seg_s", "Baseline segment", " s", 0.001, 10.0, 4, 0.001, "float"),
+                ("base_shift_s", "Baseline shift", " s", 0.0, 10.0, 4, 0.01, "float"),
+                ("base_threshold", "Baseline threshold", "", 0.0, 10.0, 3, 0.01, "float"),
+                ("base_min", "Baseline minimum", "", 0, 1000, 0, 1, "int"),
+            ],
+        )
+        self._add_hfo_detector_parameter_box(
+            hfo_advanced_layout,
+            "Hilbert parameters",
+            "hilbert",
+            [
+                ("sd_threshold", "SD threshold", "", 0.1, 100.0, 2, 0.5, "float"),
+                ("min_window_s", "Minimum window", " s", 0.001, 10.0, 4, 0.001, "float"),
+                ("epoch_len_s", "Epoch length", " s", 1.0, 100000.0, 1, 60.0, "float"),
+            ],
+        )
+        self._lock_hfo_legacy_parameter_controls()
 
         self.hfo_advanced_dialog: QDialog | None = None
         self.hfo_time_widget.hide()
@@ -633,6 +806,14 @@ class ComputationPanel(QWidget):
         self.btn_cancel_gamma.setEnabled(False)
         self.btn_cancel_gamma.hide()
         p_layout.addWidget(self.btn_cancel_gamma)
+
+        self.btn_cancel_hfo = QPushButton("Cancel HFO run")
+        self.btn_cancel_hfo.setEnabled(False)
+        self.btn_cancel_hfo.hide()
+        p_layout.addWidget(self.btn_cancel_hfo)
+
+        self.btn_import_results = QPushButton("Import results...")
+        p_layout.addWidget(self.btn_import_results)
 
         self.btn_open_ei_summary = QPushButton("Open REI summary")
         self.btn_open_ei_summary.setEnabled(False)
@@ -702,8 +883,15 @@ class ComputationPanel(QWidget):
         self.edit_hfo_high_freq.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
         self.edit_hfo_threshold_sigma.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
         self.edit_hfo_min_duration.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_max_duration.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.edit_hfo_boundary_padding.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
         self.edit_hfo_merge_gap.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
         self.edit_hfo_min_cycles.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        for spin in getattr(self, "_hfo_detector_param_spins", {}).values():
+            spin.valueChanged.connect(self._on_hfo_advanced_parameter_changed)
+        self.chk_hfo_ste.toggled.connect(self._on_hfo_advanced_parameter_changed)
+        self.chk_hfo_mni.toggled.connect(self._on_hfo_advanced_parameter_changed)
+        self.chk_hfo_hilbert.toggled.connect(self._on_hfo_advanced_parameter_changed)
         self.edit_ei_low_freq.valueChanged.connect(self._on_ei_frequency_changed)
         self.edit_ei_high_freq.valueChanged.connect(self._on_ei_frequency_changed)
         self.btn_default_windows.clicked.connect(self._apply_default_ei_windows_from_onset)
@@ -718,6 +906,8 @@ class ComputationPanel(QWidget):
             spin.valueChanged.connect(self._sync_ei_windows_from_ui)
         self.btn_run.clicked.connect(self._run_computation)
         self.btn_cancel_gamma.clicked.connect(self._cancel_gamma_run)
+        self.btn_cancel_hfo.clicked.connect(self._cancel_hfo_run)
+        self.btn_import_results.clicked.connect(self._import_algorithm_results)
         self.btn_open_ei_summary.clicked.connect(self._open_ei_summary_dialog)
         self.btn_open_ei_heatmap.clicked.connect(self._open_ei_heatmap_dialog)
         self.btn_export_ei.clicked.connect(self._export_ei_results)
@@ -734,9 +924,57 @@ class ComputationPanel(QWidget):
         self.gb_ch.toggled.connect(self._sync_section_visibility)
         self.gb_t.toggled.connect(self._sync_section_visibility)
 
+        self._load_saved_hfo_gui_defaults()
         self._on_algorithm_button_clicked(self.btn_algo_ei)
 
     # ---------- Public API used by MainWindow ----------
+
+    def _add_hfo_detector_parameter_box(
+        self,
+        parent_layout: QVBoxLayout,
+        title: str,
+        detector_key: str,
+        fields: list[tuple[str, str, str, float, float, int, float, str]],
+    ) -> None:
+        box = QGroupBox(title)
+        self._hfo_detector_param_boxes[str(detector_key)] = box
+        form = QFormLayout(box)
+        detector_params = self.hfo_params.get("detector_parameters", {})
+        if not isinstance(detector_params, dict):
+            detector_params = {}
+        values = detector_params.get(detector_key, {})
+        if not isinstance(values, dict):
+            values = {}
+        for key, label, suffix, minimum, maximum, decimals, step, kind in fields:
+            if kind == "int":
+                spin: QDoubleSpinBox | QSpinBox = QSpinBox()
+                spin.setRange(int(minimum), int(maximum))
+                spin.setSingleStep(max(1, int(step)))
+                try:
+                    spin.setValue(int(round(float(values.get(key, minimum)))))
+                except (TypeError, ValueError):
+                    spin.setValue(int(minimum))
+            else:
+                spin = QDoubleSpinBox()
+                spin.setRange(float(minimum), float(maximum))
+                spin.setDecimals(int(decimals))
+                spin.setSingleStep(float(step))
+                try:
+                    spin.setValue(float(values.get(key, minimum)))
+                except (TypeError, ValueError):
+                    spin.setValue(float(minimum))
+            if suffix:
+                spin.setSuffix(str(suffix))
+            spin.setMinimumWidth(130)
+            if key in {"epoch_len", "epoch_time_s", "epoch_len_s"}:
+                spin.setToolTip(
+                    "Detector cycle/chunk length. It may be longer than the selected analysis interval."
+                )
+            else:
+                spin.setToolTip("Detector-specific parameter. Defaults match the current validated setup.")
+            self._hfo_detector_param_spins[(str(detector_key), str(key))] = spin
+            form.addRow(label + ":", spin)
+        parent_layout.addWidget(box)
 
     def set_data_context(
         self,
@@ -1318,12 +1556,38 @@ class ComputationPanel(QWidget):
             self.combo_hfo_detector_version.currentData()
             or DEFAULT_HFO_DETECTOR_VERSION
         )
+        if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
+            self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
+            detector_version = DEFAULT_HFO_DETECTOR_VERSION
         self.hfo_params["detector_version"] = detector_version
+        target_preset = (
+            PYBRAIN_HFO_BAND_PRESET
+            if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN
+            else OMNI_LEGACY_HFO_BAND_PRESET
+        )
+        self.combo_hfo_band_preset.blockSignals(True)
+        self.combo_hfo_band_preset.setCurrentText(target_preset)
+        self.combo_hfo_band_preset.blockSignals(False)
+        band = HFO_BAND_PRESETS[target_preset]
+        self.hfo_params["band_preset"] = target_preset
+        self.hfo_params["low_freq"] = float(band[0])
+        self.hfo_params["high_freq"] = float(band[1])
+        self.edit_hfo_low_freq.blockSignals(True)
+        self.edit_hfo_high_freq.blockSignals(True)
+        self.edit_hfo_low_freq.setValue(float(band[0]))
+        self.edit_hfo_high_freq.setValue(float(band[1]))
+        self.edit_hfo_low_freq.blockSignals(False)
+        self.edit_hfo_high_freq.blockSignals(False)
         self._clear_hfo_outputs()
         self.settingsChanged.emit()
 
     def _on_hfo_band_preset_changed(self, _text: str) -> None:
         preset = str(self.combo_hfo_band_preset.currentData() or DEFAULT_HFO_BAND_PRESET)
+        if preset in DISABLED_HFO_BAND_PRESETS:
+            self.combo_hfo_band_preset.blockSignals(True)
+            self.combo_hfo_band_preset.setCurrentText(DEFAULT_HFO_BAND_PRESET)
+            self.combo_hfo_band_preset.blockSignals(False)
+            preset = DEFAULT_HFO_BAND_PRESET
         self.hfo_params["band_preset"] = preset
         band = HFO_BAND_PRESETS.get(preset)
         if band is not None:
@@ -1338,7 +1602,66 @@ class ComputationPanel(QWidget):
         self._sync_hfo_params_from_ui(emit=True, update_preset=False)
 
     def _on_hfo_advanced_parameter_changed(self, _value=None) -> None:
-        self._sync_hfo_params_from_ui(emit=True, update_preset=True)
+        self._ensure_one_hfo_candidate_detector_selected()
+        self._sync_hfo_detector_parameter_enabled()
+
+    def _collect_hfo_params_from_ui(self, *, update_preset: bool = True) -> dict:
+        params = deepcopy(self.hfo_params)
+        low_freq = float(self.edit_hfo_low_freq.value())
+        high_freq = float(self.edit_hfo_high_freq.value())
+        detector_version = str(
+            self.combo_hfo_detector_version.currentData()
+            or DEFAULT_HFO_DETECTOR_VERSION
+        )
+        if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
+            detector_version = DEFAULT_HFO_DETECTOR_VERSION
+        params["detector_version"] = detector_version
+        params["low_freq"] = low_freq
+        params["high_freq"] = high_freq
+        params["threshold_sigma"] = float(self.edit_hfo_threshold_sigma.value())
+        params["min_duration_ms"] = float(self.edit_hfo_min_duration.value())
+        params["max_duration_ms"] = float(self.edit_hfo_max_duration.value())
+        params["boundary_padding_s"] = float(self.edit_hfo_boundary_padding.value())
+        params["merge_gap_ms"] = float(self.edit_hfo_merge_gap.value())
+        params["min_cycles"] = float(self.edit_hfo_min_cycles.value())
+        detector_parameters: dict[str, dict[str, float | int]] = {}
+        for (detector_key, param_key), spin in getattr(self, "_hfo_detector_param_spins", {}).items():
+            detector_parameters.setdefault(str(detector_key), {})[str(param_key)] = (
+                int(spin.value()) if isinstance(spin, QSpinBox) else float(spin.value())
+            )
+        params["detector_parameters"] = detector_parameters
+        active_candidate_detectors: list[str] = []
+        self._ensure_one_hfo_candidate_detector_selected()
+        if self.chk_hfo_ste.isChecked():
+            active_candidate_detectors.append("ste")
+        if self.chk_hfo_mni.isChecked():
+            active_candidate_detectors.append("mni")
+        if self.chk_hfo_hilbert.isChecked():
+            active_candidate_detectors.append("hilbert")
+        params["active_candidate_detectors"] = active_candidate_detectors
+        if update_preset:
+            matched_preset = CUSTOM_HFO_BAND_PRESET
+            for preset_name, (preset_low, preset_high) in HFO_BAND_PRESETS.items():
+                if abs(low_freq - preset_low) < 1e-9 and abs(high_freq - preset_high) < 1e-9:
+                    matched_preset = preset_name
+                    break
+            params["band_preset"] = matched_preset
+        return params
+
+    def _sync_hfo_detector_parameter_enabled(self) -> None:
+        detector_enabled = {
+            "ste": self.chk_hfo_ste.isChecked(),
+            "mni": self.chk_hfo_mni.isChecked(),
+            "hilbert": self.chk_hfo_hilbert.isChecked(),
+        }
+        for detector_key, box in getattr(self, "_hfo_detector_param_boxes", {}).items():
+            enabled = bool(detector_enabled.get(str(detector_key), True))
+            box.setEnabled(enabled)
+            box.setToolTip(
+                ""
+                if enabled
+                else "This detector is disabled; its parameters are kept but not used."
+            )
 
     def _sync_hfo_params_from_ui(
         self,
@@ -1346,26 +1669,17 @@ class ComputationPanel(QWidget):
         emit: bool = True,
         update_preset: bool = True,
     ) -> None:
-        low_freq = float(self.edit_hfo_low_freq.value())
-        high_freq = float(self.edit_hfo_high_freq.value())
-        detector_version = str(
-            self.combo_hfo_detector_version.currentData()
-            or DEFAULT_HFO_DETECTOR_VERSION
-        )
-        self.hfo_params["detector_version"] = detector_version
-        self.hfo_params["low_freq"] = low_freq
-        self.hfo_params["high_freq"] = high_freq
-        self.hfo_params["threshold_sigma"] = float(self.edit_hfo_threshold_sigma.value())
-        self.hfo_params["min_duration_ms"] = float(self.edit_hfo_min_duration.value())
-        self.hfo_params["merge_gap_ms"] = float(self.edit_hfo_merge_gap.value())
-        self.hfo_params["min_cycles"] = float(self.edit_hfo_min_cycles.value())
+        params = self._collect_hfo_params_from_ui(update_preset=update_preset)
+        low_freq = float(params["low_freq"])
+        detector_version = str(params["detector_version"])
+        if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
+            self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
+            detector_version = DEFAULT_HFO_DETECTOR_VERSION
+            params["detector_version"] = detector_version
+        self.hfo_params = params
+        self._sync_hfo_detector_parameter_enabled()
         if update_preset:
-            matched_preset = CUSTOM_HFO_BAND_PRESET
-            for preset_name, (preset_low, preset_high) in HFO_BAND_PRESETS.items():
-                if abs(low_freq - preset_low) < 1e-9 and abs(high_freq - preset_high) < 1e-9:
-                    matched_preset = preset_name
-                    break
-            self.hfo_params["band_preset"] = matched_preset
+            matched_preset = str(params.get("band_preset", CUSTOM_HFO_BAND_PRESET))
             if self.combo_hfo_band_preset.currentText() != matched_preset:
                 self.combo_hfo_band_preset.blockSignals(True)
                 self.combo_hfo_band_preset.setCurrentText(matched_preset)
@@ -1374,13 +1688,21 @@ class ComputationPanel(QWidget):
             self._clear_hfo_outputs()
             self.settingsChanged.emit()
 
-    def _restore_hfo_params(self, saved_params: dict) -> None:
+    def _restore_hfo_params(self, saved_params: dict, *, apply_to_params: bool = True) -> None:
         detector_version = str(
             saved_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
         )
+        if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
+            detector_version = DEFAULT_HFO_DETECTOR_VERSION
         if detector_version not in HFO_DETECTOR_VERSIONS:
             detector_version = DEFAULT_HFO_DETECTOR_VERSION
         preset = str(saved_params.get("band_preset", DEFAULT_HFO_BAND_PRESET))
+        if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN:
+            preset = PYBRAIN_HFO_BAND_PRESET
+        elif detector_version == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY:
+            preset = OMNI_LEGACY_HFO_BAND_PRESET
+        if preset in DISABLED_HFO_BAND_PRESETS:
+            preset = DEFAULT_HFO_BAND_PRESET
         if preset not in HFO_BAND_PRESETS and preset != CUSTOM_HFO_BAND_PRESET:
             preset = DEFAULT_HFO_BAND_PRESET
         default_low, default_high = HFO_BAND_PRESETS.get(
@@ -1392,14 +1714,22 @@ class ComputationPanel(QWidget):
             "high_freq": saved_params.get("high_freq", default_high),
             "threshold_sigma": saved_params.get("threshold_sigma", self.hfo_params["threshold_sigma"]),
             "min_duration_ms": saved_params.get("min_duration_ms", self.hfo_params["min_duration_ms"]),
+            "max_duration_ms": saved_params.get("max_duration_ms", self.hfo_params.get("max_duration_ms", 500.0)),
+            "boundary_padding_s": saved_params.get("boundary_padding_s", self.hfo_params.get("boundary_padding_s", 1.0)),
             "merge_gap_ms": saved_params.get("merge_gap_ms", self.hfo_params["merge_gap_ms"]),
             "min_cycles": saved_params.get("min_cycles", self.hfo_params["min_cycles"]),
         }
+        if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN:
+            values["low_freq"], values["high_freq"] = HFO_BAND_PRESETS[PYBRAIN_HFO_BAND_PRESET]
+        elif detector_version == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY:
+            values["low_freq"], values["high_freq"] = HFO_BAND_PRESETS[OMNI_LEGACY_HFO_BAND_PRESET]
         spin_by_key = {
             "low_freq": self.edit_hfo_low_freq,
             "high_freq": self.edit_hfo_high_freq,
             "threshold_sigma": self.edit_hfo_threshold_sigma,
             "min_duration_ms": self.edit_hfo_min_duration,
+            "max_duration_ms": self.edit_hfo_max_duration,
+            "boundary_padding_s": self.edit_hfo_boundary_padding,
             "merge_gap_ms": self.edit_hfo_merge_gap,
             "min_cycles": self.edit_hfo_min_cycles,
         }
@@ -1411,15 +1741,91 @@ class ComputationPanel(QWidget):
             spin.blockSignals(True)
             spin.setValue(value)
             spin.blockSignals(False)
+        saved_detector_params = saved_params.get("detector_parameters")
+        if not isinstance(saved_detector_params, dict):
+            saved_detector_params = self.hfo_params.get("detector_parameters", {})
+        for (detector_key, param_key), spin in getattr(self, "_hfo_detector_param_spins", {}).items():
+            detector_values = saved_detector_params.get(detector_key, {})
+            if not isinstance(detector_values, dict) or param_key not in detector_values:
+                detector_values = self.hfo_params.get("detector_parameters", {}).get(detector_key, {})
+            try:
+                value = float(detector_values[param_key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            spin.blockSignals(True)
+            spin.setValue(int(round(value)) if isinstance(spin, QSpinBox) else value)
+            spin.blockSignals(False)
         self.combo_hfo_detector_version.blockSignals(True)
         self.combo_hfo_detector_version.setCurrentText(detector_version)
         self.combo_hfo_detector_version.blockSignals(False)
         self.combo_hfo_band_preset.blockSignals(True)
         self.combo_hfo_band_preset.setCurrentText(preset)
         self.combo_hfo_band_preset.blockSignals(False)
-        self.hfo_params["detector_version"] = detector_version
-        self.hfo_params["band_preset"] = preset
-        self._sync_hfo_params_from_ui(emit=False, update_preset=True)
+        active_candidate_detectors = saved_params.get(
+            "active_candidate_detectors",
+            DEFAULT_CANDIDATE_DETECTORS,
+        )
+        if not isinstance(active_candidate_detectors, (list, tuple, set)):
+            active_candidate_detectors = DEFAULT_CANDIDATE_DETECTORS
+        active_set = {str(item).lower() for item in active_candidate_detectors}
+        if not active_set:
+            active_set = {str(item).lower() for item in DEFAULT_CANDIDATE_DETECTORS}
+        for checkbox, detector_key in (
+            (self.chk_hfo_ste, "ste"),
+            (self.chk_hfo_mni, "mni"),
+            (self.chk_hfo_hilbert, "hilbert"),
+        ):
+            checkbox.blockSignals(True)
+            checkbox.setChecked(detector_key in active_set)
+            checkbox.blockSignals(False)
+        if apply_to_params:
+            self.hfo_params["detector_version"] = detector_version
+            self.hfo_params["band_preset"] = preset
+            self._sync_hfo_params_from_ui(emit=False, update_preset=True)
+        else:
+            self._sync_hfo_detector_parameter_enabled()
+
+    def _load_saved_hfo_gui_defaults(self) -> None:
+        settings = QSettings(HFO_GUI_SETTINGS_ORG, HFO_GUI_SETTINGS_APP)
+        raw_value = settings.value(HFO_GUI_SETTINGS_KEY, "")
+        if not raw_value:
+            self._sync_hfo_detector_parameter_enabled()
+            return
+        try:
+            saved_params = json.loads(str(raw_value))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            self._sync_hfo_detector_parameter_enabled()
+            return
+        if isinstance(saved_params, dict):
+            self._restore_hfo_params(saved_params)
+        else:
+            self._sync_hfo_detector_parameter_enabled()
+
+    def _save_hfo_gui_defaults(self) -> None:
+        draft_params = self._collect_hfo_params_from_ui(update_preset=True)
+        ok, message = self._validate_hfo_parameter_values(params=draft_params)
+        if not ok:
+            QMessageBox.warning(self, "HFO advanced parameters", message)
+            return
+        self.hfo_params = draft_params
+        settings = QSettings(HFO_GUI_SETTINGS_ORG, HFO_GUI_SETTINGS_APP)
+        settings.setValue(HFO_GUI_SETTINGS_KEY, json.dumps(self.hfo_params, sort_keys=True))
+        settings.sync()
+        self._clear_hfo_outputs()
+        self.settingsChanged.emit()
+        self._show_status_message("HFO advanced parameters saved.", timeout_ms=8000)
+
+    def _restore_hfo_advanced_draft_from_active(self) -> None:
+        self._restore_hfo_params(deepcopy(self.hfo_params), apply_to_params=False)
+
+    def _reset_hfo_advanced_draft_to_defaults(self) -> None:
+        self._restore_hfo_params(deepcopy(self._built_in_hfo_params), apply_to_params=False)
+        self._show_status_message("HFO advanced parameters reset to defaults. Click Save to apply.", timeout_ms=8000)
+
+    def _close_hfo_advanced_dialog(self) -> None:
+        self._restore_hfo_advanced_draft_from_active()
+        if self.hfo_advanced_dialog is not None:
+            self.hfo_advanced_dialog.hide()
 
     def _choose_export_dir(self, title: str) -> Path | None:
         start_dir = (
@@ -1436,6 +1842,141 @@ class ComputationPanel(QWidget):
         if not selected:
             return None
         return Path(selected)
+
+    def _choose_import_dir(self, title: str) -> Path | None:
+        start_dir = (
+            str(self._last_export_dir)
+            if self._last_export_dir is not None
+            else str(Path.home())
+        )
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            title,
+            start_dir,
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return None
+        return Path(selected)
+
+    def _import_algorithm_results(self) -> None:
+        input_dir = self._choose_import_dir("Select exported result folder")
+        if input_dir is None:
+            return
+        try:
+            imported = import_computation_result(input_dir)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Import results",
+                f"Could not import this result folder:\n{exc}",
+            )
+            return
+
+        missing_channels = self._missing_import_channels(imported)
+        if missing_channels:
+            preview = "\n".join(f"- {name}" for name in missing_channels[:20])
+            suffix = "\n..." if len(missing_channels) > 20 else ""
+            QMessageBox.warning(
+                self,
+                "Import results",
+                "The imported result contains channels that are not present in "
+                "the current recording/montage:\n"
+                f"{preview}{suffix}\n\nLoad the matching recording or montage before importing.",
+            )
+            return
+
+        source_mismatch = self._import_source_file_mismatch(imported)
+        if source_mismatch is not None:
+            QMessageBox.warning(
+                self,
+                "Import results",
+                source_mismatch,
+            )
+            return
+
+        self._last_export_dir = input_dir
+        if imported.algorithm == "hfo" and isinstance(imported.result, HFOComputationResult):
+            self.btn_algo_hfo.setChecked(True)
+            self._on_algorithm_button_clicked(self.btn_algo_hfo)
+            self._show_hfo_result(imported.result)
+            return
+        if imported.algorithm == "gamma_spike" and isinstance(imported.result, GammaSpikeComputationResult):
+            self.btn_algo_gamma.setChecked(True)
+            self._on_algorithm_button_clicked(self.btn_algo_gamma)
+            self._show_gamma_result(imported.result)
+            total_spikes = sum(int(channel.spike_count) for channel in imported.result.channels)
+            gamma_spikes = self._gamma_positive_count(imported.result)
+            self._show_status_message(
+                "Gamma results imported. "
+                f"Total spikes: {total_spikes}. "
+                f"Gamma-positive spikes: {gamma_spikes}.",
+                timeout_ms=20000,
+            )
+            return
+        if imported.algorithm == "ei" and isinstance(imported.result, EIComputationResult):
+            self.btn_algo_ei.setChecked(True)
+            self._on_algorithm_button_clicked(self.btn_algo_ei)
+            self._show_ei_result(imported.result)
+            self._show_status_message(
+                f"REI results imported. Channels: {len(imported.result.channels)}.",
+                timeout_ms=20000,
+            )
+            return
+
+        QMessageBox.critical(
+            self,
+            "Import results",
+            "Imported result type did not match the detected algorithm.",
+        )
+
+    def _missing_import_channels(self, imported: ImportedComputationResult) -> list[str]:
+        displayed = {str(name) for name in self._ch_names_displayed}
+        if not displayed:
+            return []
+        imported_channels: set[str] = set()
+        result = imported.result
+        if isinstance(result, HFOComputationResult):
+            imported_channels.update(str(channel.channel) for channel in result.channels)
+            imported_channels.update(str(event.channel) for event in result.events)
+        elif isinstance(result, GammaSpikeComputationResult):
+            imported_channels.update(str(channel.channel) for channel in result.channels)
+        elif isinstance(result, EIComputationResult):
+            imported_channels.update(str(channel.channel) for channel in result.channels)
+            imported_channels.update(str(channel) for channel in result.heatmap_channels)
+        return sorted(channel for channel in imported_channels if channel and channel not in displayed)
+
+    def _import_source_file_mismatch(self, imported: ImportedComputationResult) -> str | None:
+        if self._source_file_path is None:
+            return None
+        result_metadata = getattr(imported.result, "metadata", None)
+        metadata = result_metadata if isinstance(result_metadata, dict) else {}
+        imported_path_text = str(metadata.get("source_file_path") or "").strip()
+        imported_name = str(metadata.get("source_file_name") or "").strip()
+        current_path = Path(self._source_file_path)
+        current_name = current_path.name
+
+        if imported_path_text:
+            imported_path = Path(imported_path_text)
+            try:
+                same_path = imported_path.resolve(strict=False) == current_path.resolve(strict=False)
+            except OSError:
+                same_path = str(imported_path).casefold() == str(current_path).casefold()
+            if not same_path and imported_path.name.casefold() != current_name.casefold():
+                return (
+                    "The imported results were produced from a different recording file.\n\n"
+                    f"Current file: {current_name}\n"
+                    f"Imported file: {imported_path.name or imported_path_text}"
+                )
+            return None
+
+        if imported_name and imported_name.casefold() != current_name.casefold():
+            return (
+                "The imported results were produced from a different recording file.\n\n"
+                f"Current file: {current_name}\n"
+                f"Imported file: {imported_name}"
+            )
+        return None
 
     def _confirm_export_overwrite(
         self,
@@ -1519,6 +2060,7 @@ class ComputationPanel(QWidget):
         self.btn_open_hfo_event_grid.setVisible(is_hfo)
         self.btn_export_hfo.setVisible(is_hfo)
         self.btn_cancel_gamma.setVisible(is_gamma and self._gamma_thread is not None)
+        self.btn_cancel_hfo.setVisible(is_hfo and self._hfo_thread is not None)
         self.btn_open_ei_summary.setEnabled(self._last_ei_result is not None)
         self.btn_open_ei_heatmap.setEnabled(
             self._last_ei_result is not None and bool(self._last_ei_result.heatmap.size)
@@ -1527,9 +2069,9 @@ class ComputationPanel(QWidget):
         self.btn_open_gamma_summary.setEnabled(self._last_gamma_result is not None)
         self.btn_open_gamma_review.setEnabled(self._last_gamma_result is not None)
         self.btn_export_gamma.setEnabled(self._last_gamma_result is not None)
-        self.btn_open_hfo_summary.setEnabled(False)
-        self.btn_open_hfo_event_grid.setEnabled(False)
-        self.btn_export_hfo.setEnabled(False)
+        self.btn_open_hfo_summary.setEnabled(self._last_hfo_result is not None)
+        self.btn_open_hfo_event_grid.setEnabled(self._last_hfo_result is not None)
+        self.btn_export_hfo.setEnabled(self._last_hfo_result is not None)
 
         if is_ei:
             self.btn_run.setText("Run REI")
@@ -1585,18 +2127,85 @@ class ComputationPanel(QWidget):
             self.hfo_advanced_dialog = QDialog(self)
             self.hfo_advanced_dialog.setWindowTitle("HFO advanced parameters")
             self.hfo_advanced_dialog.setModal(False)
-            self.hfo_advanced_dialog.resize(460, 520)
+            self.hfo_advanced_dialog.resize(720, 760)
+            self.hfo_advanced_dialog.setMinimumSize(560, 520)
 
             layout = QVBoxLayout(self.hfo_advanced_dialog)
-            layout.addWidget(self.hfo_advanced_frame)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setWidget(self.hfo_advanced_frame)
+            layout.addWidget(scroll, 1)
 
             buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-            buttons.rejected.connect(self.hfo_advanced_dialog.hide)
+            reset_button = buttons.addButton(
+                "Back to default",
+                QDialogButtonBox.ButtonRole.ResetRole,
+            )
+            save_button = buttons.addButton(
+                "Save",
+                QDialogButtonBox.ButtonRole.ActionRole,
+            )
+            reset_button.clicked.connect(self._reset_hfo_advanced_draft_to_defaults)
+            save_button.clicked.connect(self._save_hfo_gui_defaults)
+            buttons.rejected.connect(self._close_hfo_advanced_dialog)
             layout.addWidget(buttons)
 
+        self._restore_hfo_advanced_draft_from_active()
         self.hfo_advanced_dialog.show()
         self.hfo_advanced_dialog.raise_()
         self.hfo_advanced_dialog.activateWindow()
+
+    def _disable_unvalidated_hfo_band_presets(self) -> None:
+        model = self.combo_hfo_band_preset.model()
+        for idx in range(self.combo_hfo_band_preset.count()):
+            label = str(self.combo_hfo_band_preset.itemText(idx))
+            if label not in DISABLED_HFO_BAND_PRESETS:
+                continue
+            item = getattr(model, "item", lambda _idx: None)(idx)
+            if item is not None:
+                item.setEnabled(False)
+                item.setToolTip("Not validated yet for the legacy pyHFO integration.")
+
+    def _disable_unvalidated_hfo_classifier_options(self) -> None:
+        model = self.combo_hfo_detector_version.model()
+        for idx in range(self.combo_hfo_detector_version.count()):
+            label = str(self.combo_hfo_detector_version.itemText(idx))
+            if label not in DISABLED_HFO_CLASSIFIER_OPTIONS:
+                continue
+            item = getattr(model, "item", lambda _idx: None)(idx)
+            if item is not None:
+                item.setEnabled(False)
+                item.setToolTip("eHFO checkpoints are not configured yet.")
+
+    def _lock_hfo_legacy_parameter_controls(self) -> None:
+        fixed_controls = (
+            self.edit_hfo_low_freq,
+            self.edit_hfo_high_freq,
+        )
+        for control in fixed_controls:
+            control.setEnabled(False)
+            control.setToolTip("Fixed by the validated 80-300 Hz legacy pyHFO integration.")
+        for control in (
+            self.edit_hfo_threshold_sigma,
+            self.edit_hfo_min_duration,
+            self.edit_hfo_max_duration,
+            self.edit_hfo_boundary_padding,
+            self.edit_hfo_merge_gap,
+            self.edit_hfo_min_cycles,
+        ):
+            control.setEnabled(True)
+            control.setToolTip("Editable detector parameter. Defaults match the validated legacy pyHFO setup.")
+
+    def _ensure_one_hfo_candidate_detector_selected(self) -> None:
+        checkboxes = (self.chk_hfo_ste, self.chk_hfo_mni, self.chk_hfo_hilbert)
+        if any(checkbox.isChecked() for checkbox in checkboxes):
+            return
+        sender = self.sender()
+        fallback = sender if sender in checkboxes else self.chk_hfo_ste
+        fallback.blockSignals(True)
+        fallback.setChecked(True)
+        fallback.blockSignals(False)
 
     def _sync_section_visibility(self, _checked: bool = True) -> None:
         channel_visible = self.gb_ch.isChecked()
@@ -1721,6 +2330,151 @@ class ComputationPanel(QWidget):
             return 1.0
         return fs if np.isfinite(fs) and fs > 0.0 else 1.0
 
+    def _validate_hfo_parameter_values(
+        self,
+        *,
+        params: dict | None = None,
+        analysis_duration_s: float | None = None,
+    ) -> tuple[bool, str]:
+        params = params if isinstance(params, dict) else self.hfo_params
+        low_freq = float(params["low_freq"])
+        high_freq = float(params["high_freq"])
+        if low_freq <= 0.0 or high_freq <= low_freq:
+            return False, "HFO frequency range must have positive low < high values."
+        detection_nyquist = 0.5 * OMNI_TARGET_FS_HZ
+        if high_freq >= detection_nyquist:
+            return False, (
+                "HFO high frequency must stay below the 1000 Hz detection Nyquist "
+                f"({detection_nyquist:g} Hz)."
+            )
+        if low_freq >= high_freq:
+            return False, "HFO low frequency must be lower than high frequency."
+        if float(params["threshold_sigma"]) <= 0.0:
+            return False, "HFO threshold sigma must be positive."
+        if float(params["min_duration_ms"]) < 1.0:
+            return False, "HFO minimum duration must be at least 1 ms at 1000 Hz processing."
+        if float(params["max_duration_ms"]) < 1.0:
+            return False, "HFO maximum duration must be at least 1 ms at 1000 Hz processing."
+        if float(params["max_duration_ms"]) <= float(params["min_duration_ms"]):
+            return False, "HFO maximum duration must be longer than minimum duration."
+        if float(params["boundary_padding_s"]) < 0.0:
+            return False, "HFO boundary padding cannot be negative."
+        if float(params["merge_gap_ms"]) < 0.0:
+            return False, "HFO merge gap cannot be negative."
+        if float(params["min_cycles"]) < 1.0:
+            return False, "HFO minimum cycles must be at least 1."
+
+        active = {str(name).lower() for name in params.get("active_candidate_detectors", [])}
+        if not active:
+            return False, "Select at least one HFO candidate detector."
+        detector_params = params.get("detector_parameters", {})
+        if not isinstance(detector_params, dict):
+            return False, "HFO detector parameters are malformed."
+
+        def _section(detector_key: str) -> dict:
+            values = detector_params.get(detector_key, {})
+            return values if isinstance(values, dict) else {}
+
+        def _positive(value: Any, label: str) -> tuple[bool, str]:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return False, f"{label} must be numeric."
+            if not np.isfinite(numeric) or numeric <= 0.0:
+                return False, f"{label} must be positive."
+            return True, ""
+
+        def _non_negative(value: Any, label: str) -> tuple[bool, str]:
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                return False, f"{label} must be numeric."
+            if not np.isfinite(numeric) or numeric < 0.0:
+                return False, f"{label} cannot be negative."
+            return True, ""
+
+        checks: list[tuple[Any, str, str]] = []
+        if "ste" in active:
+            ste_params = _section("ste")
+            checks.extend(
+                [
+                    (ste_params.get("rms_window_s"), "positive", "STE RMS window"),
+                    (ste_params.get("min_window_s"), "positive", "STE minimum window"),
+                    (ste_params.get("min_gap_s"), "non_negative", "STE minimum gap"),
+                    (ste_params.get("epoch_len"), "positive", "STE epoch length"),
+                    (ste_params.get("min_osc"), "positive", "STE minimum oscillations"),
+                    (ste_params.get("rms_thres"), "positive", "STE RMS threshold"),
+                    (ste_params.get("peak_thres"), "positive", "STE peak threshold"),
+                ]
+            )
+        if "mni" in active:
+            mni_params = _section("mni")
+            checks.extend(
+                [
+                    (mni_params.get("epoch_time_s"), "positive", "MNI epoch time"),
+                    (mni_params.get("epo_chf_hz"), "positive", "MNI epoch CHF"),
+                    (mni_params.get("min_win_s"), "positive", "MNI minimum window"),
+                    (mni_params.get("min_gap_s"), "non_negative", "MNI minimum gap"),
+                    (mni_params.get("base_seg_s"), "positive", "MNI baseline segment"),
+                    (mni_params.get("base_shift_s"), "non_negative", "MNI baseline shift"),
+                    (mni_params.get("base_threshold"), "non_negative", "MNI baseline threshold"),
+                    (mni_params.get("base_min"), "non_negative", "MNI baseline minimum"),
+                ]
+            )
+            per_chf = float(mni_params.get("per_chf", 0.0))
+            if not np.isfinite(per_chf) or per_chf <= 0.0 or per_chf > 1.0:
+                return False, "MNI percent CHF must be > 0 and <= 1."
+            threshold_percentile = float(mni_params.get("threshold_percentile", 0.0))
+            if (
+                not np.isfinite(threshold_percentile)
+                or threshold_percentile <= 0.0
+                or threshold_percentile >= 1.0
+            ):
+                return False, "MNI threshold percentile must be > 0 and < 1."
+        if "hilbert" in active:
+            hilbert_params = _section("hilbert")
+            checks.extend(
+                [
+                    (hilbert_params.get("sd_threshold"), "positive", "Hilbert SD threshold"),
+                    (hilbert_params.get("min_window_s"), "positive", "Hilbert minimum window"),
+                    (hilbert_params.get("epoch_len_s"), "positive", "Hilbert epoch length"),
+                ]
+            )
+
+        for value, kind, label in checks:
+            ok, message = _positive(value, label) if kind == "positive" else _non_negative(value, label)
+            if not ok:
+                return False, message
+
+        if analysis_duration_s is not None:
+            try:
+                duration_s = float(analysis_duration_s)
+            except (TypeError, ValueError):
+                duration_s = 0.0
+            if not np.isfinite(duration_s) or duration_s <= 0.0:
+                return False, "HFO analysis duration must be positive."
+            minimum_event_s = float(params["min_duration_ms"]) / 1000.0
+            maximum_event_s = float(params["max_duration_ms"]) / 1000.0
+            boundary_padding_s = float(params["boundary_padding_s"])
+            if minimum_event_s >= duration_s:
+                return False, "HFO minimum duration must be shorter than the analysis interval."
+            if maximum_event_s >= duration_s:
+                return False, "HFO maximum duration must be shorter than the analysis interval."
+            if 2.0 * boundary_padding_s >= duration_s:
+                return False, "HFO boundary padding must leave some analyzable signal in the selected interval."
+            for detector_key, param_key, label in (
+                ("ste", "min_window_s", "STE minimum window"),
+                ("mni", "min_win_s", "MNI minimum window"),
+                ("hilbert", "min_window_s", "Hilbert minimum window"),
+            ):
+                if detector_key not in active:
+                    continue
+                value = float(_section(detector_key).get(param_key, 0.0))
+                if value >= duration_s:
+                    return False, f"{label} must be shorter than the analysis interval."
+
+        return True, ""
+
     def _validate_ei_inputs(self) -> tuple[bool, str]:
         if self._raw is None or self._picks is None:
             return False, "Load a dataset before running REI."
@@ -1785,15 +2539,28 @@ class ComputationPanel(QWidget):
         except ValueError as exc:
             return False, str(exc)
 
-        self._sync_hfo_params_from_ui(emit=False, update_preset=True)
-        low_freq = float(self.hfo_params["low_freq"])
-        high_freq = float(self.hfo_params["high_freq"])
-        if low_freq <= 0.0 or high_freq <= low_freq:
-            return False, "HFO frequency range must have positive low < high values."
-        nyquist = 0.5 * self._sampling_frequency_hz()
-        if high_freq >= nyquist:
+        start_s, end_s = self.state.hfo_start_s, self.state.hfo_end_s
+        ok, message = self._validate_hfo_parameter_values(
+            analysis_duration_s=(
+                float(end_s) - float(start_s)
+                if start_s is not None and end_s is not None
+                else None
+            ),
+        )
+        if not ok:
+            return False, message
+        fs = self._sampling_frequency_hz()
+        if fs < OMNI_TARGET_FS_HZ:
             return False, (
-                f"HFO high frequency must be below Nyquist ({nyquist:g} Hz)."
+                "HFO detection requires recordings sampled at 1000 Hz or higher. "
+                f"The loaded recording is {fs:g} Hz."
+            )
+        detection_nyquist = 0.5 * OMNI_TARGET_FS_HZ
+        low_freq = float(self.hfo_params["low_freq"])
+        if low_freq >= detection_nyquist:
+            return False, (
+                "HFO low frequency must be below the 1000 Hz detection Nyquist "
+                f"({detection_nyquist:g} Hz)."
             )
         return True, ""
 
@@ -1841,6 +2608,20 @@ class ComputationPanel(QWidget):
                             f"channels={len(channel_results)}; "
                             f"baseline={baseline_window}; ictal={ictal_window}"
                         ),
+                    )
+                    elapsed_s = max(0.0, time.perf_counter() - perf_start)
+                    top_channel = self._top_rei_channel(result)
+                    top_text = (
+                        f" Top channel: {top_channel.channel} "
+                        f"(REI {float(top_channel.ei):.3f})."
+                        if top_channel is not None
+                        else ""
+                    )
+                    self._show_status_message(
+                        "REI analysis finished. "
+                        f"Channels: {len(channel_results)}.{top_text} "
+                        f"Runtime: {self._format_duration(elapsed_s)}.",
+                        timeout_ms=0,
                     )
             if error_message is not None:
                 QMessageBox.warning(self, "REI computation", error_message)
@@ -1906,11 +2687,36 @@ class ComputationPanel(QWidget):
             return
 
         if self.state.algorithm == "hfo":
+            if self._hfo_thread is not None:
+                QMessageBox.information(
+                    self,
+                    "HFO detector",
+                    "An HFO detection run is already in progress.",
+                )
+                return
             ok, message = self._validate_hfo_inputs()
             if not ok:
                 QMessageBox.warning(self, "HFO detector", message)
                 return
-            self._show_hfo_not_connected_message()
+            try:
+                start_s, stop_s = self._read_hfo_window_from_ui()
+            except ValueError as exc:
+                QMessageBox.warning(self, "HFO detector", str(exc))
+                return
+            perf_start = time.perf_counter()
+            try:
+                compute_callback = self._build_hfo_compute_callback(start_s, stop_s)
+            except Exception as exc:
+                timed_mark(
+                    "after_hfo_detector",
+                    perf_start,
+                    raw=self._raw,
+                    visible_window_s=max(0.0, stop_s - start_s),
+                    notes=f"setup error: {exc}",
+                )
+                QMessageBox.warning(self, "HFO detector", str(exc))
+                return
+            self._start_hfo_worker(compute_callback, start_s, stop_s, perf_start)
             return
 
         QMessageBox.warning(
@@ -1975,6 +2781,102 @@ class ComputationPanel(QWidget):
             result.metadata["source_file_name"] = self._source_file_path.name
             result.metadata["source_file_path"] = str(self._source_file_path)
         return result
+
+    def _compute_hfo_result(self) -> HFOComputationResult:
+        start_s, stop_s = self._read_hfo_window_from_ui()
+        return self._build_hfo_compute_callback(start_s, stop_s)(lambda: None)
+
+    def _build_hfo_compute_callback(
+        self,
+        start_s: float,
+        stop_s: float,
+    ) -> Callable[[Callable[[], None]], HFOComputationResult]:
+        if self._ei_data_callback is None and self._ei_data_snapshot_callback is None:
+            raise RuntimeError("HFO data extraction is not available.")
+
+        selected_abs = list(self.state.selected_abs)
+        selected_names = [
+            str(self._ch_names_displayed[int(idx)])
+            for idx in selected_abs
+            if 0 <= int(idx) < len(self._ch_names_displayed)
+        ]
+        notch_modes_by_selected_channel = self._ei_notch_modes_for_channels(selected_names)
+        bad_channels = {
+            str(name)
+            for name in self._bad_channel_names()
+        }
+        hfo_params = dict(self.hfo_params)
+        metadata = self._build_hfo_metadata(
+            analysis_window_s=(float(start_s), float(stop_s)),
+            notch_modes_by_channel=notch_modes_by_selected_channel,
+        )
+        source_file_path = self._source_file_path
+
+        if self._ei_data_snapshot_callback is not None:
+            data_callback = self._ei_data_snapshot_callback()
+        elif self._ei_data_callback is not None:
+            data_callback = self._ei_data_callback
+        else:
+            raise RuntimeError("HFO data extraction is not available.")
+
+        def compute(raise_if_cancelled: Callable[[], None]) -> HFOComputationResult:
+            raise_if_cancelled()
+            data, fs, channel_names = data_callback(
+                selected_abs,
+                float(start_s),
+                float(stop_s),
+            )
+            raise_if_cancelled()
+            channel_names = list(channel_names)
+            channel_name_set = set(map(str, channel_names))
+            bad_channels_for_data = {
+                str(name)
+                for name in bad_channels
+                if str(name) in channel_name_set
+            }
+            notch_modes_by_channel = {
+                str(name): str(notch_modes_by_selected_channel.get(str(name), NOTCH_OFF))
+                for name in channel_names
+            }
+            result = compute_hfo_for_gui(
+                data=np.asarray(data, dtype=float),
+                fs=float(fs),
+                channel_names=channel_names,
+                data_start_s=float(start_s),
+                analysis_window_s=(float(start_s), float(stop_s)),
+                detector_version=str(
+                    hfo_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+                ),
+                active_candidate_detectors=list(
+                    hfo_params.get(
+                        "active_candidate_detectors",
+                        DEFAULT_CANDIDATE_DETECTORS,
+                    )
+                ),
+                band_label=str(hfo_params.get("band_preset", DEFAULT_HFO_BAND_PRESET)),
+                low_freq_hz=float(hfo_params["low_freq"]),
+                high_freq_hz=float(hfo_params["high_freq"]),
+                threshold_sigma=float(hfo_params["threshold_sigma"]),
+                min_duration_ms=float(hfo_params["min_duration_ms"]),
+                max_duration_ms=float(hfo_params["max_duration_ms"]),
+                boundary_padding_s=float(hfo_params["boundary_padding_s"]),
+                merge_gap_ms=float(hfo_params["merge_gap_ms"]),
+                min_cycles=float(hfo_params["min_cycles"]),
+                detector_parameters=dict(hfo_params.get("detector_parameters", {})),
+                notch_modes_by_channel=notch_modes_by_channel,
+                bad_channels=bad_channels_for_data,
+                reference_mode="none",
+                checkpoint_paths={},
+                device="cpu",
+                metadata=dict(metadata),
+            )
+            raise_if_cancelled()
+            if source_file_path is not None:
+                result.metadata["source_file_name"] = source_file_path.name
+                result.metadata["source_file_path"] = str(source_file_path)
+            return result
+
+        return compute
 
     def _ei_notch_modes_for_channels(self, channel_names: list[str]) -> dict[str, str]:
         if self._ei_filter_callback is None:
@@ -2176,6 +3078,201 @@ class ComputationPanel(QWidget):
         self.btn_cancel_gamma.setEnabled(False)
         self._show_status_message("Cancelling gamma spike detection...")
 
+    def _start_hfo_worker(
+        self,
+        compute_callback: Callable[[Callable[[], None]], HFOComputationResult],
+        start_s: float,
+        stop_s: float,
+        perf_start: float,
+    ) -> None:
+        thread = QThread(self)
+        worker = _HFOWorker(compute_callback)
+        worker.moveToThread(thread)
+
+        self._hfo_thread = thread
+        self._hfo_worker = worker
+        self._hfo_perf_start = perf_start
+        self._hfo_run_window_s = (float(start_s), float(stop_s))
+        self._hfo_cancel_requested = False
+        self._hfo_runtime_complexity = self._estimate_hfo_runtime_complexity(start_s, stop_s)
+        self._hfo_expected_runtime_s = self._estimate_hfo_runtime_seconds(
+            self._hfo_runtime_complexity
+        )
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_hfo_worker_finished)
+        worker.failed.connect(self._on_hfo_worker_failed)
+        worker.cancelled.connect(self._on_hfo_worker_cancelled)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        worker.cancelled.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_hfo_worker_refs)
+
+        self.btn_run.setEnabled(False)
+        self.btn_cancel_hfo.setVisible(True)
+        self.btn_cancel_hfo.setEnabled(True)
+        self._show_status_message("HFO detection started...")
+        self._start_hfo_status_timer()
+        thread.start()
+
+    def _cancel_hfo_run(self) -> None:
+        self._hfo_cancel_requested = True
+        if self._hfo_worker is not None:
+            self._hfo_worker.request_cancel()
+        self.btn_cancel_hfo.setEnabled(False)
+        self._show_status_message(
+            "Cancelling HFO detection... The current detector/classifier step may need to finish first.",
+            timeout_ms=0,
+        )
+
+    def _start_hfo_status_timer(self) -> None:
+        if self._hfo_status_timer is None:
+            self._hfo_status_timer = QTimer(self)
+            self._hfo_status_timer.timeout.connect(self._update_hfo_status_message)
+        self._hfo_status_timer.start(1000)
+        self._update_hfo_status_message()
+
+    def _stop_hfo_status_timer(self) -> None:
+        if self._hfo_status_timer is not None:
+            self._hfo_status_timer.stop()
+
+    def _update_hfo_status_message(self) -> None:
+        if self._hfo_thread is None or self._hfo_perf_start is None:
+            self._stop_hfo_status_timer()
+            return
+        start = self._hfo_perf_start if self._hfo_perf_start is not None else time.perf_counter()
+        elapsed_s = max(0.0, time.perf_counter() - start)
+        window = self._hfo_run_window_s
+        window_text = ""
+        if window is not None:
+            window_text = f" Window: {window[0]:.3f}-{window[1]:.3f}s."
+        prefix = "Cancelling HFO detection." if self._hfo_cancel_requested else "HFO detection processing."
+        suffix = " Waiting for current step to finish." if self._hfo_cancel_requested else ""
+        estimate_text = self._hfo_estimate_status_text(elapsed_s)
+        self._show_status_message(
+            f"{prefix}{window_text} Time so far: {self._format_duration(elapsed_s)}."
+            f" {estimate_text}{suffix}",
+            timeout_ms=0,
+        )
+
+    @Slot(object, float)
+    def _on_hfo_worker_finished(self, result: object, elapsed_s: float) -> None:
+        if not isinstance(result, HFOComputationResult):
+            self._on_hfo_worker_failed("HFO detector returned an unexpected result.", elapsed_s)
+            return
+        self._stop_hfo_status_timer()
+        self._show_hfo_result(result)
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        active_counts = self._hfo_active_label_counts(result)
+        start_s, stop_s = self._hfo_run_window_s or (0.0, 0.0)
+        perf_start = self._hfo_perf_start if self._hfo_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_hfo_detector",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=max(0.0, stop_s - start_s),
+            notes=(
+                f"events={metadata.get('total_events', 0)}; "
+                f"detector={metadata.get('detector_version', '')}"
+            ),
+        )
+        self._update_hfo_runtime_estimator(elapsed_s)
+        self._show_status_message(
+            "HFO analysis finished. "
+            f"Events: {metadata.get('total_events', len(result.events))}. "
+            f"non-spkHFO: {active_counts.get('non-spike HFO', 0)}. "
+            f"spkHFO: {active_counts.get('spike-HFO', 0)}. "
+            f"Classification: {metadata.get('classification_status', 'unknown')}. "
+            f"Runtime: {self._format_duration(elapsed_s)}.",
+            timeout_ms=0,
+        )
+        self._finish_hfo_worker_ui()
+
+    @Slot(str, float)
+    def _on_hfo_worker_failed(self, error_message: str, elapsed_s: float) -> None:
+        self._stop_hfo_status_timer()
+        start_s, stop_s = self._hfo_run_window_s or (0.0, 0.0)
+        perf_start = self._hfo_perf_start if self._hfo_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_hfo_detector",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=max(0.0, stop_s - start_s),
+            notes=f"error: {error_message}",
+        )
+        self._show_status_message(
+            "HFO detection failed "
+            f"after {self._format_duration(elapsed_s)}."
+        )
+        self._finish_hfo_worker_ui()
+        QMessageBox.warning(self, "HFO detector", str(error_message))
+
+    @Slot(float)
+    def _on_hfo_worker_cancelled(self, elapsed_s: float) -> None:
+        self._stop_hfo_status_timer()
+        start_s, stop_s = self._hfo_run_window_s or (0.0, 0.0)
+        perf_start = self._hfo_perf_start if self._hfo_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_hfo_detector",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=max(0.0, stop_s - start_s),
+            notes="cancelled",
+        )
+        self._show_status_message(
+            "HFO detection cancelled.",
+            timeout_ms=0,
+        )
+        self._finish_hfo_worker_ui()
+
+    def _finish_hfo_worker_ui(self) -> None:
+        self.btn_run.setEnabled(True)
+        self.btn_cancel_hfo.setEnabled(False)
+        self.btn_cancel_hfo.hide()
+
+    def _clear_hfo_worker_refs(self) -> None:
+        self._hfo_thread = None
+        self._hfo_worker = None
+        self._hfo_perf_start = None
+        self._hfo_run_window_s = None
+        self._hfo_cancel_requested = False
+        self._hfo_expected_runtime_s = None
+        self._hfo_runtime_complexity = None
+
+    def _estimate_hfo_runtime_complexity(self, start_s: float, stop_s: float) -> float:
+        duration_min = max(0.0, float(stop_s) - float(start_s)) / 60.0
+        channel_count = max(1, len(self.state.selected_abs))
+        detectors = self.hfo_params.get("active_candidate_detectors", DEFAULT_CANDIDATE_DETECTORS)
+        detector_count = max(1, len(detectors) if isinstance(detectors, (list, tuple, set)) else 1)
+        return max(1e-6, float(duration_min) * float(channel_count) * float(detector_count))
+
+    def _estimate_hfo_runtime_seconds(self, complexity: float | None) -> float | None:
+        if complexity is None or self._hfo_seconds_per_complexity_unit is None:
+            return None
+        return max(0.0, float(complexity) * float(self._hfo_seconds_per_complexity_unit))
+
+    def _update_hfo_runtime_estimator(self, elapsed_s: float) -> None:
+        complexity = self._hfo_runtime_complexity
+        if complexity is None or float(complexity) <= 0.0 or float(elapsed_s) <= 0.0:
+            return
+        observed = float(elapsed_s) / float(complexity)
+        if self._hfo_seconds_per_complexity_unit is None:
+            self._hfo_seconds_per_complexity_unit = observed
+        else:
+            previous = float(self._hfo_seconds_per_complexity_unit)
+            self._hfo_seconds_per_complexity_unit = 0.65 * previous + 0.35 * observed
+
+    def _hfo_estimate_status_text(self, elapsed_s: float) -> str:
+        expected_s = self._hfo_expected_runtime_s
+        if expected_s is None:
+            return "Estimated remaining: calculating."
+        remaining_s = max(0.0, float(expected_s) - float(elapsed_s))
+        return f"Estimated remaining: {self._format_duration(remaining_s)}."
+
     @Slot(str)
     def _on_gamma_worker_progress(self, message: str) -> None:
         self._gamma_completion_status_active = False
@@ -2215,10 +3312,10 @@ class ComputationPanel(QWidget):
         gamma_spikes = self._gamma_positive_count(result)
         self._gamma_completion_status_active = True
         self._show_status_message(
-            "Gamma spike detection completed. "
+            "Gamma analysis finished. "
             f"Total spikes: {total_spikes}. "
             f"Gamma-positive spikes: {gamma_spikes}. "
-            f"Total duration of the run: {self._format_duration(elapsed_s)}.",
+            f"Runtime: {self._format_duration(elapsed_s)}.",
             timeout_ms=0,
         )
         self._finish_gamma_worker_ui()
@@ -2318,19 +3415,39 @@ class ComputationPanel(QWidget):
             return f"{minutes:d}m {secs:02d}s"
         return f"{secs:d}s"
 
+    @staticmethod
+    def _top_rei_channel(result: EIComputationResult) -> EIChannelResult | None:
+        channels = list(result.channels or [])
+        if not channels:
+            return None
+        return min(
+            channels,
+            key=lambda channel: (
+                int(getattr(channel, "rank", 10**9)),
+                -float(getattr(channel, "ei", 0.0) or 0.0),
+                str(getattr(channel, "channel", "")),
+            ),
+        )
+
     def _show_status_message(self, message: str, *, timeout_ms: int = 15000) -> None:
-        window = self.window()
-        if isinstance(window, QMainWindow):
-            status_bar = window.statusBar()
-            if isinstance(status_bar, QStatusBar):
-                status_bar.showMessage(str(message), int(timeout_ms))
+        try:
+            window = self.window()
+            if isinstance(window, QMainWindow):
+                status_bar = window.statusBar()
+                if isinstance(status_bar, QStatusBar):
+                    status_bar.showMessage(str(message), int(timeout_ms))
+        except RuntimeError:
+            return
 
     def _clear_status_message(self) -> None:
-        window = self.window()
-        if isinstance(window, QMainWindow):
-            status_bar = window.statusBar()
-            if isinstance(status_bar, QStatusBar):
-                status_bar.clearMessage()
+        try:
+            window = self.window()
+            if isinstance(window, QMainWindow):
+                status_bar = window.statusBar()
+                if isinstance(status_bar, QStatusBar):
+                    status_bar.clearMessage()
+        except RuntimeError:
+            return
 
     def _clear_gamma_outputs(self) -> None:
         self._last_gamma_result = None
@@ -2345,8 +3462,11 @@ class ComputationPanel(QWidget):
             self.btn_export_gamma.setEnabled(False)
 
     def _clear_hfo_outputs(self) -> None:
+        self._last_hfo_result = None
         self._hfo_summary_dialog = None
         self._hfo_event_grid_dialog = None
+        self._pending_hfo_event_selection = None
+        self.hfoMarkersChanged.emit({})
         if hasattr(self, "btn_open_hfo_summary"):
             self.btn_open_hfo_summary.setEnabled(False)
         if hasattr(self, "btn_open_hfo_event_grid"):
@@ -2354,50 +3474,634 @@ class ComputationPanel(QWidget):
         if hasattr(self, "btn_export_hfo"):
             self.btn_export_hfo.setEnabled(False)
 
-    def _show_hfo_not_connected_message(self) -> None:
-        start_s, stop_s = self._read_hfo_window_from_ui()
-        detector_version = str(
-            self.hfo_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+    def _show_hfo_result(self, result: HFOComputationResult) -> None:
+        self._last_hfo_result = result
+        self._hfo_summary_dialog = None
+        self._hfo_event_grid_dialog = None
+        self.btn_open_hfo_summary.setEnabled(True)
+        self.btn_open_hfo_event_grid.setEnabled(True)
+        self.btn_export_hfo.setEnabled(True)
+        self.hfoMarkersChanged.emit(
+            self._hfo_markers_from_events(self._hfo_events_for_review_grid(result))
         )
-        band_label = str(self.hfo_params.get("band_preset", DEFAULT_HFO_BAND_PRESET))
-        low_freq = float(self.hfo_params["low_freq"])
-        high_freq = float(self.hfo_params["high_freq"])
-        QMessageBox.information(
-            self,
-            "HFO detector",
-            "HFO detector integration is ready in the computation panel, but no "
-            "HFO algorithm is connected yet.\n\n"
-            f"Prepared detector: {detector_version}\n"
-            f"Prepared detection window: {start_s:g}-{stop_s:g} s\n"
-            f"Prepared band: {band_label} ({low_freq:g}-{high_freq:g} Hz)\n\n"
-            "Expected output rows will follow the expert event grid model: "
-            "channel, event start, event end, peak time, duration, band, "
-            "peak frequency, score, and review status.",
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        active_counts = self._hfo_active_label_counts(result)
+        action_text = "HFO results imported" if bool(metadata.get("imported", False)) else "HFO detection complete"
+        self._show_status_message(
+            f"{action_text}: "
+            f"{metadata.get('total_events', len(result.events))} events, "
+            f"non-spkHFO {active_counts.get('non-spike HFO', 0)}, "
+            f"spkHFO {active_counts.get('spike-HFO', 0)}, "
+            f"classification {metadata.get('classification_status', 'unknown')}.",
+            timeout_ms=20000,
         )
+
+    def _hfo_active_label_counts(self, result: HFOComputationResult) -> dict[str, int]:
+        counts = {
+            "artifact": 0,
+            "non-spike HFO": 0,
+            "spike-HFO": 0,
+            "unclassified": 0,
+        }
+        for event in result.events:
+            label = self._normalize_hfo_display_class(self._hfo_display_class(event))
+            if label == "deleted":
+                continue
+            counts[label] = counts.get(label, 0) + 1
+        return counts
 
     def _open_hfo_summary_dialog(self) -> None:
-        QMessageBox.information(
-            self,
-            "HFO summary",
-            "Run the HFO detector first. HFO results will summarize event counts "
-            "and rates by channel.",
+        result = self._last_hfo_result
+        if result is None:
+            QMessageBox.information(self, "HFO summary", "Run the HFO detector first.")
+            return
+
+        dialog = QDialog()
+        dialog.setWindowTitle("HFO channel summary")
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.setSizeGripEnabled(True)
+        dialog.resize(1040, 520)
+        dialog.setMinimumSize(720, 420)
+        layout = QVBoxLayout(dialog)
+
+        controls_row = QHBoxLayout()
+        controls_row.addWidget(QLabel("Channel level:"))
+        level_combo = QComboBox()
+        level_combo.addItem("All channels", userData="all")
+        level_combo.addItem("At least one HFO", userData="hfo")
+        level_combo.addItem("At least one spkHFO", userData="spike_hfo")
+        controls_row.addWidget(level_combo)
+        controls_row.addStretch(1)
+        layout.addLayout(controls_row)
+
+        columns = [
+            "Channel",
+            "Candidates",
+            "Accepted HFO",
+            "non-spkHFO",
+            "spkHFO",
+            "Artifact",
+            "HFO/min",
+            "spkHFO/min",
+            "Artifact %",
+        ]
+        table = QTableWidget(0, len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.setSortingEnabled(False)
+        header = table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col in range(1, len(columns)):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSortIndicatorShown(True)
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        window_s = metadata.get("analysis_window_s", [0.0, 0.0])
+        duration_min = 0.0
+        if isinstance(window_s, list) and len(window_s) >= 2:
+            duration_min = max(0.0, float(window_s[1]) - float(window_s[0])) / 60.0
+
+        summary_rows: list[dict[str, object]] = []
+        for display_order, channel_result in enumerate(result.channels):
+            channel_events = list(channel_result.events)
+            active_channel_events = [
+                event for event in channel_events
+                if self._normalize_hfo_display_class(self._hfo_display_class(event)) != "deleted"
+            ]
+            candidate_count = len(active_channel_events)
+            deleted_count = len(channel_events) - candidate_count
+            artifact_count = sum(
+                1 for event in active_channel_events
+                if self._normalize_hfo_display_class(self._hfo_display_class(event)) == "artifact"
+            )
+            spike_count = sum(
+                1 for event in active_channel_events
+                if self._normalize_hfo_display_class(self._hfo_display_class(event)) == "spike-HFO"
+            )
+            non_spike_count = sum(
+                1 for event in active_channel_events
+                if self._normalize_hfo_display_class(self._hfo_display_class(event)) == "non-spike HFO"
+            )
+            accepted_count = non_spike_count + spike_count
+            accepted_rate = float(accepted_count) / duration_min if duration_min > 0.0 else 0.0
+            spike_rate = float(spike_count) / duration_min if duration_min > 0.0 else 0.0
+            artifact_pct = 100.0 * float(artifact_count) / float(candidate_count) if candidate_count else 0.0
+            channel_name = str(channel_result.channel)
+            summary_rows.append(
+                {
+                    "display_order": int(display_order),
+                    "channel": channel_name,
+                    "channel_sort": channel_name.casefold(),
+                    "candidate_count": int(candidate_count),
+                    "accepted_count": int(accepted_count),
+                    "non_spike_count": int(non_spike_count),
+                    "spike_count": int(spike_count),
+                    "artifact_count": int(artifact_count),
+                    "deleted_count": int(deleted_count),
+                    "accepted_rate": float(accepted_rate),
+                    "spike_rate": float(spike_rate),
+                    "artifact_pct": float(artifact_pct),
+                }
+            )
+
+        sort_state: dict[str, object] = {
+            "column": 0,
+            "order": Qt.SortOrder.AscendingOrder,
+            "channel_mode": "display",
+        }
+
+        def filtered_rows() -> list[dict[str, object]]:
+            mode = str(level_combo.currentData() or "all")
+            if mode == "hfo":
+                return [
+                    row for row in summary_rows
+                    if int(row["accepted_count"]) > 0
+                ]
+            if mode == "spike_hfo":
+                return [
+                    row for row in summary_rows
+                    if int(row["spike_count"]) > 0
+                ]
+            return list(summary_rows)
+
+        def populate(rows: list[dict[str, object]]) -> None:
+            table.setSortingEnabled(False)
+            table.setRowCount(0)
+            for row_data in rows:
+                row_idx = table.rowCount()
+                table.insertRow(row_idx)
+                values = [
+                    str(row_data["channel"]),
+                    str(int(row_data["candidate_count"])),
+                    str(int(row_data["accepted_count"])),
+                    str(int(row_data["non_spike_count"])),
+                    str(int(row_data["spike_count"])),
+                    str(int(row_data["artifact_count"])),
+                    f"{float(row_data['accepted_rate']):.3f}",
+                    f"{float(row_data['spike_rate']):.3f}",
+                    f"{float(row_data['artifact_pct']):.1f}",
+                ]
+                channel_name = str(row_data["channel"])
+                for col_idx, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setData(Qt.ItemDataRole.UserRole, channel_name)
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    if col_idx > 0:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    table.setItem(row_idx, col_idx, item)
+            table.setSortingEnabled(False)
+            self.eiSummaryOrderChanged.emit([str(row["channel"]) for row in rows])
+
+        def sorted_rows_for_current_state() -> list[dict[str, object]]:
+            rows = filtered_rows()
+            column = int(sort_state["column"])
+            reverse = sort_state["order"] == Qt.SortOrder.DescendingOrder
+            if column == 0:
+                if sort_state["channel_mode"] == "alphabetical":
+                    return sorted(rows, key=lambda row: str(row["channel_sort"]))
+                return sorted(rows, key=lambda row: int(row["display_order"]))
+            key_by_column: dict[int, str] = {
+                1: "candidate_count",
+                2: "accepted_count",
+                3: "non_spike_count",
+                4: "spike_count",
+                5: "artifact_count",
+                6: "accepted_rate",
+                7: "spike_rate",
+                8: "artifact_pct",
+            }
+            key_name = key_by_column.get(column, "display_order")
+            return sorted(
+                rows,
+                key=lambda row: float(row[key_name]),
+                reverse=reverse,
+            )
+
+        def refresh_summary_table() -> None:
+            populate(sorted_rows_for_current_state())
+
+        def sort_summary_table(column: int) -> None:
+            if int(column) == 0:
+                sort_state["column"] = 0
+                sort_state["order"] = Qt.SortOrder.AscendingOrder
+                sort_state["channel_mode"] = (
+                    "alphabetical"
+                    if sort_state["channel_mode"] == "display"
+                    else "display"
+                )
+                header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+                refresh_summary_table()
+                return
+
+            if sort_state["column"] == int(column):
+                sort_state["order"] = (
+                    Qt.SortOrder.DescendingOrder
+                    if sort_state["order"] == Qt.SortOrder.AscendingOrder
+                    else Qt.SortOrder.AscendingOrder
+                )
+            else:
+                sort_state["column"] = int(column)
+                sort_state["order"] = Qt.SortOrder.DescendingOrder
+            sort_state["channel_mode"] = "display"
+            header.setSortIndicator(int(column), sort_state["order"])
+            refresh_summary_table()
+
+        def activate_summary_row(row: int, _column: int) -> None:
+            item = table.item(int(row), 0)
+            if item is None:
+                return
+            channel_name = item.data(Qt.ItemDataRole.UserRole)
+            if channel_name is None:
+                channel_name = item.text()
+            self.eiSummaryChannelActivated.emit(str(channel_name))
+
+        header.sectionClicked.connect(sort_summary_table)
+        level_combo.currentIndexChanged.connect(lambda _index: refresh_summary_table())
+        table.cellClicked.connect(activate_summary_row)
+        header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+        refresh_summary_table()
+        layout.addWidget(table)
+        active_counts = self._hfo_active_label_counts(result)
+        edge_padding_s = metadata.get("boundary_padding_s")
+        edge_excluded = int(metadata.get("boundary_excluded_events", 0) or 0)
+        edge_text = ""
+        try:
+            if float(edge_padding_s or 0.0) > 0.0 or edge_excluded > 0:
+                edge_text = (
+                    f"   edge ignored: {float(edge_padding_s or 0.0):g}s"
+                    f" ({edge_excluded} candidate events excluded)"
+                )
+        except (TypeError, ValueError):
+            if edge_excluded > 0:
+                edge_text = f"   edge excluded: {edge_excluded} candidate events"
+        footer = QLabel(
+            f"Total events: {len(result.events)}   "
+            f"non-spkHFO: {active_counts.get('non-spike HFO', 0)}   "
+            f"spkHFO: {active_counts.get('spike-HFO', 0)}   "
+            f"artifact: {active_counts.get('artifact', 0)}"
+            f"{edge_text}"
         )
+        layout.addWidget(footer)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        self._hfo_summary_dialog = dialog
+        dialog.destroyed.connect(lambda *_args: setattr(self, "_hfo_summary_dialog", None))
+        dialog.show()
 
     def _open_hfo_event_grid_dialog(self) -> None:
-        QMessageBox.information(
-            self,
-            "HFO event grid",
-            "Run the HFO detector first. HFO events will open in an expert-event-grid "
-            "style review surface.",
+        result = self._last_hfo_result
+        if result is None:
+            QMessageBox.information(self, "HFO event grid", "Run the HFO detector first.")
+            return
+
+        dialog = QDialog()
+        dialog.setWindowTitle("HFO event grid")
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.setSizeGripEnabled(True)
+        dialog.resize(1160, 820)
+        dialog.setMinimumSize(720, 520)
+        dialog.setStyleSheet("QDialog { background-color: #f3f6fa; color: #111827; }")
+        layout = QVBoxLayout(dialog)
+
+        grid = ExpertEventGrid(title="HFO Event Grid")
+        grid.set_raw(self._raw)
+        grid.set_waveform_callback(self._fetch_hfo_event_waveform)
+        grid.set_events(self._hfo_events_for_review_grid(result), title="Computed HFO events")
+        grid.requestJumpToTime.connect(
+            lambda time_s, channel: self.hfoEventActivated.emit(str(channel), float(time_s))
         )
+        grid.filteredEventsChanged.connect(
+            lambda events: self.hfoMarkersChanged.emit(
+                self._hfo_markers_from_events(list(events))
+            )
+        )
+        grid.eventClassChanged.connect(lambda _event: self._refresh_hfo_review_metadata(result))
+        layout.addWidget(grid)
+        pending_selection = self._pending_hfo_event_selection
+        self._pending_hfo_event_selection = None
+        if pending_selection is not None:
+            grid.select_event_at(pending_selection[0], pending_selection[1])
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        self._hfo_event_grid_dialog = dialog
+        dialog.destroyed.connect(lambda *_args: setattr(self, "_hfo_event_grid_dialog", None))
+        dialog.show()
+
+    def open_hfo_event_at(self, channel_name: str, time_s: float) -> None:
+        result = self._last_hfo_result
+        if result is None:
+            return
+        if self._hfo_event_grid_dialog is not None:
+            self._hfo_event_grid_dialog.close()
+            self._hfo_event_grid_dialog = None
+        self._pending_hfo_event_selection = (str(channel_name), float(time_s))
+        self._open_hfo_event_grid_dialog()
+
+    def _fetch_hfo_event_waveform(
+        self,
+        channel_name: str,
+        start_s: float,
+        stop_s: float,
+    ) -> tuple[np.ndarray | None, np.ndarray | None]:
+        if self._ei_data_callback is None:
+            return None, None
+        try:
+            channel_text = str(channel_name)
+            abs_idx = self._ch_names_displayed.index(channel_text)
+            start = max(0.0, float(start_s))
+            stop = max(start, float(stop_s))
+        except (ValueError, TypeError):
+            return None, None
+        if stop <= start:
+            return None, None
+
+        try:
+            data, fs, _names = self._ei_data_callback([int(abs_idx)], start, stop)
+        except Exception:
+            return None, None
+
+        arr = np.asarray(data, dtype=float)
+        if arr.ndim != 2 or arr.shape[0] < 1 or arr.shape[1] < 2:
+            return None, None
+        sfreq = float(fs)
+        if sfreq <= 0.0:
+            return None, None
+        waveform = np.asarray(arr[0], dtype=float).reshape(-1)
+        times = start + np.arange(waveform.size, dtype=float) / sfreq
+        return waveform, times
+
+    def _hfo_events_for_review_grid(self, result: HFOComputationResult) -> list[ExpertEvent]:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        source_file = str(metadata.get("source_file_name") or metadata.get("source_file_path") or "")
+        detection_fs = float(metadata.get("detection_fs", metadata.get("input_fs", 1000.0)) or 1000.0)
+        data_start_s = float(metadata.get("data_start_s", 0.0) or 0.0)
+        classification_status = self._effective_hfo_classification_status(result)
+        channel_event_counts: dict[str, int] = {}
+
+        events: list[ExpertEvent] = []
+        for index, event in enumerate(result.events, start=1):
+            label = self._hfo_display_class(event)
+            if not label or label == "candidate":
+                label = "unclassified"
+            normalized_label = self._normalize_hfo_display_class(label)
+            if self._hfo_classification_failed(classification_status):
+                normalized_label = "unclassified"
+            accepted_hfo = normalized_label in {"non-spike HFO", "spike-HFO"}
+            spike_hfo = normalized_label == "spike-HFO"
+            detector = str(event.detector)
+            channel_key = str(event.channel)
+            channel_event_counts[channel_key] = channel_event_counts.get(channel_key, 0) + 1
+            event_id = str(channel_event_counts[channel_key])
+            real_hfo_probability = self._coalesce_hfo_score(
+                getattr(event, "real_hfo_probability", None),
+            )
+            artifact_probability = self._coalesce_hfo_score(
+                getattr(event, "artifact_probability", None),
+                getattr(event, "artifact_score", None),
+            )
+            if real_hfo_probability is None and artifact_probability is not None:
+                real_hfo_probability = 1.0 - float(artifact_probability)
+            if artifact_probability is None and real_hfo_probability is not None:
+                artifact_probability = 1.0 - float(real_hfo_probability)
+            spike_hfo_probability = self._coalesce_hfo_score(
+                getattr(event, "spike_hfo_probability", None),
+                getattr(event, "spike_score", None),
+            )
+            band_label = (
+                f"{float(event.low_freq_hz):g}-{float(event.high_freq_hz):g} Hz"
+                if event.low_freq_hz is not None and event.high_freq_hz is not None
+                else "80-300 Hz"
+            )
+
+            waveform = None
+            waveform_start = None
+            waveform_end = None
+            waveform_times = None
+            if event.waveform is not None:
+                waveform = np.asarray(event.waveform, dtype=float).reshape(-1)
+                if waveform.size:
+                    if event.real_start_sample is not None:
+                        waveform_start = data_start_s + float(event.real_start_sample) / detection_fs
+                        waveform_end = waveform_start + float(waveform.size) / detection_fs
+                    else:
+                        waveform_start = float(event.start_time_s)
+                        waveform_end = float(event.end_time_s)
+                    waveform_times = np.linspace(
+                        float(waveform_start),
+                        float(waveform_end),
+                        int(waveform.size),
+                        endpoint=False,
+                    )
+
+            events.append(
+                ExpertEvent(
+                    edf_file=source_file,
+                    channel=str(event.channel),
+                    start=float(event.start_time_s),
+                    end=float(event.end_time_s),
+                    detector=detector,
+                    artifact=accepted_hfo,
+                    spike=spike_hfo,
+                    event_number=event_id,
+                    model_class=normalized_label,
+                    band_label=band_label,
+                    boundary_warning=bool(getattr(event, "boundary_warning", event.is_boundary)),
+                    real_hfo_probability=real_hfo_probability,
+                    artifact_probability=artifact_probability,
+                    spike_hfo_probability=spike_hfo_probability,
+                    classification_status=classification_status,
+                    manual_class=self._normalize_hfo_display_class(getattr(event, "manual_class", None))
+                    if getattr(event, "manual_class", None)
+                    else "",
+                    manual_review_status=str(getattr(event, "manual_review_status", "unreviewed") or "unreviewed"),
+                    source_event=event,
+                    waveform=waveform,
+                    waveform_start=waveform_start,
+                    waveform_end=waveform_end,
+                    waveform_times=waveform_times,
+                    waveform_unavailable=False,
+                    detail_lines=[
+                        f"real HFO: {self._format_optional_score(getattr(event, 'real_hfo_probability', None))}",
+                        f"artifact: {self._format_optional_score(getattr(event, 'artifact_probability', event.artifact_score))}",
+                        f"spike-HFO: {self._format_optional_score(getattr(event, 'spike_hfo_probability', event.spike_score))}",
+                        f"model class: {getattr(event, 'final_model_class', event.classification_label) or ''}",
+                        f"classification status: {classification_status}",
+                        f"manual class: {getattr(event, 'manual_class', None) or ''}",
+                        f"review: {getattr(event, 'manual_review_status', 'unreviewed')}",
+                        f"band: {event.low_freq_hz:g}-{event.high_freq_hz:g} Hz",
+                        f"boundary: {'yes' if event.is_boundary else 'no'}",
+                    ],
+                )
+            )
+        return events
+
+    def _hfo_display_class(self, event) -> str:
+        return str(
+            getattr(event, "manual_class", None)
+            or getattr(event, "final_model_class", None)
+            or getattr(event, "classification_label", "")
+            or ""
+        ).strip()
+
+    def _refresh_hfo_review_metadata(self, result: HFOComputationResult) -> None:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        official_counts: dict[str, int] = {}
+        reviewed_count = 0
+        deleted_count = 0
+        for event in result.events:
+            label = self._normalize_hfo_display_class(self._hfo_display_class(event))
+            official_counts[label] = official_counts.get(label, 0) + 1
+            if label == "deleted":
+                deleted_count += 1
+            if str(getattr(event, "manual_review_status", "") or "").strip().lower() == "reviewed":
+                reviewed_count += 1
+        metadata["official_label_counts"] = official_counts
+        metadata["manual_reviewed_events"] = int(reviewed_count)
+        metadata["manual_deleted_events"] = int(deleted_count)
+        result.metadata = metadata
+
+    def _normalize_hfo_display_class(self, label: object) -> str:
+        text = str(label or "").strip()
+        lowered = text.lower().replace("_", "-")
+        if not lowered or lowered in {"candidate", "unknown", "none"}:
+            return "unclassified"
+        if lowered in {"deleted", "excluded"}:
+            return "deleted"
+        if "artifact" in lowered:
+            return "artifact"
+        if lowered in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
+            return "non-spike HFO"
+        if lowered in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
+            return "spike-HFO"
+        return text
+
+    def _effective_hfo_classification_status(self, result: HFOComputationResult) -> str:
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        status = str(metadata.get("classification_status", "") or "").strip()
+        if status:
+            return status
+        if any(
+            self._hfo_display_class(event)
+            and self._coalesce_hfo_score(
+                getattr(event, "real_hfo_probability", None),
+                getattr(event, "artifact_probability", None),
+                getattr(event, "artifact_score", None),
+                getattr(event, "spike_hfo_probability", None),
+                getattr(event, "spike_score", None),
+            ) is not None
+            for event in result.events
+        ):
+            return "ok"
+        return "unknown"
+
+    @staticmethod
+    def _hfo_classification_failed(status: object) -> bool:
+        text = str(status or "").strip().lower()
+        return bool(text and text not in {"ok", "no_events"})
+
+    def _hfo_display_event_number(self, value: object) -> str:
+        text = str(value or "").strip()
+        match = re.search(r"(\d+)$", text)
+        if match:
+            return str(int(match.group(1)))
+        return text
+
+    @staticmethod
+    def _coerce_float(value: object, fallback: float) -> float:
+        try:
+            numeric = float(cast(Any, value))
+        except (TypeError, ValueError):
+            return float(fallback)
+        return numeric if np.isfinite(numeric) else float(fallback)
+
+    def _coalesce_hfo_score(self, *values: object) -> float | None:
+        for value in values:
+            if value is None:
+                continue
+            try:
+                score = float(cast(Any, value))
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(score):
+                return score
+        return None
+
+    def _hfo_markers_from_events(self, events: list[ExpertEvent]) -> dict[str, list[dict[str, float | str]]]:
+        markers: dict[str, list[dict[str, float | str]]] = {}
+        for event in events:
+            if self._normalize_hfo_display_class(event.review_label) == "deleted":
+                continue
+            channel = str(event.channel)
+            center_time_s = 0.5 * (float(event.start) + float(event.end))
+            kind = str(event.review_label or "unclassified")
+            markers.setdefault(channel, []).append(
+                {
+                    "time_s": float(center_time_s),
+                    "start_time_s": float(event.start),
+                    "end_time_s": float(event.end),
+                    "kind": kind,
+                    "event_id": str(event.event_number or ""),
+                }
+            )
+        return markers
 
     def _export_hfo_results(self) -> None:
+        result = self._last_hfo_result
+        if result is None:
+            QMessageBox.information(
+                self,
+                "Export HFO events",
+                "Run the HFO detector before exporting events.",
+            )
+            return
+        output_dir = self._choose_export_dir("Select folder for HFO export")
+        if output_dir is None:
+            return
+        if not self._confirm_export_overwrite(
+            output_dir,
+            [
+                "hfo_channel_summary.csv",
+                "hfo_events.csv",
+                "hfo_metadata.json",
+                "README.txt",
+            ],
+            title="Export HFO events",
+        ):
+            return
+        try:
+            written_paths = export_hfo_result(output_dir, result)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Export HFO events",
+                f"Could not export HFO events:\n{exc}",
+            )
+            return
+        self._last_export_dir = output_dir
         QMessageBox.information(
             self,
             "Export HFO events",
-            "Run the HFO detector first. HFO exports will include event rows and "
-            "metadata for the selected band and detection parameters.",
+            f"Exported {len(written_paths)} files to:\n{output_dir}",
         )
+
+    @staticmethod
+    def _format_optional_score(value: float | None) -> str:
+        if value is None:
+            return ""
+        try:
+            score = float(value)
+        except (TypeError, ValueError):
+            return ""
+        if not np.isfinite(score):
+            return ""
+        return f"{score:.3f}"
 
     def _show_gamma_result(self, result: GammaSpikeComputationResult) -> None:
         self._last_gamma_result = result
@@ -2761,6 +4465,8 @@ class ComputationPanel(QWidget):
         zoom_nav.addWidget(prev_event_btn)
         zoom_nav.addWidget(next_event_btn)
         gamma_filter_check = QCheckBox("Display 30-100 Hz")
+        gamma_filter_check.setChecked(True)
+        gamma_filter_check.hide()
         zoom_nav.addWidget(gamma_filter_check)
         zoom_nav.addStretch(1)
         zoom_layout.addLayout(zoom_nav)
@@ -2778,11 +4484,20 @@ class ComputationPanel(QWidget):
         zoom_layout.addWidget(zoom_event_info)
 
         zoom_plot = pg.PlotWidget()
-        zoom_plot.setMinimumHeight(360)
+        zoom_plot.setMinimumHeight(180)
         zoom_plot.setBackground("w")
         zoom_plot.setLabel("bottom", "Time", units="s")
-        zoom_plot.setLabel("left", "Amplitude", units="uV")
+        zoom_plot.setLabel("left", "Raw", units="uV")
+        zoom_plot.setTitle("Raw signal", color="#111111", size="10pt")
         zoom_plot.showGrid(x=True, y=True, alpha=0.25)
+
+        filtered_zoom_plot = pg.PlotWidget()
+        filtered_zoom_plot.setMinimumHeight(180)
+        filtered_zoom_plot.setBackground("w")
+        filtered_zoom_plot.setLabel("bottom", "Time", units="s")
+        filtered_zoom_plot.setLabel("left", "Filtered", units="uV")
+        filtered_zoom_plot.setTitle("Filtered 30-100 Hz", color="#111111", size="10pt")
+        filtered_zoom_plot.showGrid(x=True, y=True, alpha=0.25)
 
         tf_plot = pg.PlotWidget()
         tf_plot.setMinimumHeight(220)
@@ -2795,10 +4510,12 @@ class ComputationPanel(QWidget):
         zoom_plot_splitter = QSplitter(Qt.Orientation.Vertical)
         zoom_plot_splitter.setChildrenCollapsible(False)
         zoom_plot_splitter.addWidget(zoom_plot)
+        zoom_plot_splitter.addWidget(filtered_zoom_plot)
         zoom_plot_splitter.addWidget(tf_plot)
-        zoom_plot_splitter.setStretchFactor(0, 3)
+        zoom_plot_splitter.setStretchFactor(0, 2)
         zoom_plot_splitter.setStretchFactor(1, 2)
-        zoom_plot_splitter.setSizes([360, 240])
+        zoom_plot_splitter.setStretchFactor(2, 2)
+        zoom_plot_splitter.setSizes([180, 180, 240])
         zoom_layout.addWidget(zoom_plot_splitter, 1)
 
         zoom_metrics = QTableWidget(1, 6)
@@ -2826,7 +4543,7 @@ class ComputationPanel(QWidget):
             "P1: the beginning of the spike; "
             "N1: the main spike peak; "
             "N2: the end of the spike.  "
-            "The 30-100 Hz toggle changes display only, not saved gamma results."
+            "The filtered panel is 30-100 Hz for display only; saved gamma results are unchanged."
         )
         boundary_info.setWordWrap(True)
         boundary_info.setStyleSheet(
@@ -2844,7 +4561,10 @@ class ComputationPanel(QWidget):
         }
 
         def is_gamma_row(row: GammaReviewRow) -> bool:
-            return bool(row.get("is_gamma", False))
+            return self._gamma_row_official_class(row) == "gamma"
+
+        def gamma_row_color_tuple(row: GammaReviewRow) -> tuple[int, int, int]:
+            return (255, 151, 67) if is_gamma_row(row) else (64, 145, 255)
 
         def filtered_rows() -> list[GammaReviewRow]:
             mode = str(level_combo.currentData() or "all")
@@ -2869,7 +4589,7 @@ class ComputationPanel(QWidget):
             if value is None:
                 return ""
             try:
-                number = float(value)
+                number = float(cast(Any, value))
             except (TypeError, ValueError):
                 return ""
             if not np.isfinite(number):
@@ -2886,8 +4606,6 @@ class ComputationPanel(QWidget):
                 zoom_metrics.setItem(0, col, item)
 
         def maybe_gamma_filter_trace(times: np.ndarray, waveform: np.ndarray) -> np.ndarray:
-            if not gamma_filter_check.isChecked():
-                return waveform
             if times.size < 8 or waveform.size != times.size:
                 return waveform
             dt = float(np.median(np.diff(times)))
@@ -2948,6 +4666,30 @@ class ComputationPanel(QWidget):
             marker_y0 = y_min - y_pad
             marker_y1 = y_max + y_pad
 
+            event_start = self._coerce_float(row.get("event_start_time_s"), time_s)
+            event_stop = self._coerce_float(row.get("event_stop_time_s"), time_s)
+            if np.isfinite(event_start) and np.isfinite(event_stop):
+                if event_stop < event_start:
+                    event_start, event_stop = event_stop, event_start
+                if event_stop <= event_start:
+                    event_stop = event_start + 1e-6
+                clipped_x0 = max(float(t_arr[0]), event_start)
+                clipped_x1 = min(float(t_arr[-1]), event_stop)
+                if clipped_x1 > clipped_x0:
+                    event_color = gamma_row_color_tuple(row)
+                    event_region = QGraphicsRectItem(
+                        QRectF(
+                            clipped_x0,
+                            marker_y0,
+                            max(0.0, clipped_x1 - clipped_x0),
+                            max(0.0, marker_y1 - marker_y0),
+                        )
+                    )
+                    event_region.setBrush(pg.mkBrush(*event_color, 48))
+                    event_region.setPen(pg.mkPen((*event_color, 220), width=1.5))
+                    event_region.setZValue(8)
+                    plot.addItem(event_region)
+
             if float(t_arr[0]) <= time_s <= float(t_arr[-1]):
                 spike_line = plot.plot(
                     [time_s, time_s],
@@ -2965,7 +4707,7 @@ class ComputationPanel(QWidget):
                 if value is None:
                     continue
                 try:
-                    x = float(value)
+                    x = float(cast(Any, value))
                 except (TypeError, ValueError):
                     continue
                 if not np.isfinite(x):
@@ -3130,6 +4872,7 @@ class ComputationPanel(QWidget):
             tf_plot.addItem(spike_line)
 
         def reset_waveform_view(
+            plot: pg.PlotWidget,
             row: GammaReviewRow,
             times: np.ndarray | None,
             waveform: np.ndarray | None,
@@ -3141,13 +4884,13 @@ class ComputationPanel(QWidget):
             t_arr = None if times is None else np.asarray(times, dtype=float).reshape(-1)
             y_arr = None if waveform is None else np.asarray(waveform, dtype=float).reshape(-1)
             if t_arr is None or y_arr is None or t_arr.size < 2 or t_arr.size != y_arr.size:
-                zoom_plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
-                zoom_plot.enableAutoRange(axis="y", enable=True)
+                plot.setXRange(time_s - 0.45, time_s + 0.45, padding=0.02)
+                plot.enableAutoRange(axis="y", enable=True)
                 return
-            zoom_plot.setXRange(float(t_arr[0]), float(t_arr[-1]), padding=0.02)
+            plot.setXRange(float(t_arr[0]), float(t_arr[-1]), padding=0.02)
             finite_y = y_arr[np.isfinite(y_arr)]
             if not finite_y.size:
-                zoom_plot.enableAutoRange(axis="y", enable=True)
+                plot.enableAutoRange(axis="y", enable=True)
                 return
             y_min = float(np.min(finite_y))
             y_max = float(np.max(finite_y))
@@ -3155,7 +4898,7 @@ class ComputationPanel(QWidget):
                 y_min -= 1.0
                 y_max += 1.0
             y_pad = 0.08 * (y_max - y_min)
-            zoom_plot.setYRange(y_min - y_pad, y_max + y_pad, padding=0.02)
+            plot.setYRange(y_min - y_pad, y_max + y_pad, padding=0.02)
 
         def reset_current_gamma_zoom() -> None:
             rows = list(state["rows"])
@@ -3170,7 +4913,8 @@ class ComputationPanel(QWidget):
                 if times is not None and waveform is not None
                 else waveform
             )
-            reset_waveform_view(row, times, plotted_waveform)
+            reset_waveform_view(zoom_plot, row, times, waveform)
+            reset_waveform_view(filtered_zoom_plot, row, times, plotted_waveform)
             update_time_frequency(row, tf_times, tf_waveform)
             self.gammaSpikeEventActivated.emit(str(row["channel"]), float(row["time_s"]))
 
@@ -3198,7 +4942,12 @@ class ComputationPanel(QWidget):
             )
             event_type = "Gamma spike" if is_gamma_row(row) else "Non-gamma spike"
             event_color = gamma_border if is_gamma_row(row) else regular_border
-            info_parts = [event_type, "Dashed line: detected spike"]
+            info_parts = [
+                event_type,
+                f"Classifier proposition: {row.get('model_class', '')}",
+                f"Review: {row.get('manual_review_status', 'unreviewed')}",
+                "Dashed line: detected spike",
+            ]
             if is_gamma_row(row):
                 info_parts.append("Orange selection: estimated gamma activity window")
             zoom_event_info.setText(" | ".join(info_parts))
@@ -3207,6 +4956,9 @@ class ComputationPanel(QWidget):
                 f"border-left: 5px solid {event_color}; border-radius: 4px; "
                 "padding: 4px 8px; font-weight: 600;"
             )
+            gamma_class_combo.blockSignals(True)
+            gamma_class_combo.setCurrentText(self._gamma_row_official_class(row))
+            gamma_class_combo.blockSignals(False)
             set_metric_values(
                 [
                     format_float(row.get("gamma_power"), 4),
@@ -3218,21 +4970,64 @@ class ComputationPanel(QWidget):
                 ]
             )
 
-            zoom_plot.clear()
-            zoom_plot.setBackground("w")
+            for plot in (zoom_plot, filtered_zoom_plot):
+                plot.clear()
+                plot.setBackground("w")
             times, waveform = self._fetch_gamma_event_waveform(row, half_window_s=0.45)
             tf_times, tf_waveform = self._fetch_gamma_event_waveform(row, half_window_s=1.0)
-            plotted_waveform = waveform
+            filtered_waveform = waveform
             if times is not None and waveform is not None:
-                plotted_waveform = maybe_gamma_filter_trace(times, waveform)
-                zoom_plot.plot(times, plotted_waveform, pen=pg.mkPen("#222222", width=1.5))
+                filtered_waveform = maybe_gamma_filter_trace(times, waveform)
+                zoom_plot.plot(times, waveform, pen=pg.mkPen("#222222", width=1.5))
+                filtered_zoom_plot.plot(times, filtered_waveform, pen=pg.mkPen("#222222", width=1.5))
             else:
-                plotted_waveform = None
-            draw_analysis_markers(zoom_plot, row, times, plotted_waveform)
-            reset_waveform_view(row, times, plotted_waveform)
+                filtered_waveform = None
+            draw_analysis_markers(zoom_plot, row, times, waveform)
+            draw_analysis_markers(filtered_zoom_plot, row, times, filtered_waveform)
+            reset_waveform_view(zoom_plot, row, times, waveform)
+            reset_waveform_view(filtered_zoom_plot, row, times, filtered_waveform)
             update_time_frequency(row, tf_times, tf_waveform)
-
             self.gammaSpikeEventActivated.emit(channel, time_s)
+
+        review_row = QHBoxLayout()
+        review_row.addWidget(QLabel("Official class:"))
+        gamma_class_combo = QComboBox()
+        gamma_class_combo.addItem("gamma", userData="gamma")
+        gamma_class_combo.addItem("non-gamma", userData="non-gamma")
+        gamma_class_combo.addItem("unclassified", userData="unclassified")
+        gamma_class_combo.setStyleSheet("""
+            QComboBox {
+                background: #ffffff;
+                color: #111111;
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                padding: 4px 8px;
+                min-width: 130px;
+            }
+        """)
+        review_row.addWidget(gamma_class_combo)
+        review_row.addStretch(1)
+        zoom_layout.insertLayout(3, review_row)
+
+        def apply_gamma_manual_class(label: str) -> None:
+            rows = list(state["rows"])
+            index = int(state["index"])
+            if index < 0 or index >= len(rows):
+                return
+            row = rows[index]
+            normalized = self._normalize_gamma_manual_class(label)
+            row["manual_class"] = normalized
+            row["manual_review_status"] = "reviewed"
+            source_event = row.get("source_event")
+            if isinstance(source_event, GammaSpikeEventResult):
+                source_event.manual_class = normalized
+                source_event.manual_review_status = "reviewed"
+            self.gammaSpikeMarkersChanged.emit(
+                self._gamma_spike_markers_from_review_rows(list(state["rows"]))
+            )
+            update_zoom(row)
+
+        gamma_class_combo.currentTextChanged.connect(apply_gamma_manual_class)
 
         def update_zoom_nav() -> None:
             rows = list(state["rows"])
@@ -3299,10 +5094,7 @@ class ComputationPanel(QWidget):
                 mini_waveform = np.asarray(waveform, dtype=float).reshape(-1)
                 plot.plot(times, mini_waveform, pen=pg.mkPen("#222222", width=1))
                 plot.setXRange(float(times[0]), float(times[-1]), padding=0.0)
-            try:
-                time_s = float(row_data.get("time_s", 0.0))
-            except (TypeError, ValueError):
-                time_s = 0.0
+            time_s = self._coerce_float(row_data.get("time_s"), 0.0)
             if times is not None and waveform is not None:
                 mini_times = np.asarray(times, dtype=float).reshape(-1)
                 finite_y = mini_waveform[np.isfinite(mini_waveform)]
@@ -3326,8 +5118,8 @@ class ComputationPanel(QWidget):
             plot.setMouseEnabled(x=False, y=False)
             layout.addWidget(plot, 1)
 
-            start = float(row_data.get("event_start_time_s", time_s))
-            stop = float(row_data.get("event_stop_time_s", time_s))
+            start = self._coerce_float(row_data.get("event_start_time_s"), time_s)
+            stop = self._coerce_float(row_data.get("event_stop_time_s"), time_s)
             footer = QLabel(f"{start:.3f} - {stop:.3f} s")
             footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
             footer.setStyleSheet("color: #555; font-size: 10px;")
@@ -3395,10 +5187,10 @@ class ComputationPanel(QWidget):
                 for idx, row_data in enumerate(rows):
                     if str(row_data.get("channel", "")) != str(pending_channel):
                         continue
-                    try:
-                        delta = abs(float(row_data.get("time_s", np.inf)) - float(pending_time))
-                    except (TypeError, ValueError):
+                    candidate_time = self._coerce_float(row_data.get("time_s"), np.inf)
+                    if not np.isfinite(candidate_time):
                         continue
+                    delta = abs(candidate_time - float(pending_time))
                     if delta < best_delta:
                         best_index = int(idx)
                         best_delta = float(delta)
@@ -3449,6 +5241,7 @@ class ComputationPanel(QWidget):
         grid_btn.clicked.connect(show_grid)
         gamma_filter_check.toggled.connect(lambda _checked: show_zoom(int(state["index"])))
         cast(Any, zoom_plot.scene()).sigMouseClicked.connect(on_zoom_plot_clicked)
+        cast(Any, filtered_zoom_plot.scene()).sigMouseClicked.connect(on_zoom_plot_clicked)
         level_combo.currentIndexChanged.connect(lambda _index: populate())
         channel_combo.currentIndexChanged.connect(lambda _index: populate())
         min_power.valueChanged.connect(lambda _value: populate())
@@ -3476,28 +5269,26 @@ class ComputationPanel(QWidget):
         marker_mode = str(mode or "all")
         markers: dict[str, list[dict[str, float | str]]] = {}
         for channel_result in result.channels:
-            gamma_events = [
-                event
+            official_classes = {
+                id(event): self._gamma_event_official_class(event)
                 for event in channel_result.events
-                if (
-                    event.gamma_power is not None
-                    and event.gamma_duration_ms is not None
-                    and (
-                        float(event.gamma_power) > 0.0
-                        or float(event.gamma_duration_ms) > 0.0
-                    )
-                )
-            ]
-            gamma_ids = {id(event) for event in gamma_events}
-            gamma_spikes = len(gamma_events)
+            }
+            gamma_spikes = sum(
+                1 for event in channel_result.events
+                if official_classes.get(id(event)) == "gamma"
+            )
             if marker_mode == "gamma" and gamma_spikes == 0:
                 continue
             if marker_mode == "non_gamma" and gamma_spikes > 0:
                 continue
 
             events: list[dict[str, float | str]] = []
+            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+            fs = float(metadata.get("fs", 0.0) or 0.0)
+            data_start_s = float(metadata.get("data_start_s", 0.0) or 0.0)
             for event in channel_result.events:
-                is_gamma = id(event) in gamma_ids
+                official_class = official_classes.get(id(event), "non-gamma")
+                is_gamma = official_class == "gamma"
                 if marker_mode == "gamma" and not is_gamma:
                     continue
                 if marker_mode == "non_gamma" and is_gamma:
@@ -3508,9 +5299,25 @@ class ComputationPanel(QWidget):
                     continue
                 if not np.isfinite(time_s):
                     continue
+                start_time_s = time_s
+                end_time_s = time_s
+                if fs > 0.0:
+                    try:
+                        p1 = event.boundary_p1_sample
+                        n2 = event.boundary_n2_sample
+                        if p1 is not None and n2 is not None:
+                            start_time_s = data_start_s + float(p1) / fs
+                            end_time_s = data_start_s + float(n2) / fs
+                    except (TypeError, ValueError):
+                        start_time_s = time_s
+                        end_time_s = time_s
+                if end_time_s < start_time_s:
+                    start_time_s, end_time_s = end_time_s, start_time_s
                 events.append(
                     {
                         "time_s": time_s,
+                        "start_time_s": start_time_s,
+                        "end_time_s": end_time_s,
                         "kind": "gamma" if is_gamma else "regular",
                     }
                 )
@@ -3527,16 +5334,17 @@ class ComputationPanel(QWidget):
             channel = str(row.get("channel", ""))
             if not channel:
                 continue
-            try:
-                time_s = float(row.get("time_s", np.nan))
-            except (TypeError, ValueError):
-                continue
+            time_s = self._coerce_float(row.get("time_s"), np.nan)
             if not np.isfinite(time_s):
                 continue
-            kind = "gamma" if bool(row.get("is_gamma", False)) else "regular"
+            kind = "gamma" if self._gamma_row_official_class(row) == "gamma" else "regular"
+            start_time_s = self._coerce_float(row.get("event_start_time_s"), time_s)
+            end_time_s = self._coerce_float(row.get("event_stop_time_s"), time_s)
             markers.setdefault(channel, []).append(
                 {
                     "time_s": time_s,
+                    "start_time_s": min(start_time_s, end_time_s),
+                    "end_time_s": max(start_time_s, end_time_s),
                     "kind": kind,
                 }
             )
@@ -3603,6 +5411,7 @@ class ComputationPanel(QWidget):
             channel_name = str(channel_result.channel)
             for event_index, event in enumerate(channel_result.events):
                 is_gamma = self._gamma_event_is_gamma(event)
+                model_class = "gamma" if is_gamma else "non-gamma"
                 duration_ms = event.gamma_duration_ms
                 gamma_start_s = None
                 gamma_stop_s = None
@@ -3642,6 +5451,17 @@ class ComputationPanel(QWidget):
                         "boundary_n2_time_s": n2_time,
                         "gamma_start_time_s": gamma_start_s,
                         "gamma_stop_time_s": gamma_stop_s,
+                        "model_class": model_class,
+                        "manual_class": self._normalize_gamma_manual_class(
+                            getattr(event, "manual_class", None)
+                        )
+                        if getattr(event, "manual_class", None)
+                        else None,
+                        "manual_review_status": str(
+                            getattr(event, "manual_review_status", "unreviewed")
+                            or "unreviewed"
+                        ),
+                        "source_event": event,
                         "error": event.error,
                     }
                 )
@@ -3662,6 +5482,31 @@ class ComputationPanel(QWidget):
             and (power > 0.0 or duration > 0.0)
         )
 
+    def _normalize_gamma_manual_class(self, label: object) -> str:
+        text = str(label or "").strip().lower().replace("_", "-")
+        if text in {"gamma", "gamma spike", "gamma-spike"}:
+            return "gamma"
+        if text in {"non-gamma", "nongamma", "non gamma", "regular", "regular spike"}:
+            return "non-gamma"
+        if text in {"unclassified", "candidate", "unknown", "not-classified"}:
+            return "unclassified"
+        return "unclassified" if not text else str(label)
+
+    def _gamma_event_official_class(self, event: GammaSpikeEventResult) -> str:
+        manual_class = getattr(event, "manual_class", None)
+        if manual_class:
+            return self._normalize_gamma_manual_class(manual_class)
+        return "gamma" if self._gamma_event_is_gamma(event) else "non-gamma"
+
+    def _gamma_row_official_class(self, row: GammaReviewRow) -> str:
+        manual_class = row.get("manual_class")
+        if manual_class:
+            return self._normalize_gamma_manual_class(manual_class)
+        model_class = str(row.get("model_class", "") or "").strip()
+        if model_class:
+            return self._normalize_gamma_manual_class(model_class)
+        return "gamma" if bool(row.get("is_gamma", False)) else "non-gamma"
+
     def _gamma_summary_rows(
         self,
         result: GammaSpikeComputationResult,
@@ -3672,14 +5517,7 @@ class ComputationPanel(QWidget):
             gamma_events = [
                 event
                 for event in channel_result.events
-                if (
-                    event.gamma_power is not None
-                    and event.gamma_duration_ms is not None
-                    and (
-                        float(event.gamma_power) > 0.0
-                        or float(event.gamma_duration_ms) > 0.0
-                    )
-                )
+                if self._gamma_event_official_class(event) == "gamma"
             ]
             gamma_spikes = len(gamma_events)
             non_gamma_spikes = max(0, total_spikes - gamma_spikes)
@@ -3689,11 +5527,19 @@ class ComputationPanel(QWidget):
                 else 0.0
             )
             powers = np.asarray(
-                [float(event.gamma_power) for event in gamma_events],
+                [
+                    float(event.gamma_power)
+                    for event in gamma_events
+                    if event.gamma_power is not None
+                ],
                 dtype=float,
             )
             durations = np.asarray(
-                [float(event.gamma_duration_ms) for event in gamma_events],
+                [
+                    float(event.gamma_duration_ms)
+                    for event in gamma_events
+                    if event.gamma_duration_ms is not None
+                ],
                 dtype=float,
             )
             finite_powers = powers[np.isfinite(powers)]
@@ -3852,6 +5698,33 @@ class ComputationPanel(QWidget):
             "threshold_sigma": float(self.ei_params["threshold_sigma"]),
             "energy_window_sec": float(self.ei_params["energy_window_sec"]),
             "hfer_window_sec": float(self.ei_params["hfer_window_sec"]),
+        }
+
+    def _build_hfo_metadata(
+        self,
+        *,
+        analysis_window_s: tuple[float, float],
+        notch_modes_by_channel: dict[str, str] | None = None,
+    ) -> dict:
+        active_notch_modes = sorted(
+            {
+                str(mode)
+                for mode in (notch_modes_by_channel or {}).values()
+                if str(mode) != "Off"
+            }
+        )
+        return {
+            "algorithm": "HFO",
+            "montage_used": self._current_montage_name(),
+            "analysis_window_s": list(map(float, analysis_window_s)),
+            "manual_analysis_window": True,
+            "notch_filter": bool(active_notch_modes),
+            "notch_modes": active_notch_modes,
+            "notch_modes_by_channel": {
+                str(channel): str(mode)
+                for channel, mode in (notch_modes_by_channel or {}).items()
+                if str(mode) != "Off"
+            },
         }
 
     def _clear_ei_outputs(self) -> None:

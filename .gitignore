@@ -9,10 +9,13 @@ __pycache__/
 scripts/
 tools/
 synthetic_long_recordings/
+.tmp_pyHFO_pyBrain/
+.tmp_omni_ieeg_validation/
+reports/performance/
+reports/09_hfo_backend_smoke_test/*/
 
 # OS / editor
 .DS_Store
 .vscode/
-git rm -r --cached .venv
 
 codex.md

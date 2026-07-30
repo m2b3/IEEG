@@ -109,6 +109,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
     requestOpenAnnotationsPanel = Signal()
     requestEditChannelGroups = Signal()
     gammaSpikeMarkerClicked = Signal(str, float)  # channel name, absolute time_s
+    hfoMarkerClicked = Signal(str, float)  # channel name, absolute time_s
     #  Saving data
     hiddenChannelsChanged = Signal()
     badChannelsChanged = Signal()
@@ -177,6 +178,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._recruitment_marker_items: list[Any] = []
         self._gamma_spike_marker_events: dict[str, list[dict[str, float | str]]] = {}
         self._gamma_spike_marker_items: list[Any] = []
+        self._hfo_marker_events: dict[str, list[dict[str, float | str]]] = {}
+        self._hfo_marker_items: list[Any] = []
         self._ei_label_styles: dict[str, dict[str, float | int]] = {}
         self._context_menu_active = False
 
@@ -575,6 +578,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_analysis_window_markers(t_ds)
         self._draw_recruitment_markers(t_ds, visible_abs)
         self._draw_gamma_spike_markers(t_ds, visible_abs)
+        self._draw_hfo_markers(t_ds, visible_abs, seg_ds_uv)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
 
@@ -621,6 +625,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._analysis_window_marker_items = []
         self._recruitment_marker_items = []
         self._gamma_spike_marker_items = []
+        self._hfo_marker_items = []
         self._minmax_items = []
 
     def _ensure_signal_item(self, item) -> None:
@@ -1054,6 +1059,56 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         if self._raw is not None:
             self.render()
 
+    def set_hfo_markers(
+        self,
+        markers: dict[str, list[dict[str, float | str]]] | None,
+    ) -> None:
+        cleaned: dict[str, list[dict[str, float | str]]] = {}
+        if isinstance(markers, dict):
+            for channel_name, events in markers.items():
+                if not isinstance(events, list):
+                    continue
+                cleaned_events: list[dict[str, float | str]] = []
+                for event in events:
+                    if not isinstance(event, dict):
+                        continue
+                    try:
+                        time_s = float(event.get("time_s", np.nan))
+                    except (TypeError, ValueError):
+                        continue
+                    if not np.isfinite(time_s):
+                        continue
+                    try:
+                        start_time_s = float(event.get("start_time_s", time_s))
+                    except (TypeError, ValueError):
+                        start_time_s = time_s
+                    try:
+                        end_time_s = float(event.get("end_time_s", time_s))
+                    except (TypeError, ValueError):
+                        end_time_s = time_s
+                    if not np.isfinite(start_time_s):
+                        start_time_s = time_s
+                    if not np.isfinite(end_time_s):
+                        end_time_s = time_s
+                    if end_time_s < start_time_s:
+                        start_time_s, end_time_s = end_time_s, start_time_s
+                    kind = str(event.get("kind", "hfo"))
+                    event_id = str(event.get("event_id", ""))
+                    cleaned_events.append(
+                        {
+                            "time_s": time_s,
+                            "start_time_s": start_time_s,
+                            "end_time_s": end_time_s,
+                            "kind": kind,
+                            "event_id": event_id,
+                        }
+                    )
+                if cleaned_events:
+                    cleaned[str(channel_name)] = cleaned_events
+        self._hfo_marker_events = cleaned
+        if self._raw is not None:
+            self.render()
+
     def set_ei_label_styles(self, styles: dict[str, dict[str, float | int]] | None) -> None:
         cleaned: dict[str, dict[str, float | int]] = {}
         if isinstance(styles, dict):
@@ -1134,7 +1189,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         gamma_color = (255, 151, 67, 235)
         regular_pen = pg.mkPen(regular_color, width=3)
         gamma_pen = pg.mkPen(gamma_color, width=3)
+        regular_rail_pen = pg.mkPen(regular_color, width=4.0)
+        gamma_rail_pen = pg.mkPen(gamma_color, width=4.0)
         tick_half_height = 0.16 * float(self._spacing)
+        min_visible_width_s = max(0.002, 2.0 * float(np.nanmedian(np.diff(t_arr))))
+        _y_min, y_max = self._sig_vb.viewRange()[1]
+        view_height = max(1e-9, float(y_max) - float(_y_min))
+        top_rail_y = float(y_max) - 0.035 * view_height
         drew_any = False
 
         for visible_row, abs_idx in enumerate(list(visible_abs)):
@@ -1158,6 +1219,20 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                     continue
                 kind = str(event.get("kind", "regular"))
                 pen = gamma_pen if kind == "gamma" else regular_pen
+                rail_pen = gamma_rail_pen if kind == "gamma" else regular_rail_pen
+                try:
+                    start_time = float(event.get("start_time_s", marker_time))
+                    end_time = float(event.get("end_time_s", marker_time))
+                except (TypeError, ValueError):
+                    start_time = marker_time
+                    end_time = marker_time
+                if end_time < start_time:
+                    start_time, end_time = end_time, start_time
+                if end_time <= start_time:
+                    start_time = marker_time - 0.5 * min_visible_width_s
+                    end_time = marker_time + 0.5 * min_visible_width_s
+                visible_start = max(float(start_time), t0)
+                visible_end = min(float(end_time), t1)
                 tick = pg.PlotDataItem(
                     [marker_time, marker_time],
                     [y0, y1],
@@ -1172,6 +1247,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 tick.setZValue(23)
                 self.signal_plot.addItem(tick)
                 self._gamma_spike_marker_items.append(tick)
+
+                rail = pg.PlotDataItem(
+                    [visible_start, visible_end],
+                    [top_rail_y, top_rail_y],
+                    pen=rail_pen,
+                )
+                rail.setCurveClickable(True, width=8)
+                rail.sigClicked.connect(
+                    lambda _item, _event, channel=channel_name, t=marker_time: (
+                        self.gammaSpikeMarkerClicked.emit(str(channel), float(t))
+                    )
+                )
+                rail.setZValue(24)
+                self.signal_plot.addItem(rail)
+                self._gamma_spike_marker_items.append(rail)
                 drew_any = True
 
         if drew_any:
@@ -1209,6 +1299,156 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         label.setZValue(31)
         self.signal_plot.addItem(label)
         self._gamma_spike_marker_items.append(label)
+
+    def _draw_hfo_markers(
+        self,
+        t_ds: np.ndarray,
+        visible_abs: list[int],
+        seg_ds_uv: np.ndarray,
+    ) -> None:
+        if not self._hfo_marker_events:
+            return
+
+        t_arr = np.asarray(t_ds, dtype=float).reshape(-1)
+        if t_arr.size < 2:
+            return
+        data_arr = np.asarray(seg_ds_uv, dtype=float)
+        if data_arr.ndim != 2 or data_arr.shape[1] != t_arr.size:
+            return
+
+        t0 = float(t_arr[0])
+        t1 = float(t_arr[-1])
+        display_names = self.get_channel_names()
+        colors = {
+            "artifact": (220, 50, 50, 235),
+            "non-spike HFO": (50, 100, 220, 235),
+            "spike-HFO": (50, 175, 80, 235),
+            "unclassified": (120, 130, 145, 235),
+        }
+        overlay_pens = {kind: pg.mkPen(color, width=2.6) for kind, color in colors.items()}
+        rail_pens = {kind: pg.mkPen(color, width=4.0) for kind, color in colors.items()}
+        centered_data = self._center_traces_for_display(data_arr)
+        gain_factor = self._display_gain_factor()
+        min_visible_width_s = max(0.002, 2.0 * float(np.nanmedian(np.diff(t_arr))))
+        _y_min, y_max = self._sig_vb.viewRange()[1]
+        view_height = max(1e-9, float(y_max) - float(_y_min))
+        top_rail_y = float(y_max) - 0.035 * view_height
+        drew_kinds: set[str] = set()
+
+        for visible_row, abs_idx in enumerate(list(visible_abs)):
+            abs_idx = int(abs_idx)
+            if not (0 <= abs_idx < len(display_names)):
+                continue
+            channel_name = str(display_names[abs_idx])
+            events = self._hfo_marker_events.get(channel_name, [])
+            if not events:
+                continue
+
+            y_center = (len(visible_abs) - 1 - visible_row) * float(self._spacing)
+            if visible_row >= centered_data.shape[0]:
+                continue
+            for event in events:
+                try:
+                    marker_time = float(event.get("time_s", np.nan))
+                except (TypeError, ValueError):
+                    continue
+                try:
+                    start_time = float(event.get("start_time_s", marker_time))
+                    end_time = float(event.get("end_time_s", marker_time))
+                except (TypeError, ValueError):
+                    start_time = marker_time
+                    end_time = marker_time
+                if end_time < start_time:
+                    start_time, end_time = end_time, start_time
+                if end_time <= start_time:
+                    start_time = marker_time - 0.5 * min_visible_width_s
+                    end_time = marker_time + 0.5 * min_visible_width_s
+                if end_time < t0 or start_time > t1:
+                    continue
+                kind = str(event.get("kind", "non-spike HFO"))
+                overlay_pen = overlay_pens.get(kind, overlay_pens["unclassified"])
+                rail_pen = rail_pens.get(kind, rail_pens["unclassified"])
+                visible_start = max(float(start_time), t0)
+                visible_end = min(float(end_time), t1)
+                sample_mask = (t_arr >= visible_start) & (t_arr <= visible_end)
+                sample_idx = np.flatnonzero(sample_mask)
+                if sample_idx.size < 2:
+                    nearest = int(np.argmin(np.abs(t_arr - float(marker_time))))
+                    lo = max(0, nearest - 1)
+                    hi = min(t_arr.size, nearest + 2)
+                    sample_idx = np.arange(lo, hi, dtype=int)
+                x_segment = t_arr[sample_idx]
+                y_segment = centered_data[visible_row, sample_idx] * gain_factor + y_center
+
+                overlay = pg.PlotDataItem(
+                    x_segment,
+                    y_segment,
+                    pen=overlay_pen,
+                )
+                overlay.setCurveClickable(True, width=8)
+                overlay.sigClicked.connect(
+                    lambda _item, _event, channel=channel_name, t=marker_time: (
+                        self.hfoMarkerClicked.emit(str(channel), float(t))
+                    )
+                )
+                overlay.setZValue(23)
+                self.signal_plot.addItem(overlay)
+                self._hfo_marker_items.append(overlay)
+
+                rail = pg.PlotDataItem(
+                    [visible_start, visible_end],
+                    [top_rail_y, top_rail_y],
+                    pen=rail_pen,
+                )
+                rail.setCurveClickable(True, width=8)
+                rail.sigClicked.connect(
+                    lambda _item, _event, channel=channel_name, t=marker_time: (
+                        self.hfoMarkerClicked.emit(str(channel), float(t))
+                    )
+                )
+                rail.setZValue(24)
+                self.signal_plot.addItem(rail)
+                self._hfo_marker_items.append(rail)
+                drew_kinds.add(kind if kind in colors else "unclassified")
+
+        if drew_kinds:
+            self._draw_hfo_marker_legend(colors=colors, visible_kinds=drew_kinds)
+
+    def _draw_hfo_marker_legend(
+        self,
+        *,
+        colors: dict[str, tuple[int, int, int, int]],
+        visible_kinds: set[str],
+    ) -> None:
+        x_min, x_max = self._sig_vb.viewRange()[0]
+        y_min, y_max = self._sig_vb.viewRange()[1]
+        x = float(x_max) - 0.012 * max(1e-9, float(x_max) - float(x_min))
+        y = float(y_max) - 0.11 * max(1e-9, float(y_max) - float(y_min))
+
+        label_order = ["artifact", "non-spike HFO", "spike-HFO", "unclassified"]
+        parts = []
+        for kind in label_order:
+            if kind not in visible_kinds:
+                continue
+            rgb = colors[kind][:3]
+            parts.append(f"<span style='color:rgb{rgb}; font-weight:800;'>|</span> {kind}")
+        if not parts:
+            return
+        html = (
+            "<span style='color:#111; font-weight:600;'>"
+            + "&nbsp;&nbsp;".join(parts)
+            + "</span>"
+        )
+        label = pg.TextItem(
+            html=html,
+            anchor=(1.0, 0.0),
+            fill=pg.mkBrush(255, 255, 255, 235),
+            border=pg.mkPen(80, 80, 80, 190),
+        )
+        label.setPos(x, y)
+        label.setZValue(30)
+        self.signal_plot.addItem(label)
+        self._hfo_marker_items.append(label)
 
     def _draw_cursor(self, t_ds: np.ndarray):
         t0 = float(np.asarray(t_ds).reshape(-1)[0].item())

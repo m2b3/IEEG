@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from app.computation.gamma_spike.wire_algorithm import GammaSpikeComputationResult
+from app.computation.hfo.types import HFOComputationResult
 from app.computation.rei.algorithm import EIComputationResult
 
 
@@ -258,16 +259,24 @@ def export_gamma_spike_result(
         gamma_events = [
             event
             for event in channel_result.events
-            if _gamma_event_is_gamma(event.gamma_power, event.gamma_duration_ms)
+            if _gamma_event_official_is_gamma(event)
         ]
         total_spikes = int(channel_result.spike_count)
         gamma_spikes = len(gamma_events)
         powers = np.asarray(
-            [float(event.gamma_power) for event in gamma_events],
+            [
+                float(event.gamma_power)
+                for event in gamma_events
+                if event.gamma_power is not None
+            ],
             dtype=float,
         )
         durations = np.asarray(
-            [float(event.gamma_duration_ms) for event in gamma_events],
+            [
+                float(event.gamma_duration_ms)
+                for event in gamma_events
+                if event.gamma_duration_ms is not None
+            ],
             dtype=float,
         )
         finite_powers = powers[np.isfinite(powers)]
@@ -307,6 +316,12 @@ def export_gamma_spike_result(
                         event.gamma_power,
                         event.gamma_duration_ms,
                     ),
+                    "model_class": (
+                        "gamma"
+                        if _gamma_event_is_gamma(event.gamma_power, event.gamma_duration_ms)
+                        else "non-gamma"
+                    ),
+                    "official_class": _gamma_event_official_class(event),
                     "boundary_p1_sample": _sample0_to_export_sample1(
                         event.boundary_p1_sample
                     ),
@@ -334,6 +349,8 @@ def export_gamma_spike_result(
                     "gamma_power": _finite_float(event.gamma_power),
                     "gamma_frequency_hz": _finite_float(event.gamma_frequency_hz),
                     "gamma_duration_ms": _finite_float(event.gamma_duration_ms),
+                    "manual_class": getattr(event, "manual_class", None),
+                    "manual_review_status": getattr(event, "manual_review_status", "unreviewed"),
                     "error": event.error,
                 }
             )
@@ -362,6 +379,8 @@ def export_gamma_spike_result(
             "sample",
             "time_s",
             "is_gamma",
+            "model_class",
+            "official_class",
             "boundary_p1_sample",
             "boundary_n1_sample",
             "boundary_n2_sample",
@@ -371,6 +390,8 @@ def export_gamma_spike_result(
             "gamma_power",
             "gamma_frequency_hz",
             "gamma_duration_ms",
+            "manual_class",
+            "manual_review_status",
             "error",
         ],
         event_rows,
@@ -383,6 +404,239 @@ def export_gamma_spike_result(
     _write_readme(readme_path, _gamma_readme_text())
 
     return [summary_path, events_path, metadata_path, readme_path]
+
+
+def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    analysis_duration_min = _hfo_analysis_duration_min(metadata)
+
+    summary_rows: list[dict[str, Any]] = []
+    for channel_result in result.channels:
+        channel_events = list(channel_result.events)
+        active_channel_events = [
+            event for event in channel_events
+            if _hfo_event_class(event) != "deleted"
+        ]
+        candidate_count = len(active_channel_events)
+        deleted_count = len(channel_events) - candidate_count
+        artifact_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "artifact")
+        spike_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "spike-HFO")
+        non_spike_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "HFO")
+        accepted_count = non_spike_count + spike_count
+        boundary_count = sum(1 for event in active_channel_events if bool(getattr(event, "boundary_warning", event.is_boundary)))
+        summary_rows.append(
+            {
+                "channel": channel_result.channel,
+                "candidate_count": candidate_count,
+                "accepted_hfo_count": accepted_count,
+                "non_spike_hfo_count": non_spike_count,
+                "spike_hfo_count": spike_count,
+                "artifact_count": artifact_count,
+                "candidate_rate_per_min": _rate_per_min(candidate_count, analysis_duration_min),
+                "accepted_hfo_rate_per_min": _rate_per_min(accepted_count, analysis_duration_min),
+                "non_spike_hfo_rate_per_min": _rate_per_min(non_spike_count, analysis_duration_min),
+                "spike_hfo_rate_per_min": _rate_per_min(spike_count, analysis_duration_min),
+                "artifact_percentage": (
+                    100.0 * float(artifact_count) / float(candidate_count)
+                    if candidate_count > 0
+                    else 0.0
+                ),
+                "deleted_event_count": deleted_count,
+                "boundary_event_count": boundary_count,
+            }
+        )
+
+    event_rows: list[dict[str, Any]] = []
+    for event_number, event in enumerate(result.events, start=1):
+        event_rows.append(
+            {
+                "event_id": str(getattr(event, "event_id", "") or f"hfo_{event_number:06d}"),
+                "channel": event.channel,
+                "start_time_s": _finite_float(event.start_time_s),
+                "end_time_s": _finite_float(event.end_time_s),
+                "duration_ms": _finite_float(event.duration_ms),
+                "detector": event.detector,
+                "boundary_warning": bool(getattr(event, "boundary_warning", event.is_boundary)),
+                "real_hfo_probability": _finite_float(getattr(event, "real_hfo_probability", None)),
+                "artifact_probability": _finite_float(getattr(event, "artifact_probability", event.artifact_score)),
+                "spike_hfo_probability": _finite_float(getattr(event, "spike_hfo_probability", event.spike_score)),
+                "final_model_class": getattr(event, "final_model_class", None) or event.classification_label,
+                "manual_class": getattr(event, "manual_class", None),
+                "official_class": _hfo_event_class(event),
+                "manual_review_status": getattr(event, "manual_review_status", "unreviewed"),
+                "start_sample": int(event.start_sample),
+                "end_sample": int(event.end_sample),
+                "peak_time_s": _finite_float(event.peak_time_s),
+                "band_label": event.band_label,
+                "low_freq_hz": _finite_float(event.low_freq_hz),
+                "high_freq_hz": _finite_float(event.high_freq_hz),
+                "effective_high_freq_hz": _finite_float(metadata.get("effective_high_freq_hz")),
+                "input_sampling_frequency_hz": _finite_float(metadata.get("input_fs")),
+                "detection_sampling_frequency_hz": _finite_float(metadata.get("detection_fs")),
+                "legacy_artifact_score": _finite_float(event.artifact_score),
+                "legacy_spike_score": _finite_float(event.spike_score),
+                "legacy_hfo_score": _finite_float(event.hfo_score),
+                "legacy_classification_label": event.classification_label,
+                "error": event.error,
+            }
+        )
+
+    summary_path = output_dir / "hfo_channel_summary.csv"
+    _write_rows(
+        summary_path,
+        [
+            "channel",
+            "candidate_count",
+            "accepted_hfo_count",
+            "non_spike_hfo_count",
+            "spike_hfo_count",
+            "artifact_count",
+            "candidate_rate_per_min",
+            "accepted_hfo_rate_per_min",
+            "non_spike_hfo_rate_per_min",
+            "spike_hfo_rate_per_min",
+            "artifact_percentage",
+            "deleted_event_count",
+            "boundary_event_count",
+        ],
+        summary_rows,
+    )
+
+    events_path = output_dir / "hfo_events.csv"
+    _write_rows(
+        events_path,
+        [
+            "event_id",
+            "channel",
+            "start_time_s",
+            "end_time_s",
+            "duration_ms",
+            "detector",
+            "boundary_warning",
+            "real_hfo_probability",
+            "artifact_probability",
+            "spike_hfo_probability",
+            "final_model_class",
+            "manual_class",
+            "official_class",
+            "manual_review_status",
+            "start_sample",
+            "end_sample",
+            "peak_time_s",
+            "band_label",
+            "low_freq_hz",
+            "high_freq_hz",
+            "effective_high_freq_hz",
+            "input_sampling_frequency_hz",
+            "detection_sampling_frequency_hz",
+            "legacy_artifact_score",
+            "legacy_spike_score",
+            "legacy_hfo_score",
+            "legacy_classification_label",
+            "error",
+        ],
+        event_rows,
+    )
+
+    metadata_path = output_dir / "hfo_metadata.json"
+    _write_json(metadata_path, _compact_hfo_metadata(metadata))
+
+    readme_path = output_dir / "README.txt"
+    _write_readme(readme_path, _hfo_readme_text())
+
+    return [summary_path, events_path, metadata_path, readme_path]
+
+
+def _hfo_analysis_duration_min(metadata: dict[str, Any]) -> float:
+    window_s = metadata.get("analysis_window_s")
+    if isinstance(window_s, (list, tuple)) and len(window_s) >= 2:
+        start = _finite_float(window_s[0])
+        stop = _finite_float(window_s[1])
+        if start is not None and stop is not None and stop > start:
+            return (float(stop) - float(start)) / 60.0
+    return 0.0
+
+
+def _rate_per_min(count: int, duration_min: float) -> float:
+    return float(count) / float(duration_min) if float(duration_min) > 0.0 else 0.0
+
+
+def _hfo_event_class(event: Any) -> str:
+    label = str(
+        getattr(event, "manual_class", None)
+        or getattr(event, "final_model_class", None)
+        or getattr(event, "classification_label", "")
+        or ""
+    ).strip().lower().replace("_", "-")
+    if label in {"deleted", "excluded"}:
+        return "deleted"
+    if "artifact" in label:
+        return "artifact"
+    if label in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
+        return "spike-HFO"
+    if label in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
+        return "HFO"
+    return "candidate"
+
+
+def _compact_hfo_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "algorithm": metadata.get("algorithm", "HFO"),
+        "source_file_name": metadata.get("source_file_name"),
+        "source_file_path": metadata.get("source_file_path"),
+        "analysis_window_s": _json_safe(metadata.get("analysis_window_s")),
+        "input_sampling_frequency_hz": _finite_float(metadata.get("input_fs")),
+        "detection_sampling_frequency_hz": _finite_float(metadata.get("detection_fs")),
+        "resampled_to_hz": _finite_float(metadata.get("resampled_to_hz")),
+        "input_units": metadata.get("input_units"),
+        "detector_version": metadata.get("detector_version"),
+        "active_candidate_detectors": _json_safe(
+            metadata.get("active_candidate_detectors", [])
+        ),
+        "band_label": metadata.get("band_label"),
+        "low_freq_hz": _finite_float(metadata.get("low_freq_hz")),
+        "high_freq_hz": _finite_float(metadata.get("high_freq_hz")),
+        "effective_high_freq_hz": _finite_float(metadata.get("effective_high_freq_hz")),
+        "threshold_sigma": _finite_float(metadata.get("threshold_sigma")),
+        "min_duration_ms": _finite_float(metadata.get("min_duration_ms")),
+        "max_duration_ms": _finite_float(metadata.get("max_duration_ms")),
+        "raw_candidate_events": int(metadata.get("raw_candidate_events", 0) or 0),
+        "duration_excluded_events": int(metadata.get("duration_excluded_events", 0) or 0),
+        "boundary_padding_s": _finite_float(metadata.get("boundary_padding_s")),
+        "boundary_excluded_events": int(metadata.get("boundary_excluded_events", 0) or 0),
+        "merge_gap_ms": _finite_float(metadata.get("merge_gap_ms")),
+        "min_cycles": _finite_float(metadata.get("min_cycles")),
+        "detector_parameters": _json_safe(metadata.get("detector_parameters", {})),
+        "event_window_ms": _finite_float(metadata.get("event_window_ms")),
+        "notch_filter": bool(metadata.get("notch_filter", False)),
+        "notch_modes": _json_safe(metadata.get("notch_modes", [])),
+        "input_boundary": metadata.get("input_boundary"),
+        "processing_order": _json_safe(metadata.get("processing_order", [])),
+        "selected_channels": _json_safe(metadata.get("selected_channels", [])),
+        "bad_channels_excluded": _json_safe(metadata.get("bad_channels_excluded", [])),
+        "reference_mode": metadata.get("reference_mode"),
+        "bipolar_pairs": _json_safe(metadata.get("bipolar_pairs", [])),
+        "preprocessing_log": _json_safe(metadata.get("preprocessing_log", [])),
+        "classification_status": metadata.get("classification_status"),
+        "classifier_implementation": metadata.get("classifier_implementation"),
+        "classifier_feature_freq_range_hz": _json_safe(
+            metadata.get("classifier_feature_freq_range_hz")
+        ),
+        "classification_label_counts": _json_safe(metadata.get("classification_label_counts", {})),
+        "official_label_counts": _json_safe(metadata.get("official_label_counts", {})),
+        "manual_reviewed_events": int(metadata.get("manual_reviewed_events", 0) or 0),
+        "manual_deleted_events": int(metadata.get("manual_deleted_events", 0) or 0),
+        "total_events": int(metadata.get("total_events", 0) or 0),
+        "n_channels": int(metadata.get("n_channels", 0) or 0),
+        "n_samples": int(metadata.get("n_samples", 0) or 0),
+        "output_files": [
+            "hfo_channel_summary.csv",
+            "hfo_events.csv",
+            "hfo_metadata.json",
+            "README.txt",
+        ],
+    }
 
 
 def _compact_gamma_metadata(
@@ -505,6 +759,65 @@ Notes:
 """
 
 
+def _hfo_readme_text() -> str:
+    return """HFO Export
+
+Files:
+- hfo_channel_summary.csv
+  One row per channel with candidate counts, accepted HFO counts, artifact
+  counts, spike-HFO counts, rates per minute, artifact percentage, and boundary
+  event counts. Manually deleted events are excluded from active counts and
+  reported separately.
+
+- hfo_events.csv
+  One row per detected event. Includes channel, candidate detector, event
+  timing, boundary warning, pyHFO probabilities, final model class,
+  manual review fields, selected band, and sampling-frequency details.
+
+  Key event columns:
+  - event_id: stable event identifier from the run.
+  - channel: reviewed channel or bipolar derivation.
+  - start_time_s, end_time_s, duration_ms: event timing.
+  - detector: candidate detector that produced the event.
+  - boundary_warning: true when the classifier waveform window touches or
+    approaches the available signal boundary.
+  - real_hfo_probability: pyHFO Model A accepted-HFO probability.
+  - artifact_probability: complement of real_hfo_probability when available.
+  - spike_hfo_probability: pyHFO Model S spike-association probability.
+  - final_model_class: classifier proposition.
+  - manual_class: official reviewer class after manual correction; empty until
+    reviewed. "deleted" means manually excluded from active review/results.
+  - official_class: derived active class used for display, summaries, and
+    active exported counts. Equals manual_class when reviewed, otherwise the
+    classifier proposition.
+  - manual_review_status: unreviewed, reviewed, or deleted.
+
+- hfo_metadata.json
+  Records the analyzed file, manual analysis window, sampling frequencies,
+  internal 1000 Hz resampling, GUI notch settings, candidate detectors,
+  classifier status, model label counts, reviewed official label counts, input
+  boundary, and processing order.
+
+Notes:
+- Recordings below 1000 Hz are rejected before HFO detection.
+- Recordings above 1000 Hz are resampled internally to 1000 Hz.
+- HFO uses the notch setting selected in the main GUI.
+- The validated pyhfo_omni_legacy default uses the 80-300 Hz detector band after internal
+  1000 Hz resampling.
+- Candidates longer than max_duration_ms are excluded before waveform extraction
+  and classification; excluded counts are recorded in metadata.
+- Candidates inside boundary_padding_s from the selected analysis-window start or
+  end are excluded before waveform extraction and classification. Use 0 s for
+  exact legacy comparison runs.
+- The pyHFO Model A positive score is exported as
+  real_hfo_probability; artifact_probability is its complement.
+- final_model_class is the immutable classifier proposition. manual_class is the
+  reviewer correction. official_class is derived from those two fields and
+  should not be used to overwrite the classifier proposition on import.
+- Time values are in seconds.
+"""
+
+
 def _pyplot():
     import matplotlib
 
@@ -544,3 +857,32 @@ def _gamma_event_is_gamma(power: Any, duration_ms: Any) -> bool:
     if power_value is None or duration_value is None:
         return False
     return bool(power_value > 0.0 or duration_value > 0.0)
+
+
+def _normalize_gamma_class(label: Any) -> str:
+    text = str(label or "").strip().lower().replace("_", "-")
+    if text in {"gamma", "gamma spike", "gamma-spike"}:
+        return "gamma"
+    if text in {"non-gamma", "nongamma", "non gamma", "regular", "regular spike"}:
+        return "non-gamma"
+    if text in {"unclassified", "candidate", "unknown", "not-classified"}:
+        return "unclassified"
+    return "unclassified" if not text else str(label)
+
+
+def _gamma_event_official_class(event: Any) -> str:
+    manual_class = getattr(event, "manual_class", None)
+    if manual_class:
+        return _normalize_gamma_class(manual_class)
+    return (
+        "gamma"
+        if _gamma_event_is_gamma(
+            getattr(event, "gamma_power", None),
+            getattr(event, "gamma_duration_ms", None),
+        )
+        else "non-gamma"
+    )
+
+
+def _gamma_event_official_is_gamma(event: Any) -> bool:
+    return _gamma_event_official_class(event) == "gamma"

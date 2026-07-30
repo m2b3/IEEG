@@ -51,6 +51,8 @@ class GammaSpikeEventResult:
     gamma_frequency_hz: float | None
     gamma_duration_ms: float | None
     error: str | None = None
+    manual_class: str | None = None
+    manual_review_status: str = "unreviewed"
 
 
 @dataclass

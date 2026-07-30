@@ -1,41 +1,28 @@
 # app/expert_event_grid.py
-"""
-Expert Event Grid Widget for visualizing expert-reviewed HFO annotations.
-
-This module provides a modular widget that displays expert-reviewed events
-in a 6x4 grid format, allowing users to browse through HFO events with
-waveform previews, channel info, and review labels.
-
-Integration with MainWindow:
-    - Create an ExpertEventGridDialog as a separate review window
-    - Call load_events_for_edf(edf_path, events_path) to load events
-    - Connect the eventClicked signal to jump to event in main viewer
-    - Handle keyboard navigation (n/b keys) in the main window or here
-"""
+"""Reusable event grid widget for computed HFO review."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Optional, Callable, List, cast
 
 import numpy as np
 import pyqtgraph as pg
-from scipy.signal import butter, sosfiltfilt
+from scipy.signal import butter, sosfiltfilt, spectrogram
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFrame, QScrollArea, QComboBox,
-    QDialog, QFileDialog, QMessageBox
 )
 
 # Review label colors
 COLOR_REJECTED_ARTIFACT = QColor(220, 50, 50)  # red
 COLOR_SPK_HFO = QColor(50, 200, 50)            # green
 COLOR_NON_SPK_HFO = QColor(50, 100, 220)       # blue
+COLOR_UNCLASSIFIED = QColor(120, 130, 145)     # gray
+COLOR_DELETED = QColor(90, 90, 90)             # dark gray
 
 # Grid dimensions
 GRID_ROWS = 6
@@ -43,86 +30,30 @@ GRID_COLS = 4
 GRID_TOTAL = GRID_ROWS * GRID_COLS
 
 # Candidate HFOs are easier to review in a fixed centered context window.
-EVENT_CONTEXT_WINDOW_SECONDS = 0.570
+EVENT_CONTEXT_WINDOW_SECONDS = 0.5
+EVENT_CONTEXT_WINDOW_CHOICES_SECONDS = (0.25, 0.5, 1.0, 2.0)
 
 EVENT_REGION_BRUSH = (185, 185, 185, 55)
 EVENT_MARKER_COLOR = (215, 215, 215, 190)
 NEUTRAL_WAVEFORM_DARK = "#f2f2f2"
 NEUTRAL_WAVEFORM_LIGHT = "#202020"
+SPECTROGRAM_FREQ_MAX_HZ = 400.0
+SPECTROGRAM_DYNAMIC_RANGE_DB = 45.0
 
 DISPLAY_FILTERS: dict[str, tuple[float | None, float | None]] = {
     "Default (unfiltered)": (None, None),
-    "HFO 80-500 Hz": (80.0, 500.0),
+    "HFO 80-300 Hz": (80.0, 300.0),
     "Ripple 80-250 Hz": (80.0, 250.0),
     "Fast ripple 250-500 Hz": (250.0, 500.0),
 }
-DEFAULT_DISPLAY_FILTER = "HFO 80-500 Hz"
-
-
-def _matches_edf_file(value: object, edf_file: str) -> bool:
-    value_keys = _edf_file_match_keys(value)
-    target_keys = _edf_file_match_keys(edf_file)
-    return bool(value_keys and target_keys and value_keys.intersection(target_keys))
-
-
-def _edf_file_match_keys(value: object) -> set[str]:
-    text = str(value or "").strip().strip("\"'")
-    if not text:
-        return set()
-
-    # Event tables may store a full path, a basename, or just the recording id
-    # without .edf/.bdf. Compare all stable forms case-insensitively.
-    normalized = text.replace("\\", "/")
-    name = Path(normalized).name
-    stem = Path(name).stem if "." in name else name
-    keys = {
-        normalized.casefold(),
-        name.casefold(),
-        stem.casefold(),
-    }
-    return {key for key in keys if key}
-
-
-def _event_edf_value(item: dict) -> object:
-    for key in (
-        "edf_file",
-        "edf_path",
-        "file",
-        "filename",
-        "recording",
-        "recording_file",
-        "raw_file",
-        "source_file",
-        "bids_file",
-        "bids_path",
-        "package_bids_edf_path",
-        "local_raw_edf_path",
-    ):
-        value = item.get(key)
-        if str(value or "").strip():
-            return value
-    return ""
-
-
-def _parse_bool(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value or "").strip().lower()
-    return text in {"1", "true", "yes", "y"}
-
-
-def _as_float(value: object, default: float = 0.0) -> float:
-    try:
-        text = str(value if value is not None else "").strip()
-        return float(text) if text else float(default)
-    except (TypeError, ValueError):
-        return float(default)
+DEFAULT_DISPLAY_FILTER = "HFO 80-300 Hz"
 
 
 def get_event_context_window(
     event: "ExpertEvent",
     window_s: float = EVENT_CONTEXT_WINDOW_SECONDS,
 ) -> tuple[float, float]:
+    window_s = float(getattr(event, "review_context_window_s", window_s) or window_s)
     center_s = (float(event.start) + float(event.end)) / 2.0
     window_s = max(float(window_s), 1e-6)
     half_window_s = window_s / 2.0
@@ -157,20 +88,33 @@ def add_event_region(
     end_s: float,
     y_min: float,
     y_max: float,
+    color: QColor | None = None,
 ) -> None:
     if end_s <= start_s:
         end_s = start_s + 1e-6
     if y_max <= y_min:
         y_max = y_min + 1e-12
 
-    # Gray marks the candidate interval without letting class color bias waveform review.
+    if color is None:
+        brush = pg.mkBrush(*EVENT_REGION_BRUSH)
+        pen = pg.mkPen(EVENT_MARKER_COLOR, width=1)
+        edge_pen = pg.mkPen(EVENT_MARKER_COLOR, width=1)
+    else:
+        region_color = QColor(color)
+        region_color.setAlpha(62)
+        edge_color = QColor(color)
+        edge_color.setAlpha(225)
+        brush = pg.mkBrush(region_color)
+        pen = pg.mkPen(edge_color, width=1.5)
+        edge_pen = pg.mkPen(edge_color, width=2)
+
     region = pg.BarGraphItem(
         x0=[float(start_s)],
         x1=[float(end_s)],
         y0=[float(y_min)],
         y1=[float(y_max)],
-        brush=pg.mkBrush(*EVENT_REGION_BRUSH),
-        pen=pg.mkPen(EVENT_MARKER_COLOR, width=1),
+        brush=brush,
+        pen=pen,
     )
     region.setZValue(-10)
     plot_widget.addItem(region)
@@ -179,7 +123,7 @@ def add_event_region(
         marker = pg.PlotDataItem(
             [float(x), float(x)],
             [float(y_min), float(y_max)],
-            pen=pg.mkPen(EVENT_MARKER_COLOR, width=1),
+            pen=edge_pen,
         )
         marker.setZValue(10)
         plot_widget.addItem(marker)
@@ -218,6 +162,23 @@ def add_unavailable_label(plot_widget: pg.PlotWidget, text: str = "Waveform unav
     label.setPos(0.5, 0.0)
     set_plot_x_range(plot_widget, 0, 1)
     set_plot_y_range(plot_widget, -1, 1)
+
+
+def spectrogram_lookup_table() -> np.ndarray:
+    color_map = pg.ColorMap(
+        np.array([0.0, 0.18, 0.42, 0.68, 1.0], dtype=float),
+        np.array(
+            [
+                [20, 24, 38, 255],
+                [32, 70, 125, 255],
+                [46, 134, 170, 255],
+                [238, 174, 64, 255],
+                [255, 247, 188, 255],
+            ],
+            dtype=np.ubyte,
+        ),
+    )
+    return color_map.getLookupTable(0.0, 1.0, 256)
 
 
 def _valid_times_for_waveform(times: Optional[np.ndarray], waveform: np.ndarray) -> Optional[np.ndarray]:
@@ -300,11 +261,11 @@ def get_event_wide_context_window(
 @dataclass
 class ExpertEvent:
     """
-    Represents a single expert-reviewed event.
+    Represents a single event in the HFO review grid.
     
     Attributes:
-        edf_file: Source EDF file name
-        channel: Channel name (or 'name')
+        edf_file: Source recording name
+        channel: Channel name
         start: Start time in seconds
         end: End time in seconds
         detector: Detector name that flagged this event
@@ -332,17 +293,39 @@ class ExpertEvent:
     wide_waveform_end: Optional[float] = None
     wide_waveform_times: Optional[np.ndarray] = None
     wide_waveform_unavailable: bool = False
+    event_number: str = ""
+    model_class: str = ""
+    band_label: str = "80-300 Hz"
+    boundary_warning: bool = False
+    real_hfo_probability: float | None = None
+    artifact_probability: float | None = None
+    spike_hfo_probability: float | None = None
+    classification_status: str = ""
+    manual_class: str = ""
+    manual_review_status: str = "unreviewed"
+    source_event: Any | None = None
+    detail_lines: List[str] | None = None
+    review_context_window_s: float = EVENT_CONTEXT_WINDOW_SECONDS
 
-
-
-    
     @property
     def duration(self) -> float:
         return self.end - self.start
+
+    @property
+    def model_label(self) -> str:
+        model_class = str(self.model_class or "").strip()
+        if model_class == "HFO":
+            return "non-spike HFO"
+        return model_class or "unclassified"
     
     @property
     def review_label(self) -> str:
-        """Returns the expert review label using the dataset convention."""
+        """Return the official event class after manual review, falling back to the model."""
+        manual_class = str(self.manual_class or "").strip()
+        if manual_class:
+            return manual_class
+        if self.model_label:
+            return self.model_label
         if not self.artifact:
             return "Rejected artifact"
         if self.spike:
@@ -352,124 +335,18 @@ class ExpertEvent:
     @property
     def review_color(self) -> QColor:
         """Returns the color for this review label."""
-        if not self.artifact:
+        label = str(self.review_label).strip().lower().replace("_", "-").replace(" ", "-")
+        if label in {"deleted", "excluded"}:
+            return COLOR_DELETED
+        if label in {"unclassified", "candidate", "unknown", "not-classified"}:
+            return COLOR_UNCLASSIFIED
+        if "artifact" in label:
             return COLOR_REJECTED_ARTIFACT
-        if self.spike:
+        if "non-spike" in label or "non-spk" in label or label == "hfo":
+            return COLOR_NON_SPK_HFO
+        if label in {"spike-hfo", "spkhfo", "spk-hfo"}:
             return COLOR_SPK_HFO
         return COLOR_NON_SPK_HFO
-
-
-def load_events_from_csv(events_path: Path, edf_file: str | None = None) -> List[ExpertEvent]:
-    """
-    Load expert events from a CSV or JSON file.
-    
-    Expected CSV columns:
-        - edf_file: Source EDF file name
-        - name OR channel: Channel name
-        - start OR start_seconds: Start time in seconds
-        - end OR end_seconds: End time in seconds
-        - detector: Detector name
-        - artifact: 1/0 or True/False; 1 means accepted HFO, 0 means rejected artifact
-        - spike: 1/0 or True/False; among accepted HFOs, 1 means spike-associated
-        - waveform OR hfo_waveforms: Optional waveform data (JSON string)
-    
-    Args:
-        events_path: Path to the events file (CSV or JSON)
-        edf_file: EDF file name to filter events
-    
-    Returns:
-        List of ExpertEvent objects sorted by channel, then start time
-    """
-    import csv
-    
-    events: list[ExpertEvent] = []
-    fallback_events: list[ExpertEvent] = []
-    
-    # Try JSON first, then CSV
-    if events_path.suffix.lower() == '.json':
-        with open(events_path, 'r') as f:
-            data = json.load(f)
-        
-        # Handle both list and dict with 'events' key
-        if isinstance(data, dict):
-            data = data.get('events', [])
-        
-        for item in data:
-            # Handle different column names
-            channel = item.get('name') or item.get('channel', 'Unknown')
-            start = item.get('start_seconds') or item.get('start') or 0.0
-            end = item.get('end_seconds') or item.get('end') or 0.0
-            detector = item.get('detector', 'unknown')
-            artifact = _parse_bool(item.get('artifact', 0))
-            spike = _parse_bool(item.get('spike', 0))
-            
-            # Parse waveform if present
-            waveform = None
-            wf_key = 'waveform' if 'waveform' in item else 'hfo_waveforms'
-            if wf_key in item and item[wf_key]:
-                try:
-                    waveform = np.array(json.loads(item[wf_key]))
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            
-            row_edf_file = _event_edf_value(item)
-            parsed_event = ExpertEvent(
-                edf_file=str(row_edf_file or edf_file or ""),
-                channel=channel,
-                start=_as_float(start),
-                end=_as_float(end),
-                detector=detector,
-                artifact=artifact,
-                spike=spike,
-                waveform=waveform
-            )
-            fallback_events.append(parsed_event)
-            if edf_file is None or _matches_edf_file(row_edf_file, edf_file):
-                events.append(parsed_event)
-    else:
-        # CSV format
-        with open(events_path, 'r', newline='', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Handle different column names
-                channel = row.get('name') or row.get('channel', 'Unknown')
-                start = row.get('start_seconds') or row.get('start') or '0.0'
-                end = row.get('end_seconds') or row.get('end') or '0.0'
-                detector = row.get('detector', 'unknown')
-                artifact = _parse_bool(row.get('artifact', 0))
-                spike = _parse_bool(row.get('spike', 0))
-                
-                # Parse waveform if present
-                waveform = None
-                wf_key = 'waveform' if 'waveform' in row else 'hfo_waveforms'
-                if wf_key in row and row[wf_key]:
-                    try:
-                        waveform = np.array(json.loads(row[wf_key]))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                
-                row_edf_file = _event_edf_value(row)
-                parsed_event = ExpertEvent(
-                    edf_file=str(row_edf_file or edf_file or ""),
-                    channel=channel,
-                    start=_as_float(start),
-                    end=_as_float(end),
-                    detector=detector,
-                    artifact=artifact,
-                    spike=spike,
-                    waveform=waveform
-                )
-                fallback_events.append(parsed_event)
-                if edf_file is None or _matches_edf_file(row_edf_file, edf_file):
-                    events.append(parsed_event)
-
-    if not events and fallback_events:
-        events = fallback_events
-    
-    # Sort by channel name, then by start time
-    events.sort(key=lambda e: (e.channel, e.start))
-    
-    return events
 
 
 class EventCellWidget(QFrame):
@@ -495,12 +372,15 @@ class EventCellWidget(QFrame):
         color = self._event.review_color
         self.setStyleSheet(f"""
             QFrame#eventCell {{
-                border: 2px solid rgb({color.red()}, {color.green()}, {color.blue()});
+                border: 1px solid #d8dde6;
+                border-left: 4px solid rgb({color.red()}, {color.green()}, {color.blue()});
                 border-radius: 4px;
-                background-color: #1e1e1e;
+                background-color: #f8fafc;
             }}
             QFrame#eventCell:hover {{
-                border: 2px solid white;
+                border: 1px solid #8aa6d6;
+                border-left: 4px solid rgb({color.red()}, {color.green()}, {color.blue()});
+                background-color: #ffffff;
             }}
         """)
         
@@ -508,16 +388,17 @@ class EventCellWidget(QFrame):
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(2)
         
-        # Channel name and detector
-        info_label = QLabel(f"{self._event.channel} | {self._event.detector}")
-        info_label.setStyleSheet("color: #dddddd; font-size: 10px; font-weight: bold;")
+        event_number = str(self._event.event_number or "").strip()
+        event_text = f"Event {event_number}" if event_number else "Event"
+        info_label = QLabel(f"{self._event.channel} | {event_text} | {self._event.detector}")
+        info_label.setStyleSheet("color: #1f2937; font-size: 10px; font-weight: bold;")
         info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._forward_clicks_from(info_label)
         layout.addWidget(info_label)
         
         # Waveform plot
         self._waveform_plot = pg.PlotWidget()
-        self._waveform_plot.setBackground("#1e1e1e")
+        self._waveform_plot.setBackground("#ffffff")
         self._waveform_plot.setMinimumHeight(60)
         self._waveform_plot.setMaximumHeight(80)
         
@@ -541,7 +422,7 @@ class EventCellWidget(QFrame):
             self._waveform_plot.plot(
                 times,
                 waveform,
-                pen=pg.mkPen(color=get_neutral_waveform_color(dark_mode=True), width=1),
+                pen=pg.mkPen(color=get_neutral_waveform_color(dark_mode=False), width=1),
             )
             set_plot_x_range(self._waveform_plot, plot_start_s, plot_end_s)
         else:
@@ -551,26 +432,11 @@ class EventCellWidget(QFrame):
         
         # Time info
         time_label = QLabel(f"{self._event.start:.3f}s - {self._event.end:.3f}s")
-        time_label.setStyleSheet("color: #aaaaaa; font-size: 9px;")
+        time_label.setStyleSheet("color: #4b5563; font-size: 9px;")
         time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._forward_clicks_from(time_label)
         layout.addWidget(time_label)
         
-        # Review label
-        review_label = QLabel(self._event.review_label)
-        review_label.setStyleSheet(f"""
-            color: #f5f5f5;
-            font-size: 9px;
-            font-weight: bold;
-            border: 1px solid rgb({color.red()}, {color.green()}, {color.blue()});
-            border-radius: 3px;
-            padding: 2px 4px;
-            background-color: transparent;
-        """)
-        review_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._forward_clicks_from(review_label)
-        layout.addWidget(review_label)
-
     def _forward_clicks_from(self, widget: QWidget) -> None:
         widget.setCursor(Qt.CursorShape.PointingHandCursor)
         widget.installEventFilter(self)
@@ -602,6 +468,8 @@ class ZoomedEventView(QWidget):
     backClicked = Signal()  # Signal to return to grid
     nextEvent = Signal()    # Signal for next event (n key)
     prevEvent = Signal()    # Signal for previous event (b key)
+    classChanged = Signal(ExpertEvent, str)
+    contextWindowChanged = Signal(ExpertEvent, float)
     
     def __init__(self, event: ExpertEvent, parent=None):
         super().__init__(parent)
@@ -609,7 +477,7 @@ class ZoomedEventView(QWidget):
         self._setup_ui()
     
     def _setup_ui(self):
-        self.setStyleSheet("background-color: #2b2b2b;")
+        self.setStyleSheet("background-color: #f3f6fa;")
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -617,24 +485,13 @@ class ZoomedEventView(QWidget):
         
         # Header with event info
         self._header = QLabel()
-        self._header.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
-        self._header.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._header.setStyleSheet("color: #111827; font-size: 15px; font-weight: bold;")
+        self._header.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         layout.addWidget(self._header)
 
-        self._review_badge = QLabel()
-        self._review_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._review_badge)
-        
-        # Time info
-        self._time_info = QLabel()
-        self._time_info.setStyleSheet("color: #aaaaaa; font-size: 12px;")
-        self._time_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self._time_info)
-
         filter_row = QHBoxLayout()
-        filter_row.addStretch()
-        filter_label = QLabel("Display band:")
-        filter_label.setStyleSheet("color: #dddddd; font-size: 12px;")
+        filter_label = QLabel("Filtered band:")
+        filter_label.setStyleSheet("color: #374151; font-size: 12px;")
         filter_row.addWidget(filter_label)
 
         self._display_filter = QComboBox()
@@ -642,84 +499,200 @@ class ZoomedEventView(QWidget):
         self._display_filter.setCurrentText(DEFAULT_DISPLAY_FILTER)
         self._display_filter.setStyleSheet("""
             QComboBox {
-                background-color: #3a3a3a;
-                color: #ffffff;
-                border: 1px solid #666666;
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
                 border-radius: 4px;
                 padding: 4px 8px;
                 min-width: 150px;
             }
-            QComboBox:hover { border-color: #888888; }
+            QComboBox:hover { border-color: #94a3b8; }
         """)
         self._display_filter.currentTextChanged.connect(lambda _text: self._refresh_event())
         filter_row.addWidget(self._display_filter)
+
+        context_label = QLabel("Context:")
+        context_label.setStyleSheet("color: #374151; font-size: 12px;")
+        filter_row.addWidget(context_label)
+        self._context_combo = QComboBox()
+        for seconds in EVENT_CONTEXT_WINDOW_CHOICES_SECONDS:
+            self._context_combo.addItem(f"{seconds:g} s", userData=float(seconds))
+        self._context_combo.setCurrentText("0.5 s")
+        self._context_combo.setStyleSheet(self._display_filter.styleSheet())
+        self._context_combo.currentIndexChanged.connect(self._on_context_changed)
+        filter_row.addWidget(self._context_combo)
+        analysis_label = QLabel("Analysis:")
+        analysis_label.setStyleSheet("color: #374151; font-size: 12px;")
+        filter_row.addWidget(analysis_label)
+        self._analysis_combo = QComboBox()
+        self._analysis_combo.addItem("Spectrogram", userData="spectrogram")
+        self._analysis_combo.addItem("FFT", userData="fft")
+        self._analysis_combo.setStyleSheet(self._display_filter.styleSheet())
+        self._analysis_combo.currentIndexChanged.connect(lambda _index: self._refresh_event())
+        filter_row.addWidget(self._analysis_combo)
         filter_row.addStretch()
+
+        self._prev_btn = QPushButton("Previous")
+        self._next_btn = QPushButton("Next")
+        for button in (self._prev_btn, self._next_btn):
+            button.setStyleSheet("""
+                QPushButton {
+                    background-color: #ffffff;
+                    color: #111827;
+                    border: 1px solid #cbd5e1;
+                    padding: 7px 12px;
+                    border-radius: 4px;
+                    font-weight: bold;
+                }
+                QPushButton:hover { background-color: #eef2f7; }
+            """)
+        self._prev_btn.clicked.connect(self.prevEvent.emit)
+        self._next_btn.clicked.connect(self.nextEvent.emit)
+        filter_row.addWidget(self._prev_btn)
+        filter_row.addWidget(self._next_btn)
 
         self._back_btn = QPushButton("Back to Grid")
         self._back_btn.setStyleSheet("""
             QPushButton {
-                background-color: #444444;
-                color: white;
-                border: none;
+                background-color: #1f2937;
+                color: #ffffff;
+                border: 1px solid #1f2937;
                 padding: 8px 16px;
                 border-radius: 4px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #666666;
+                background-color: #374151;
             }
         """)
         self._back_btn.clicked.connect(self.backClicked.emit)
         filter_row.addWidget(self._back_btn)
         layout.addLayout(filter_row)
         
-        # Large waveform plot
-        self._waveform_plot = pg.PlotWidget()
-        self._waveform_plot.setBackground("#2b2b2b")
-        self._waveform_plot.setMinimumHeight(400)
-        
-        # Show axes
-        self._waveform_plot.showGrid(x=True, y=True, alpha=0.3)
-        
-        layout.addWidget(self._waveform_plot, 1)
+        content_row = QHBoxLayout()
+        content_row.setSpacing(14)
+
+        plots_panel = QWidget()
+        plots_layout = QVBoxLayout(plots_panel)
+        plots_layout.setContentsMargins(0, 0, 0, 0)
+        plots_layout.setSpacing(8)
+        self._raw_plot = self._make_review_plot("Raw signal")
+        self._filtered_plot = self._make_review_plot("Filtered 80-300 Hz")
+        self._analysis_plot = self._make_review_plot("Spectrogram")
+        for plot in (self._raw_plot, self._filtered_plot, self._analysis_plot):
+            plots_layout.addWidget(plot, 1)
+        content_row.addWidget(plots_panel, 1)
+
+        self._detail_panel = QFrame()
+        self._detail_panel.setObjectName("hfoZoomDetailPanel")
+        self._detail_panel.setMinimumWidth(260)
+        self._detail_panel.setMaximumWidth(340)
+        self._detail_panel.setStyleSheet("""
+            QFrame#hfoZoomDetailPanel {
+                background-color: #ffffff;
+                border: 1px solid #d8dde6;
+                border-radius: 4px;
+            }
+        """)
+        detail_layout = QVBoxLayout(self._detail_panel)
+        detail_layout.setContentsMargins(14, 14, 14, 14)
+        detail_layout.setSpacing(8)
+        self._time_info = QLabel()
+        self._time_info.setStyleSheet("color: #374151; font-size: 12px;")
+        self._time_info.setWordWrap(True)
+        detail_layout.addWidget(self._time_info)
+        self._stats_info = QLabel()
+        self._stats_info.setStyleSheet("color: #111827; font-size: 12px;")
+        self._stats_info.setWordWrap(True)
+        detail_layout.addWidget(self._stats_info)
+        review_label = QLabel("Official class")
+        review_label.setStyleSheet("color: #374151; font-size: 12px; font-weight: bold;")
+        detail_layout.addWidget(review_label)
+        self._class_combo = QComboBox()
+        self._class_combo.addItems(["artifact", "non-spike HFO", "spike-HFO", "unclassified", "deleted"])
+        self._class_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
+                border-radius: 4px;
+                padding: 5px 8px;
+            }
+            QComboBox:hover { border-color: #94a3b8; }
+        """)
+        self._class_combo.currentTextChanged.connect(self._on_class_changed)
+        detail_layout.addWidget(self._class_combo)
+        self._delete_btn = QPushButton("Delete / exclude event")
+        self._delete_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                color: #991b1b;
+                border: 1px solid #fecaca;
+                padding: 6px 10px;
+                border-radius: 4px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #fff1f2; }
+        """)
+        self._delete_btn.clicked.connect(lambda: self._on_class_changed("deleted"))
+        detail_layout.addWidget(self._delete_btn)
+        self._model_proposition = QLabel()
+        self._model_proposition.setStyleSheet("color: #4b5563; font-size: 11px;")
+        self._model_proposition.setWordWrap(True)
+        detail_layout.addWidget(self._model_proposition)
+        detail_layout.addStretch()
+        content_row.addWidget(self._detail_panel)
+
+        layout.addLayout(content_row, 1)
 
         self._refresh_event()
         
         # Instructions
-        instructions = QLabel("Press 'n' for next, 'b' for previous, or Esc/Return to go back")
-        instructions.setStyleSheet("color: #888888; font-size: 11px;")
+        instructions = QLabel("Press n for next, b for previous, or Esc/Return to go back")
+        instructions.setStyleSheet("color: #6b7280; font-size: 11px;")
         instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(instructions)
     
     def set_event(self, event: ExpertEvent):
         """Update the displayed event."""
         self._event = event
+        self._sync_context_combo_to_event()
         self._refresh_event()
+        self.update()
 
     def _refresh_event(self):
+        self._sync_context_combo_to_event()
+        event_number = str(self._event.event_number or "").strip()
+        event_text = f"Event {event_number}" if event_number else "Event"
         self._header.setText(
-            f"Channel: {self._event.channel} | "
+            f"{self._event.channel} | {event_text} | "
             f"Detector: {self._event.detector}"
         )
-        color = self._event.review_color
-        self._review_badge.setText(self._event.review_label)
-        self._review_badge.setStyleSheet(f"""
-            color: #ffffff;
-            font-size: 12px;
-            font-weight: bold;
-            border: 1px solid rgb({color.red()}, {color.green()}, {color.blue()});
-            border-radius: 4px;
-            padding: 3px 8px;
-            background-color: transparent;
-        """)
         self._time_info.setText(
             f"Start: {self._event.start:.6f}s | "
             f"End: {self._event.end:.6f}s | "
             f"Duration: {self._event.duration*1000:.2f}ms | "
-            f"Window: {EVENT_CONTEXT_WINDOW_SECONDS * 1000:.0f}ms centered"
+            f"Window: {float(self._event.review_context_window_s) * 1000:.0f}ms centered\n"
+            f"Band: {self._event.band_label or '80-300 Hz'}\n"
+            f"Boundary warning: {'yes' if self._event.boundary_warning else 'no'}"
         )
+        self._stats_info.setText(
+            "Classifier probabilities\n"
+            f"Accepted HFO: {self._format_optional_probability(self._event.real_hfo_probability)}\n"
+            f"Artifact: {self._format_optional_probability(self._event.artifact_probability)}\n"
+            f"Spike association: {self._format_optional_probability(self._event.spike_hfo_probability)}\n"
+            f"Status: {self._event.classification_status or 'unknown'}"
+        )
+        self._model_proposition.setText(
+            f"Classifier proposition: {self._event.model_label}\n"
+            f"Review status: {self._event.manual_review_status or 'unreviewed'}"
+        )
+        self._class_combo.blockSignals(True)
+        self._class_combo.setCurrentText(self._event.review_label)
+        self._class_combo.blockSignals(False)
 
-        self._waveform_plot.clear()
+        for plot in (self._raw_plot, self._filtered_plot, self._analysis_plot):
+            plot.clear()
         start_s = float(self._event.start)
         end_s = float(self._event.end)
         if end_s <= start_s:
@@ -739,19 +712,214 @@ class ZoomedEventView(QWidget):
                 DISPLAY_FILTERS.get(band_name, DISPLAY_FILTERS["Default (unfiltered)"]),
             )
             plot_start_s, plot_end_s = get_event_context_window(self._event)
-            y_min, y_max = waveform_y_bounds(display_waveform)
-            add_event_region(self._waveform_plot, start_s, end_s, y_min, y_max)
-            self._waveform_plot.plot(
+            self._draw_signal_panel(
+                self._raw_plot,
+                times,
+                waveform,
+                start_s,
+                end_s,
+                plot_start_s,
+                plot_end_s,
+            )
+            self._draw_signal_panel(
+                self._filtered_plot,
                 times,
                 display_waveform,
-                pen=pg.mkPen(color=get_neutral_waveform_color(dark_mode=True), width=2),
+                start_s,
+                end_s,
+                plot_start_s,
+                plot_end_s,
             )
-            set_plot_x_range(self._waveform_plot, plot_start_s, plot_end_s)
+            analysis_mode = str(self._analysis_combo.currentData() or "spectrogram")
+            if analysis_mode == "fft":
+                self._analysis_plot.setTitle("FFT", color="#111827", size="10pt")
+                self._draw_fft_panel(
+                    self._analysis_plot,
+                    times,
+                    waveform,
+                )
+            else:
+                self._analysis_plot.setTitle("Spectrogram", color="#111827", size="10pt")
+                self._draw_time_frequency_panel(
+                    self._analysis_plot,
+                    times,
+                    display_waveform,
+                    start_s,
+                    end_s,
+                    plot_start_s,
+                    plot_end_s,
+                )
         else:
-            add_unavailable_label(self._waveform_plot)
+            for plot in (self._raw_plot, self._filtered_plot, self._analysis_plot):
+                add_unavailable_label(plot)
 
-        self._waveform_plot.setLabel("bottom", "Time", units="s")
-        self._waveform_plot.setLabel("left", "Amplitude", units="V")
+        self._raw_plot.setLabel("bottom", "Time", units="s")
+        self._raw_plot.setLabel("left", "Raw", units="uV")
+        self._filtered_plot.setLabel("bottom", "Time", units="s")
+        self._filtered_plot.setLabel("left", "Filtered", units="uV")
+        if str(self._analysis_combo.currentData() or "spectrogram") == "fft":
+            self._analysis_plot.setLabel("bottom", "Frequency", units="Hz")
+            self._analysis_plot.setLabel("left", "Amplitude")
+        else:
+            self._analysis_plot.setLabel("bottom", "Time", units="s")
+            self._analysis_plot.setLabel("left", "Frequency", units="Hz")
+        for plot in (self._raw_plot, self._filtered_plot, self._analysis_plot):
+            plot.repaint()
+
+    def _make_review_plot(self, title: str) -> pg.PlotWidget:
+        plot = pg.PlotWidget()
+        plot.setBackground("#ffffff")
+        plot.setMinimumHeight(120)
+        plot.showGrid(x=True, y=True, alpha=0.22)
+        plot.setTitle(title, color="#111827", size="10pt")
+        return plot
+
+    def _sync_context_combo_to_event(self) -> None:
+        value = float(getattr(self._event, "review_context_window_s", EVENT_CONTEXT_WINDOW_SECONDS) or EVENT_CONTEXT_WINDOW_SECONDS)
+        closest_index = 0
+        closest_delta = float("inf")
+        for idx in range(self._context_combo.count()):
+            candidate = float(self._context_combo.itemData(idx) or EVENT_CONTEXT_WINDOW_SECONDS)
+            delta = abs(candidate - value)
+            if delta < closest_delta:
+                closest_index = idx
+                closest_delta = delta
+        self._context_combo.blockSignals(True)
+        self._context_combo.setCurrentIndex(closest_index)
+        self._context_combo.blockSignals(False)
+
+    def _on_context_changed(self, _index: int) -> None:
+        window_s = float(self._context_combo.currentData() or EVENT_CONTEXT_WINDOW_SECONDS)
+        self._event.review_context_window_s = window_s
+        self.contextWindowChanged.emit(self._event, window_s)
+
+    def _draw_signal_panel(
+        self,
+        plot: pg.PlotWidget,
+        times: np.ndarray,
+        waveform: np.ndarray,
+        event_start_s: float,
+        event_end_s: float,
+        plot_start_s: float,
+        plot_end_s: float,
+    ) -> None:
+        y_min, y_max = waveform_y_bounds(waveform)
+        add_event_region(plot, event_start_s, event_end_s, y_min, y_max, self._event.review_color)
+        plot.plot(
+            times,
+            waveform,
+            pen=pg.mkPen(color=get_neutral_waveform_color(dark_mode=False), width=1.6),
+        )
+        set_plot_x_range(plot, plot_start_s, plot_end_s)
+        set_plot_y_range(plot, y_min, y_max)
+
+    def _draw_time_frequency_panel(
+        self,
+        plot: pg.PlotWidget,
+        times: np.ndarray,
+        waveform: np.ndarray,
+        event_start_s: float,
+        event_end_s: float,
+        plot_start_s: float,
+        plot_end_s: float,
+    ) -> None:
+        sfreq = _sample_rate_from_times(times)
+        if sfreq is None or waveform.size < 16:
+            add_unavailable_label(plot, "Time-frequency unavailable")
+            return
+        target_window_samples = int(round(0.064 * float(sfreq)))
+        nperseg = min(int(waveform.size), max(32, min(128, target_window_samples)))
+        if nperseg >= int(waveform.size):
+            nperseg = max(16, int(waveform.size // 2))
+        noverlap = min(nperseg - 1, int(round(nperseg * 0.75)))
+        try:
+            freqs, rel_times, power = spectrogram(
+                np.asarray(waveform, dtype=float) - float(np.nanmean(waveform)),
+                fs=float(sfreq),
+                window="hann",
+                nperseg=nperseg,
+                noverlap=noverlap,
+                detrend=False,
+                scaling="density",
+                mode="psd",
+            )
+        except ValueError:
+            add_unavailable_label(plot, "Time-frequency unavailable")
+            return
+        if power.size == 0 or rel_times.size == 0 or freqs.size == 0:
+            add_unavailable_label(plot, "Time-frequency unavailable")
+            return
+        freq_mask = freqs <= min(SPECTROGRAM_FREQ_MAX_HZ, 0.5 * float(sfreq))
+        freqs = freqs[freq_mask]
+        power = power[freq_mask, :]
+        if power.size == 0:
+            add_unavailable_label(plot, "Time-frequency unavailable")
+            return
+        power_db = 10.0 * np.log10(np.maximum(power, 1e-18))
+        finite = power_db[np.isfinite(power_db)]
+        if finite.size:
+            high_level = float(np.percentile(finite, 99.0))
+            low_level = max(float(np.percentile(finite, 5.0)), high_level - SPECTROGRAM_DYNAMIC_RANGE_DB)
+            if high_level <= low_level:
+                high_level = low_level + 1.0
+        else:
+            low_level, high_level = -120.0, -60.0
+        image = pg.ImageItem(axisOrder="row-major")
+        image.setLookupTable(spectrogram_lookup_table())
+        image.setImage(power_db, autoLevels=False, levels=(low_level, high_level))
+        time_bin_s = float(np.median(np.diff(rel_times))) if rel_times.size >= 2 else float(nperseg) / float(sfreq)
+        freq_bin_hz = float(np.median(np.diff(freqs))) if freqs.size >= 2 else float(sfreq) / float(nperseg)
+        start_time = float(times[0]) + float(rel_times[0]) - 0.5 * time_bin_s
+        end_time = float(times[0]) + float(rel_times[-1]) + 0.5 * time_bin_s
+        freq_start = float(freqs[0]) if freqs.size else 0.0
+        freq_end = (float(freqs[-1]) + 0.5 * freq_bin_hz) if freqs.size else 1.0
+        image.setRect(QRectF(start_time, freq_start, max(1e-6, end_time - start_time), max(1e-6, freq_end - freq_start)))
+        plot.addItem(image)
+        for x_pos in (float(event_start_s), float(event_end_s)):
+            line = pg.InfiniteLine(
+                pos=x_pos,
+                angle=90,
+                pen=pg.mkPen(color=(255, 255, 255, 210), width=1.2),
+                movable=False,
+            )
+            line.setZValue(20)
+            plot.addItem(line)
+        set_plot_x_range(plot, plot_start_s, plot_end_s)
+        set_plot_y_range(plot, 0.0, max(1.0, freq_end))
+
+    def _draw_fft_panel(
+        self,
+        plot: pg.PlotWidget,
+        times: np.ndarray,
+        waveform: np.ndarray,
+    ) -> None:
+        sfreq = _sample_rate_from_times(times)
+        if sfreq is None or waveform.size < 4:
+            add_unavailable_label(plot, "FFT unavailable")
+            return
+        centered = waveform - float(np.nanmean(waveform))
+        freqs = np.fft.rfftfreq(int(centered.size), d=1.0 / float(sfreq))
+        amplitude = np.abs(np.fft.rfft(centered))
+        mask = freqs <= min(500.0, 0.5 * float(sfreq))
+        if not np.any(mask):
+            add_unavailable_label(plot, "FFT unavailable")
+            return
+        plot.plot(freqs[mask], amplitude[mask], pen=pg.mkPen(color="#202020", width=1.4))
+        max_amp = float(np.nanmax(amplitude[mask])) if np.any(np.isfinite(amplitude[mask])) else 1.0
+        set_plot_x_range(plot, 0.0, float(freqs[mask][-1]))
+        set_plot_y_range(plot, 0.0, max(1e-9, max_amp * 1.08))
+
+    def _on_class_changed(self, label: str) -> None:
+        self.classChanged.emit(self._event, str(label))
+
+    @staticmethod
+    def _format_optional_probability(value: float | None) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            return f"{float(value):.3f}"
+        except (TypeError, ValueError):
+            return "n/a"
 
     def keyPressEvent(self, event):
         key = event.key()
@@ -767,7 +935,7 @@ class ZoomedEventView(QWidget):
 
 class ExpertEventGrid(QWidget):
     """
-    Main widget for displaying expert-reviewed events in a grid format.
+    Main widget for displaying HFO events in a grid format.
     
     Signals:
         eventClicked(ExpertEvent): Emitted when an event cell is clicked
@@ -778,9 +946,13 @@ class ExpertEventGrid(QWidget):
     eventClicked = Signal(ExpertEvent)
     eventSelected = Signal(ExpertEvent)
     requestJumpToTime = Signal(float, str)  # time, channel
+    filteredEventsChanged = Signal(object)
+    eventClassChanged = Signal(object)
     
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, title: str = "Expert Event Grid"):
         super().__init__(parent)
+        self._title = str(title)
+        self._all_events: List[ExpertEvent] = []
         self._events: List[ExpertEvent] = []
         self._current_page: int = 0
         self._total_pages: int = 0
@@ -795,8 +967,14 @@ class ExpertEventGrid(QWidget):
         self._setup_ui()
     
     def _setup_ui(self):
-        self.setMinimumSize(900, 700)
-        self.setStyleSheet("background-color: #1e1e1e;")
+        self.setMinimumSize(720, 520)
+        self.setAutoFillBackground(True)
+        self.setStyleSheet("""
+            QWidget { background-color: #f3f6fa; color: #111827; }
+            QScrollArea { background-color: #f3f6fa; border: none; }
+            QScrollArea > QWidget > QWidget { background-color: #f3f6fa; }
+            QLabel { color: #111827; }
+        """)
         
         # Main layout
         self._main_layout = QVBoxLayout(self)
@@ -804,9 +982,9 @@ class ExpertEventGrid(QWidget):
         self._main_layout.setSpacing(10)
         
         # Header
-        header = QLabel("Expert Event Grid")
+        header = QLabel(self._title)
         header.setStyleSheet("""
-            color: #ffffff;
+            color: #111827;
             font-size: 16px;
             font-weight: bold;
         """)
@@ -814,8 +992,38 @@ class ExpertEventGrid(QWidget):
         
         # Info bar
         self._info_label = QLabel("No events loaded")
-        self._info_label.setStyleSheet("color: #aaaaaa; font-size: 12px;")
+        self._info_label.setStyleSheet("color: #4b5563; font-size: 12px;")
         self._main_layout.addWidget(self._info_label)
+
+        self._filter_widget = QWidget()
+        filter_layout = QHBoxLayout(self._filter_widget)
+        filter_layout.setContentsMargins(0, 0, 0, 0)
+        filter_layout.setSpacing(8)
+        self._channel_filter = QComboBox()
+        self._type_filter = QComboBox()
+        self._order_filter = QComboBox()
+        self._type_filter.addItems(["All active", "spike-HFO", "non-spike HFO", "artifact", "unclassified", "deleted"])
+        self._order_filter.addItems(["Channel order", "Time order"])
+        for combo in (self._channel_filter, self._type_filter, self._order_filter):
+            combo.setStyleSheet("""
+                QComboBox {
+                    background-color: #ffffff;
+                    color: #111827;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 4px;
+                    padding: 4px 8px;
+                    min-width: 140px;
+                }
+            """)
+            combo.currentTextChanged.connect(lambda _text: self._apply_event_filters())
+        filter_layout.addWidget(QLabel("Channel"))
+        filter_layout.addWidget(self._channel_filter)
+        filter_layout.addWidget(QLabel("Type"))
+        filter_layout.addWidget(self._type_filter)
+        filter_layout.addWidget(QLabel("Order"))
+        filter_layout.addWidget(self._order_filter)
+        filter_layout.addStretch()
+        self._main_layout.addWidget(self._filter_widget)
         
         # Navigation controls
         nav_layout = QHBoxLayout()
@@ -823,32 +1031,32 @@ class ExpertEventGrid(QWidget):
         self._prev_btn = QPushButton("Previous (b)")
         self._prev_btn.setStyleSheet("""
             QPushButton {
-                background-color: #444444;
-                color: white;
-                border: none;
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
                 padding: 6px 12px;
                 border-radius: 4px;
             }
-            QPushButton:hover { background-color: #666666; }
-            QPushButton:disabled { background-color: #333333; color: #666666; }
+            QPushButton:hover { background-color: #eef2f7; }
+            QPushButton:disabled { background-color: #eef2f7; color: #94a3b8; }
         """)
         self._prev_btn.clicked.connect(self._on_prev_page)
         
         self._page_label = QLabel("Page 0 / 0")
-        self._page_label.setStyleSheet("color: #dddddd;")
+        self._page_label.setStyleSheet("color: #111827;")
         self._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         self._next_btn = QPushButton("Next (n)")
         self._next_btn.setStyleSheet("""
             QPushButton {
-                background-color: #444444;
-                color: white;
-                border: none;
+                background-color: #ffffff;
+                color: #111827;
+                border: 1px solid #cbd5e1;
                 padding: 6px 12px;
                 border-radius: 4px;
             }
-            QPushButton:hover { background-color: #666666; }
-            QPushButton:disabled { background-color: #333333; color: #666666; }
+            QPushButton:hover { background-color: #eef2f7; }
+            QPushButton:disabled { background-color: #eef2f7; color: #94a3b8; }
         """)
         self._next_btn.clicked.connect(self._on_next_page)
         
@@ -861,22 +1069,15 @@ class ExpertEventGrid(QWidget):
         # Grid container (scroll area)
         self._grid_scroll = QScrollArea()
         self._grid_scroll.setWidgetResizable(True)
-        self._grid_scroll.setStyleSheet("background-color: #1e1e1e; border: none;")
+        self._grid_scroll.setStyleSheet("background-color: #f3f6fa; border: none;")
         
         self._grid_widget = QWidget()
+        self._grid_widget.setStyleSheet("background-color: #f3f6fa;")
         self._grid_layout = QGridLayout(self._grid_widget)
         self._grid_layout.setSpacing(10)
         
         self._grid_scroll.setWidget(self._grid_widget)
         self._main_layout.addWidget(self._grid_scroll, 1)
-        
-        # Legend
-        legend_layout = QHBoxLayout()
-        legend_layout.addWidget(self._create_legend_item("Rejected artifact", COLOR_REJECTED_ARTIFACT))
-        legend_layout.addWidget(self._create_legend_item("spkHFO", COLOR_SPK_HFO))
-        legend_layout.addWidget(self._create_legend_item("non-spkHFO", COLOR_NON_SPK_HFO))
-        legend_layout.addStretch()
-        self._main_layout.addLayout(legend_layout)
         
         # Zoomed view container (hidden initially)
         self._zoomed_container = QWidget()
@@ -889,7 +1090,7 @@ class ExpertEventGrid(QWidget):
     def _create_legend_item(self, text: str, color: QColor) -> QLabel:
         label = QLabel(text)
         label.setStyleSheet(f"""
-            color: #dddddd;
+            color: #111827;
             font-size: 11px;
             font-weight: bold;
             border: 1px solid rgb({color.red()}, {color.green()}, {color.blue()});
@@ -898,49 +1099,6 @@ class ExpertEventGrid(QWidget):
             background-color: transparent;
         """)
         return label
-    
-    def load_events_for_edf(self, edf_path: Path, events_path: Path) -> bool:
-        """
-        Load events for a specific EDF file.
-        
-        Args:
-            edf_path: Path to the EDF file
-            events_path: Path to the events file (CSV or JSON)
-        
-        Returns:
-            True if events loaded successfully, False otherwise
-        """
-        edf_file = edf_path.name
-        
-        try:
-            self._events = load_events_from_csv(events_path, edf_file)
-        except Exception as e:
-            QMessageBox.warning(
-                self,
-                "Error Loading Events",
-                f"Failed to load events: {str(e)}"
-            )
-            return False
-        
-        if not self._events:
-            self._info_label.setText(
-                f"No expert HFO events found for {edf_file}. "
-                "This grid does not show gamma-spike detector output."
-            )
-            self._update_grid()
-            return True
-        
-        # Calculate total pages
-        self._total_pages = (len(self._events) + GRID_TOTAL - 1) // GRID_TOTAL
-        self._current_page = 0
-        
-        self._info_label.setText(
-            f"Loaded {len(self._events)} events for {edf_file} | "
-            f"Sorted by channel, then start time"
-        )
-        
-        self._update_grid()
-        return True
     
     def set_raw(self, raw) -> None:
         """Set the MNE Raw object for waveform extraction."""
@@ -954,6 +1112,101 @@ class ExpertEventGrid(QWidget):
         and return either waveform samples or (waveform_samples, sample_times).
         """
         self._get_waveform_callback = callback
+
+    def set_events(self, events: List[ExpertEvent], *, title: str = "Loaded events") -> None:
+        """Load already parsed events into the review grid."""
+        self._all_events = list(events)
+        self._events_title = str(title)
+        self._current_page = 0
+        self._is_zoomed = False
+        self._grid_scroll.setVisible(True)
+        self._zoomed_container.setVisible(False)
+        self._populate_channel_filter()
+        self._apply_event_filters()
+
+    def _populate_channel_filter(self) -> None:
+        current = str(self._channel_filter.currentText() or "All channels")
+        channels = sorted({str(event.channel) for event in self._all_events})
+        self._channel_filter.blockSignals(True)
+        self._channel_filter.clear()
+        self._channel_filter.addItem("All channels")
+        for channel in channels:
+            self._channel_filter.addItem(channel)
+        if current in {"All channels", *channels}:
+            self._channel_filter.setCurrentText(current)
+        self._channel_filter.blockSignals(False)
+
+    def _event_filter_type(self, event: ExpertEvent) -> str:
+        label = str(event.review_label or "").strip().lower()
+        normalized = label.replace("_", "-").replace(" ", "-")
+        if normalized in {"deleted", "excluded"}:
+            return "deleted"
+        if "artifact" in normalized:
+            return "artifact"
+        if normalized in {"unclassified", "candidate", "unknown", "not-classified"}:
+            return "unclassified"
+        if normalized in {"hfo", "non-spike-hfo", "non-spkhfo", "non-spk-hfo"}:
+            return "non-spike HFO"
+        if "non-spike" in normalized or "non-spk" in normalized:
+            return "non-spike HFO"
+        if normalized in {"spike-hfo", "spkhfo", "spk-hfo", "spkhfo"}:
+            return "spike-HFO"
+        if "spike-hfo" in normalized or "spkhfo" in normalized or "spk-hfo" in normalized:
+            return "spike-HFO"
+        return "non-spike HFO"
+
+    def _apply_event_filters(self) -> None:
+        channel_filter = str(self._channel_filter.currentText() or "All channels")
+        type_filter = str(self._type_filter.currentText() or "All active")
+        order_filter = str(self._order_filter.currentText() or "Channel order")
+
+        events = list(self._all_events)
+        if channel_filter != "All channels":
+            events = [event for event in events if str(event.channel) == channel_filter]
+        if type_filter == "All active":
+            events = [event for event in events if self._event_filter_type(event) != "deleted"]
+        else:
+            events = [event for event in events if self._event_filter_type(event) == type_filter]
+
+        if order_filter == "Time order":
+            events.sort(key=lambda e: (float(e.start), str(e.channel), str(e.event_number)))
+            order_text = "Sorted by time"
+        else:
+            events.sort(key=lambda e: (str(e.channel), float(e.start), str(e.event_number)))
+            order_text = "Sorted by channel"
+
+        self._events = events
+        self._total_pages = (len(self._events) + GRID_TOTAL - 1) // GRID_TOTAL if self._events else 0
+        self._current_page = 0
+        title = getattr(self, "_events_title", "Loaded events")
+        type_counts = self._event_type_counts(self._all_events)
+        count_text = (
+            f"spike-HFO: {type_counts.get('spike-HFO', 0)}, "
+            f"non-spike HFO: {type_counts.get('non-spike HFO', 0)}, "
+            f"artifact: {type_counts.get('artifact', 0)}, "
+            f"unclassified: {type_counts.get('unclassified', 0)}, "
+            f"deleted: {type_counts.get('deleted', 0)}"
+        )
+        if self._events:
+            self._info_label.setText(
+                f"{title}: {len(self._events)} / {len(self._all_events)} events | "
+                f"{order_text} | {count_text}"
+            )
+        else:
+            self._info_label.setText(
+                f"{title}: no events match the selected filters | {count_text}"
+            )
+        if self._is_zoomed:
+            self._on_back_to_grid()
+        self._update_grid()
+        self.filteredEventsChanged.emit(list(self._events))
+
+    def _event_type_counts(self, events: list[ExpertEvent]) -> dict[str, int]:
+        counts = {"spike-HFO": 0, "non-spike HFO": 0, "artifact": 0, "unclassified": 0, "deleted": 0}
+        for event in events:
+            event_type = self._event_filter_type(event)
+            counts[event_type] = counts.get(event_type, 0) + 1
+        return counts
 
     def _coerce_waveform_result(self, result) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         if result is None:
@@ -982,7 +1235,7 @@ class ExpertEventGrid(QWidget):
         start_s: float,
         end_s: float,
     ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        if self._get_waveform_callback and self._raw is not None:
+        if self._get_waveform_callback is not None:
             try:
                 result = self._get_waveform_callback(event.channel, start_s, end_s)
                 return self._coerce_waveform_result(result)
@@ -1022,7 +1275,7 @@ class ExpertEventGrid(QWidget):
             event.waveform_end,
             context_start,
             context_end,
-        ) and not event.waveform_unavailable:
+        ):
             # Prefer raw callback data because CSV waveforms are usually event-only snippets.
             waveform, times = self._fetch_waveform_window(event, context_start, context_end)
             if waveform is not None:
@@ -1030,6 +1283,7 @@ class ExpertEventGrid(QWidget):
                 event.waveform_start = context_start
                 event.waveform_end = context_end
                 event.waveform_times = times
+                event.waveform_unavailable = False
             else:
                 event.waveform_unavailable = True
 
@@ -1043,7 +1297,7 @@ class ExpertEventGrid(QWidget):
             event.wide_waveform_end,
             wide_start,
             wide_end,
-        ) or event.wide_waveform_unavailable:
+        ):
             return
 
         wide_waveform, wide_times = self._fetch_waveform_window(event, wide_start, wide_end)
@@ -1052,6 +1306,7 @@ class ExpertEventGrid(QWidget):
             event.wide_waveform_start = wide_start
             event.wide_waveform_end = wide_end
             event.wide_waveform_times = wide_times
+            event.wide_waveform_unavailable = False
         else:
             event.wide_waveform_unavailable = True
     
@@ -1085,9 +1340,19 @@ class ExpertEventGrid(QWidget):
     
     def _update_navigation(self):
         """Update navigation button states and page label."""
-        self._page_label.setText(
-            f"Page {self._current_page + 1} / {max(1, self._total_pages)}"
-        )
+        if self._is_zoomed:
+            self._prev_btn.setText("Previous event (b)")
+            self._next_btn.setText("Next event (n)")
+            self._page_label.setText(
+                f"Event {self._current_zoomed_index + 1} / {max(1, len(self._events))}"
+            )
+            self._prev_btn.setEnabled(self._current_zoomed_index > 0)
+            self._next_btn.setEnabled(self._current_zoomed_index < len(self._events) - 1)
+            return
+
+        self._prev_btn.setText("Previous page (b)")
+        self._next_btn.setText("Next page (n)")
+        self._page_label.setText(f"Page {self._current_page + 1} / {max(1, self._total_pages)}")
         self._prev_btn.setEnabled(self._current_page > 0)
         self._next_btn.setEnabled(self._current_page < self._total_pages - 1)
     
@@ -1100,6 +1365,26 @@ class ExpertEventGrid(QWidget):
             self._current_zoomed_index = 0
         
         self._show_zoomed_view(event)
+
+    def select_event_at(self, channel_name: str, time_s: float, *, tolerance_s: float = 0.250) -> bool:
+        """Open the zoom view for the closest filtered event on a channel near time_s."""
+        channel = str(channel_name)
+        target = float(time_s)
+        best_index: int | None = None
+        best_delta = float("inf")
+        for idx, event in enumerate(self._events):
+            if str(event.channel) != channel:
+                continue
+            center = 0.5 * (float(event.start) + float(event.end))
+            delta = abs(center - target)
+            if delta < best_delta:
+                best_delta = delta
+                best_index = idx
+        if best_index is None or best_delta > float(tolerance_s):
+            return False
+        self._current_zoomed_index = int(best_index)
+        self._show_zoomed_view(self._events[self._current_zoomed_index])
+        return True
     
     def _show_zoomed_view(self, event: ExpertEvent):
         """Show the zoomed view for a single event."""
@@ -1107,6 +1392,7 @@ class ExpertEventGrid(QWidget):
         self._ensure_event_waveform(event, include_wide=False)
         
         # Hide grid, show zoomed view
+        self._filter_widget.setVisible(False)
         self._grid_scroll.setVisible(False)
         self._zoomed_container.setVisible(True)
         
@@ -1116,19 +1402,127 @@ class ExpertEventGrid(QWidget):
             self._zoomed_view.backClicked.connect(self._on_back_to_grid)
             self._zoomed_view.nextEvent.connect(self._on_next_event)
             self._zoomed_view.prevEvent.connect(self._on_prev_event)
+            self._zoomed_view.classChanged.connect(self._on_event_class_changed)
+            self._zoomed_view.contextWindowChanged.connect(self._on_zoom_context_changed)
             self._zoomed_layout.addWidget(self._zoomed_view)
         else:
             self._zoomed_view.set_event(event)
+        self._zoomed_view.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._zoomed_view.repaint()
+        self._update_navigation()
         
         # Emit signal for main viewer to jump
         self.requestJumpToTime.emit(event.start, event.channel)
         self.eventClicked.emit(event)
+
+    def _on_zoom_context_changed(self, event: ExpertEvent, window_s: float) -> None:
+        event.review_context_window_s = float(window_s)
+        event.waveform_unavailable = False
+        context_start, context_end = get_event_context_window(event)
+        if not self._has_waveform_covering(
+            event.waveform,
+            event.waveform_start,
+            event.waveform_end,
+            context_start,
+            context_end,
+        ):
+            event.waveform = None
+            event.waveform_start = None
+            event.waveform_end = None
+            event.waveform_times = None
+        self._ensure_event_waveform(event, include_wide=False)
+        if self._zoomed_view is not None:
+            self._zoomed_view.set_event(event)
+
+    def _on_event_class_changed(self, event: ExpertEvent, label: str) -> None:
+        normalized = self._normalize_event_class(label)
+        event.manual_class = normalized
+        event.manual_review_status = "deleted" if normalized == "deleted" else "reviewed"
+        event.artifact = normalized in {"non-spike HFO", "spike-HFO"}
+        event.spike = normalized == "spike-HFO"
+        if event.source_event is not None:
+            try:
+                setattr(event.source_event, "manual_class", normalized)
+                setattr(
+                    event.source_event,
+                    "manual_review_status",
+                    "deleted" if normalized == "deleted" else "reviewed",
+                )
+            except Exception:
+                pass
+        if self._zoomed_view is not None:
+            self._zoomed_view.set_event(event)
+        self._refresh_after_class_change(event)
+        self.eventClassChanged.emit(event)
+
+    def _normalize_event_class(self, label: object) -> str:
+        text = str(label or "").strip()
+        lowered = text.lower().replace("_", "-")
+        if lowered in {"deleted", "excluded"}:
+            return "deleted"
+        if "artifact" in lowered:
+            return "artifact"
+        if lowered in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
+            return "spike-HFO"
+        if lowered in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
+            return "non-spike HFO"
+        return "unclassified"
+
+    def _refresh_after_class_change(self, changed_event: ExpertEvent) -> None:
+        channel_filter = str(self._channel_filter.currentText() or "All channels")
+        type_filter = str(self._type_filter.currentText() or "All active")
+        order_filter = str(self._order_filter.currentText() or "Channel order")
+        events = list(self._all_events)
+        if channel_filter != "All channels":
+            events = [event for event in events if str(event.channel) == channel_filter]
+        if type_filter == "All active":
+            events = [event for event in events if self._event_filter_type(event) != "deleted"]
+        else:
+            events = [event for event in events if self._event_filter_type(event) == type_filter]
+        if order_filter == "Time order":
+            events.sort(key=lambda e: (float(e.start), str(e.channel), str(e.event_number)))
+            order_text = "Sorted by time"
+        else:
+            events.sort(key=lambda e: (str(e.channel), float(e.start), str(e.event_number)))
+            order_text = "Sorted by channel"
+        self._events = events
+        self._total_pages = (len(self._events) + GRID_TOTAL - 1) // GRID_TOTAL if self._events else 0
+        title = getattr(self, "_events_title", "Loaded events")
+        type_counts = self._event_type_counts(self._all_events)
+        count_text = (
+            f"spike-HFO: {type_counts.get('spike-HFO', 0)}, "
+            f"non-spike HFO: {type_counts.get('non-spike HFO', 0)}, "
+            f"artifact: {type_counts.get('artifact', 0)}, "
+            f"unclassified: {type_counts.get('unclassified', 0)}, "
+            f"deleted: {type_counts.get('deleted', 0)}"
+        )
+        if self._events:
+            self._info_label.setText(
+                f"{title}: {len(self._events)} / {len(self._all_events)} events | "
+                f"{order_text} | {count_text}"
+            )
+        else:
+            self._info_label.setText(
+                f"{title}: no events match the selected filters | {count_text}"
+            )
+        if changed_event in self._events:
+            self._current_zoomed_index = self._events.index(changed_event)
+            self._current_page = self._current_zoomed_index // GRID_TOTAL
+            self._update_grid()
+            self._update_navigation()
+        else:
+            self._on_back_to_grid()
+            self._current_page = 0
+            self._update_grid()
+        self.filteredEventsChanged.emit(list(self._events))
     
     def _on_back_to_grid(self):
         """Return to grid view from zoomed view."""
         self._is_zoomed = False
+        self._filter_widget.setVisible(True)
         self._grid_scroll.setVisible(True)
         self._zoomed_container.setVisible(False)
+        self._update_navigation()
     
     def _on_next_event(self):
         """Navigate to next event in zoomed mode."""
@@ -1144,12 +1538,18 @@ class ExpertEventGrid(QWidget):
     
     def _on_prev_page(self):
         """Navigate to previous page in grid mode."""
+        if self._is_zoomed:
+            self._on_prev_event()
+            return
         if self._current_page > 0:
             self._current_page -= 1
             self._update_grid()
     
     def _on_next_page(self):
         """Navigate to next page in grid mode."""
+        if self._is_zoomed:
+            self._on_next_event()
+            return
         if self._current_page < self._total_pages - 1:
             self._current_page += 1
             self._update_grid()
@@ -1188,66 +1588,3 @@ class ExpertEventGrid(QWidget):
     @property
     def events(self) -> List[ExpertEvent]:
         return self._events
-
-
-class ExpertEventGridDialog(QDialog):
-    """
-    Dialog wrapper for ExpertEventGrid that provides file loading functionality.
-    """
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Expert Event Grid")
-        self.resize(1000, 800)
-        
-        layout = QVBoxLayout(self)
-        
-        # Create the grid widget
-        self._grid = ExpertEventGrid()
-        layout.addWidget(self._grid)
-        
-        button_row = QHBoxLayout()
-        self._load_btn = QPushButton("Load Events File...")
-        self._load_btn.clicked.connect(self._on_load_events)
-        self._close_btn = QPushButton("Close")
-        self._close_btn.clicked.connect(self.close)
-        button_row.addWidget(self._load_btn)
-        button_row.addStretch()
-        button_row.addWidget(self._close_btn)
-        layout.addLayout(button_row)
-        
-        # Store current EDF path
-        self._edf_path: Optional[Path] = None
-    
-    def set_edf_path(self, edf_path: Path):
-        """Set the current EDF file path."""
-        self._edf_path = edf_path
-    
-    def _on_load_events(self):
-        """Open file dialog to select events file."""
-        if self._edf_path is None:
-            QMessageBox.warning(
-                self,
-                "No EDF File",
-                "Please load an EDF file first before loading events."
-            )
-            return
-        
-        events_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Events File",
-            str(self._edf_path.parent),
-            "Events Files (*.csv *.json);;All Files (*)"
-        )
-        
-        if events_path:
-            self._grid.load_events_for_edf(self._edf_path, Path(events_path))
-    
-    def load_events_for_edf(self, edf_path: Path, events_path: Path) -> bool:
-        """Load events for the given EDF file."""
-        self._edf_path = edf_path
-        return self._grid.load_events_for_edf(edf_path, events_path)
-    
-    @property
-    def grid(self) -> ExpertEventGrid:
-        return self._grid

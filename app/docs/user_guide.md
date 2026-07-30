@@ -426,6 +426,168 @@ Gamma spike heatmaps are not saved during export because saving one heatmap per 
 
 Existing output files are not silently overwritten. If the target folder already contains gamma output files, the software asks for confirmation first.
 
+### 8.4 HFO Mode
+
+HFO mode is designed for high-frequency oscillation candidate detection,
+classification, review, and export on the selected channels.
+
+The HFO time section contains:
+
+- analysis start
+- analysis end
+
+By default, the HFO analysis window is set to the full recording.
+
+The HFO input boundary is:
+
+`GUI/file layer -> prepared microvolt signal array -> HFO backend`
+
+The GUI and file layer handle:
+
+- file loading
+- channel selection
+- user-defined interval selection
+- montage and reference selection, including bipolar derivations
+- conversion to microvolts
+
+The HFO backend then handles:
+
+- bad-channel exclusion
+- the notch mode selected in the GUI
+- route-specific preprocessing and sampling handling
+- candidate detection
+- waveform extraction
+- classification
+
+The notch filter is applied once by the HFO backend using the mode selected in
+the GUI. The GUI display filter controls the visible traces; the HFO backend
+uses the selected notch setting for computation.
+
+Sampling requirements depend on the selected HFO classifier route:
+
+- `pyhfo_pybrain` preserves native EDF sampling, matching the pyBrain GUI route
+- `pyhfo_omni_legacy` rejects recordings below 1000 Hz and resamples higher-rate
+  recordings internally to 1000 Hz
+
+The default validated user-facing HFO classifier is **pyhfo_pybrain**.
+It uses:
+
+- candidate detectors: STE, MNI, and Hilbert
+- pyBrain-compatible default band: 80-500 Hz
+- 2-second waveform extraction around each candidate
+- original pyHFO/pyBrain Model A for real-HFO acceptance
+- original pyHFO/pyBrain Model S for spike-HFO classification after Model A accepts
+  the event
+
+The HFO advanced-parameter dialog lets you:
+
+- enable or disable candidate detectors
+- edit detector parameters
+- restore default detector parameters
+- save the edited defaults for later GUI sessions
+
+At least one candidate detector must remain selected. Detector-specific
+parameter fields are disabled when their detector is disabled. Advanced changes
+are applied only after clicking **Save** in the dialog.
+
+The pyBrain 80-500 Hz band is the default for `pyhfo_pybrain`. Selecting
+`pyhfo_omni_legacy` switches the band preset to its validated 80-300 Hz route.
+Ripple, fast-ripple, and custom band options are disabled until those
+configurations are validated separately.
+
+Boundary handling:
+
+- candidates longer than the maximum duration are excluded before classification
+- candidates inside the configured boundary padding from the analysis-window
+  start or end are excluded before classification
+- boundary and exclusion counts are stored in metadata
+
+During the run, HFO analysis runs in the background. The bottom-left status area
+shows the current step, elapsed time, and remaining time when possible. A cancel
+button is available during processing. When the run finishes, the status area
+keeps a summary with the total events and run duration until another computation
+starts or the computation panel is closed.
+
+HFO outputs inside the app:
+
+- channel summary window
+- event grid with card review
+- event filters by channel, class, and order
+- main-viewer HFO markers
+- zoom review with raw trace, detector-band filtered trace, spectrogram, event
+  metadata, classifier proposition, and manual class selector
+
+HFO classes are handled as separate fields:
+
+- `final_model_class`: immutable classifier proposition
+- `manual_class`: user-reviewed class, if changed
+- `official_class`: active class used for display, summaries, and active counts
+- `manual_review_status`: `unreviewed`, `reviewed`, or `deleted`
+
+If the user manually changes an event class, the classifier proposition remains
+visible and unchanged. The manual class becomes the official class. If the user
+deletes an event, it is excluded from active counts but kept in the exported
+event table.
+
+Two pyHFO classifier implementations are available. The default user-facing
+option is `pyhfo_pybrain`.
+
+| GUI classifier option | Internal implementation | Preprocessing expectation | Reference target | Validation result | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `pyhfo_pybrain` | pyBrain-compatible candidate-pool inference | Native EDF sampling in the original pyBrain GUI; detector/filter default is 80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop | Original pyHFO/pyBrain GUI classifier | Classifier-pool validation: Zurich15 53 / 53 labels matched; HUP134 500 / 500 labels matched. Full-pipeline validation on Zurich15: STE 1 / 1 events and labels, MNI 36 / 36 events and labels, Hilbert 43 / 43 events and labels. | Default user-facing option. |
+| `pyhfo_omni_legacy` | Omni-style batch waveform inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 10-500 Hz classifier feature range | Original Omni legacy pyHFO inference code | Zurich10: 611 / 611 labels matched; keep, artifact, spike, and HFO score max differences were 0.0 | Separate Omni-compatible analysis route. |
+
+Both rows therefore reached 100% agreement with their own direct reference
+implementation in the tested candidate pools. They should not be described as a
+single identical classifier path, because they reproduce different upstream
+execution flows.
+
+Implementation note: the codebase separates preprocessing modules under
+`app/computation/hfo/preprocessing/`. The `pyhfo_pybrain` pipeline uses
+`preprocessing/pybrain.py`, preserves native sampling, applies the pyBrain
+Chebyshev-II HFO bandpass before candidate detection, and sends the native
+non-bandpassed signal plus candidate coordinates to the pyBrain-style
+classifier. The `pyhfo_omni_legacy` pipeline uses `preprocessing/omni.py` and
+resamples to 1000 Hz.
+
+HFO export creates:
+
+- `hfo_channel_summary.csv`
+- `hfo_events.csv`
+- `hfo_metadata.json`
+- `README.txt`
+
+`hfo_channel_summary.csv` contains per-channel candidate counts, accepted HFO
+counts, non-spike HFO counts, spike-HFO counts, artifact counts, rates per
+minute, deleted event counts, and boundary event counts.
+
+`hfo_events.csv` contains one row per retained event with channel, timing,
+candidate detector, boundary warning, probabilities, classifier proposition,
+manual class, official class, review status, selected band, and sampling
+details.
+
+`hfo_metadata.json` records the analyzed file, analysis window, selected
+channels, bad-channel exclusion, montage/reference information, notch setting,
+candidate detectors, detector parameters, sampling rates, processing order,
+classifier status, and output counts.
+
+HFO import restores exported HFO result folders produced by the application. The
+import validates that the result belongs to the same recording file, then
+restores events, manual review fields, classifier proposition, probabilities,
+metadata, filters where possible, and main-viewer markers.
+
+The backend also includes an Omni eHFO deep-learning classifier implementation
+with official checkpoints:
+
+- `artifacts.pth`
+- `spikes.pth`
+- `eHFOs.pth`
+
+This classifier-only path has been validated against the official Omni source on
+the Zurich10 candidate pool with exact feature, score, and label agreement. It
+is backend-ready, but it is not yet the default user-facing HFO classifier
+option.
+
 ---
 
 ## 9. Review Menu

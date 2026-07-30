@@ -24,7 +24,7 @@ Main components include:
 - `scalogram_viewer.py` - selected-channel time-frequency review window
 - `menus.py` - menu structure
 - `console_viewer.py` - console output window
-- `computation/` - REI, gamma spike, and export workflows
+- `computation/` - REI, gamma spike, HFO, import, and export workflows
 
 Rendering is optimized to:
 
@@ -48,14 +48,17 @@ Rendering is optimized to:
 - Open scalogram windows from a selected channel/time interval and filter displayed frequencies
 - Apply windowed display filters from a collapsible control strip
 - Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
-- Run computation-panel workflows for channel mean traces, Recruitment Energy Index (REI), and gamma spike analysis
+- Run computation-panel workflows for channel mean traces, Recruitment Energy Index (REI), gamma spike analysis, and HFO analysis
 - Enter seizure onset/offset and baseline/ictal windows manually for REI runs
 - Review REI results in a sortable summary table and heatmap
 - Review gamma spike results in channel-level and spike-level tables with raw trace, boundary, and time-frequency views
 - Run gamma spike analysis through one segmented pipeline for short and long recordings
 - Use segmented gamma spike detection with full-channel boundary/gamma measurements while keeping the selected software notch behavior
 - Run gamma spike detection in the background with progress, estimated remaining time, and cancellation
-- Export REI and gamma spike results directly from the computation panel after the algorithm has run
+- Run HFO candidate detection and pyHFO classification from the computation panel
+- Review HFO events in a resizable event grid with filters, main-viewer markers, zoom review, classifier proposition, manual class correction, and deletion
+- Export REI, gamma spike, and HFO results directly from the computation panel after the algorithm has run
+- Export and import HFO results with event-level, channel-level, metadata, and manual review fields
 - Export compact metadata JSON files, CSV summaries, and README notes for output folders
 - Export REI heatmap values and a saved REI heatmap figure
 - Warn before overwriting existing computation output files
@@ -90,6 +93,21 @@ error.
 
 Gamma spike heatmaps are shown inside the review UI but are not saved during export, because saving one heatmap per spike can create very large output folders.
 
+HFO export includes:
+
+- `hfo_channel_summary.csv`
+- `hfo_events.csv`
+- `hfo_metadata.json`
+- `README.txt`
+
+`hfo_channel_summary.csv` contains one row per channel with candidate counts,
+accepted HFO counts, non-spike HFO counts, spike-HFO counts, artifact counts,
+rates per minute, deleted event count, and boundary event count.
+`hfo_events.csv` contains one row per retained HFO candidate with timing,
+candidate detector, classifier probabilities, immutable classifier proposition,
+manual review fields, derived official class, band settings, and sampling
+metadata.
+
 ## Gamma Spike Pipeline
 
 Gamma spike analysis uses a memory-conscious segmented pipeline:
@@ -109,6 +127,81 @@ or the computation panel is closed.
 This is the gamma spike pipeline used by the computation panel. The older
 Python/export behavior is kept internally for validation work, but it is not
 shown as a user-facing option.
+
+## HFO Pipeline
+
+HFO analysis uses an Omni/pyHFO-style backend while keeping the GUI responsible
+for file loading, channel selection, interval selection, montage/reference
+selection, and microvolt conversion.
+
+The default user-facing HFO path is:
+
+1. The GUI provides a prepared channel x sample signal array in microvolts.
+2. Bad channels are excluded.
+3. The HFO backend applies the notch mode selected in the GUI once.
+4. The selected HFO route applies its own preprocessing:
+   `pyhfo_pybrain` preserves native sampling; `pyhfo_omni_legacy` uses the
+   Omni-compatible 1000 Hz route.
+5. Candidate detection runs with the selected route band: 80-500 Hz for
+   `pyhfo_pybrain`, 80-300 Hz for `pyhfo_omni_legacy`.
+6. The backend extracts 2-second waveforms centered on candidate events.
+7. The selected gated binary classifier runs:
+   - Model A accepts real HFO versus artifact.
+   - Model S classifies accepted events as non-spike HFO or spike-HFO.
+8. Results are shown in the HFO event grid, channel summary, main viewer
+   markers, and export files.
+
+The candidate detector choices are STE, MNI, and Hilbert. At least one detector
+must remain selected. Advanced detector parameters are editable, can be restored
+to defaults, and are applied only after saving the advanced-parameter dialog.
+The default user-facing HFO option is `pyhfo_pybrain`, using the pyBrain-native
+80-500 Hz detector/filter route. The Omni legacy option remains available as a
+separate 80-300 Hz, 1000 Hz resampled path. Ripple and fast-ripple presets are
+reserved for later validation.
+
+HFO review keeps three class concepts separate:
+
+- `final_model_class`: the immutable classifier proposition.
+- `manual_class`: the reviewer correction, if any.
+- `official_class`: the active class used for display, summaries, and active
+  counts. It equals `manual_class` after review, otherwise `final_model_class`.
+
+Two pyHFO classifier implementations are available:
+
+- `pyhfo_pybrain`: default pyBrain-compatible path.
+- `pyhfo_omni_legacy`: Omni legacy path kept as a separate validated option.
+
+`pyhfo_omni_legacy` has been validated directly against Omni's legacy pyHFO
+inference code on Zurich10:
+
+- 611 / 611 labels matched.
+- keep, artifact, spike, and HFO score max differences were 0.0.
+
+`pyhfo_pybrain` has been validated directly against the pyHFO/pyBrain
+reference GUI classifier on candidate pools:
+
+- Zurich15: 53 / 53 labels matched.
+- HUP134: 500 / 500 labels matched.
+- Full Zurich15 pyBrain-native GUI route:
+  - STE: 1 / 1 events matched; 1 / 1 labels matched.
+  - MNI: 36 / 36 events matched; 36 / 36 labels matched.
+  - Hilbert: 43 / 43 events matched; 43 / 43 labels matched.
+
+`pyhfo_pybrain` uses its own preprocessing route: native EDF sampling is
+preserved, pyBrain's Chebyshev-II HFO bandpass is applied before candidate
+detection, and classifier features are reconstructed from the native
+non-bandpassed signal plus candidate coordinates. `pyhfo_omni_legacy` remains on
+the Omni-compatible 1000 Hz processing route.
+
+Events can be manually reclassified or deleted in the HFO zoom review. Deletion
+excludes the event from active counts but preserves the event record for audit.
+
+The HFO backend also contains an Omni eHFO deep-learning classifier path with
+the official `artifacts.pth`, `spikes.pth`, and `eHFOs.pth` checkpoints. The
+classifier-only implementation has been validated against the official Omni code
+on the Zurich10 candidate pool with exact feature, score, and label agreement.
+This eHFO path is backend-ready, but it is not yet the default user-facing HFO
+classifier option.
 
 ## Installation
 
