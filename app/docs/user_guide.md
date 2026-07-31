@@ -468,6 +468,8 @@ Sampling requirements depend on the selected HFO classifier route:
 - `pyhfo_pybrain` preserves native EDF sampling, matching the pyBrain GUI route
 - `pyhfo_omni_legacy` rejects recordings below 1000 Hz and resamples higher-rate
   recordings internally to 1000 Hz
+- `eHFO` uses the Omni-compatible route: recordings below 1000 Hz are rejected,
+  and higher-rate recordings are resampled internally to 1000 Hz
 
 The default validated user-facing HFO classifier is **pyhfo_pybrain**.
 It uses:
@@ -491,9 +493,9 @@ parameter fields are disabled when their detector is disabled. Advanced changes
 are applied only after clicking **Save** in the dialog.
 
 The pyBrain 80-500 Hz band is the default for `pyhfo_pybrain`. Selecting
-`pyhfo_omni_legacy` switches the band preset to its validated 80-300 Hz route.
-Ripple, fast-ripple, and custom band options are disabled until those
-configurations are validated separately.
+`pyhfo_omni_legacy` or `eHFO` switches the band preset to the validated
+Omni-compatible 80-300 Hz route. Ripple, fast-ripple, and custom band options
+are disabled until those configurations are validated separately.
 
 Boundary handling:
 
@@ -529,15 +531,22 @@ visible and unchanged. The manual class becomes the official class. If the user
 deletes an event, it is excluded from active counts but kept in the exported
 event table.
 
-Two pyHFO classifier implementations are available. The default user-facing
-option is `pyhfo_pybrain`.
+The implemented HFO algorithms are derived from these source repositories:
+
+- Omni-iEEG: https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg
+- pyHFO pyBrain branch: https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain
+- pyHFO repository: https://github.com/roychowdhuryresearch/pyHFO
+
+Three HFO classifier routes are available. The default user-facing option is
+`pyhfo_pybrain`.
 
 | GUI classifier option | Internal implementation | Preprocessing expectation | Reference target | Validation result | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `pyhfo_pybrain` | pyBrain-compatible candidate-pool inference | Native EDF sampling in the original pyBrain GUI; detector/filter default is 80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop | Original pyHFO/pyBrain GUI classifier | Classifier-pool validation: Zurich15 53 / 53 labels matched; HUP134 500 / 500 labels matched. Full-pipeline validation on Zurich15: STE 1 / 1 events and labels, MNI 36 / 36 events and labels, Hilbert 43 / 43 events and labels. | Default user-facing option. |
-| `pyhfo_omni_legacy` | Omni-style batch waveform inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 10-500 Hz classifier feature range | Original Omni legacy pyHFO inference code | Zurich10: 611 / 611 labels matched; keep, artifact, spike, and HFO score max differences were 0.0 | Separate Omni-compatible analysis route. |
+| `pyhfo_pybrain` | pyBrain-compatible candidate-pool inference | Native EDF sampling in the original pyBrain GUI; detector/filter default is 80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop | Original pyHFO/pyBrain GUI classifier from https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain | Classifier-pool validation: Zurich15 53 / 53 labels matched; HUP134 500 / 500 labels matched. Full-pipeline validation on Zurich15: STE 1 / 1 events and labels, MNI 36 / 36 events and labels, Hilbert 43 / 43 events and labels. | Default user-facing option. |
+| `pyhfo_omni_legacy` | Omni-style batch waveform inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 10-500 Hz classifier feature range | Original Omni legacy pyHFO inference code from https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg | Zurich10: 611 / 611 labels matched; keep, artifact, spike, and HFO score max differences were 0.0 | Separate Omni-compatible analysis route. |
+| `eHFO` | Omni eHFO three-model inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 2-second waveform features for artifact, spike, and eHFO neural networks | Original Omni eHFO event-model code from https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg | Zurich10 candidate-pool validation: 611 / 611 labels matched; feature, artifact-score, spike-score, and eHFO-score max differences were 0.0 | Selectable Omni eHFO option; not the default. |
 
-Both rows therefore reached 100% agreement with their own direct reference
+Each route therefore reached 100% agreement with its own direct reference
 implementation in the tested candidate pools. They should not be described as a
 single identical classifier path, because they reproduce different upstream
 execution flows.
@@ -547,8 +556,8 @@ Implementation note: the codebase separates preprocessing modules under
 `preprocessing/pybrain.py`, preserves native sampling, applies the pyBrain
 Chebyshev-II HFO bandpass before candidate detection, and sends the native
 non-bandpassed signal plus candidate coordinates to the pyBrain-style
-classifier. The `pyhfo_omni_legacy` pipeline uses `preprocessing/omni.py` and
-resamples to 1000 Hz.
+classifier. The `pyhfo_omni_legacy` and `eHFO` pipelines use
+`preprocessing/omni.py` and resample to 1000 Hz.
 
 HFO export creates:
 
@@ -558,8 +567,8 @@ HFO export creates:
 - `README.txt`
 
 `hfo_channel_summary.csv` contains per-channel candidate counts, accepted HFO
-counts, non-spike HFO counts, spike-HFO counts, artifact counts, rates per
-minute, deleted event counts, and boundary event counts.
+counts, HFO counts, spike-HFO counts, eHFO counts, spike-eHFO counts, artifact
+counts, rates per minute, deleted event counts, and boundary event counts.
 
 `hfo_events.csv` contains one row per retained event with channel, timing,
 candidate detector, boundary warning, probabilities, classifier proposition,
@@ -569,14 +578,16 @@ details.
 `hfo_metadata.json` records the analyzed file, analysis window, selected
 channels, bad-channel exclusion, montage/reference information, notch setting,
 candidate detectors, detector parameters, sampling rates, processing order,
-classifier status, and output counts.
+classifier status, output counts, selected algorithm route, algorithm origin,
+classifier origin, checkpoint family, class mapping, and source GitHub
+repositories.
 
 HFO import restores exported HFO result folders produced by the application. The
 import validates that the result belongs to the same recording file, then
 restores events, manual review fields, classifier proposition, probabilities,
 metadata, filters where possible, and main-viewer markers.
 
-The backend also includes an Omni eHFO deep-learning classifier implementation
+The `eHFO` route uses the Omni eHFO deep-learning classifier implementation
 with official checkpoints:
 
 - `artifacts.pth`
@@ -585,8 +596,8 @@ with official checkpoints:
 
 This classifier-only path has been validated against the official Omni source on
 the Zurich10 candidate pool with exact feature, score, and label agreement. It
-is backend-ready, but it is not yet the default user-facing HFO classifier
-option.
+is selectable from the HFO classifier menu, but it is not the default
+user-facing HFO classifier option.
 
 ---
 

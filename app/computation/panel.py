@@ -79,9 +79,17 @@ HFO_DETECTOR_VERSIONS: tuple[str, ...] = (
     HFO_CLASSIFIER_EHFO,
 )
 DEFAULT_HFO_DETECTOR_VERSION = HFO_CLASSIFIER_PYHFO_PYBRAIN
-DISABLED_HFO_CLASSIFIER_OPTIONS = {
-    HFO_CLASSIFIER_EHFO,
-}
+DISABLED_HFO_CLASSIFIER_OPTIONS: set[str] = set()
+HFO_DISPLAY_CLASSES = (
+    "artifact",
+    "HFO",
+    "non-spike HFO",
+    "spike-HFO",
+    "eHFO",
+    "spike-eHFO",
+    "unclassified",
+    "deleted",
+)
 HFO_GUI_SETTINGS_ORG = "EpilepsyTools"
 HFO_GUI_SETTINGS_APP = "I_EEG"
 HFO_GUI_SETTINGS_KEY = "hfo/advanced_defaults"
@@ -1699,7 +1707,7 @@ class ComputationPanel(QWidget):
         preset = str(saved_params.get("band_preset", DEFAULT_HFO_BAND_PRESET))
         if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN:
             preset = PYBRAIN_HFO_BAND_PRESET
-        elif detector_version == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY:
+        elif detector_version in {HFO_CLASSIFIER_PYHFO_OMNI_LEGACY, HFO_CLASSIFIER_EHFO}:
             preset = OMNI_LEGACY_HFO_BAND_PRESET
         if preset in DISABLED_HFO_BAND_PRESETS:
             preset = DEFAULT_HFO_BAND_PRESET
@@ -2168,6 +2176,8 @@ class ComputationPanel(QWidget):
                 item.setToolTip("Not validated yet for the legacy pyHFO integration.")
 
     def _disable_unvalidated_hfo_classifier_options(self) -> None:
+        if not DISABLED_HFO_CLASSIFIER_OPTIONS:
+            return
         model = self.combo_hfo_detector_version.model()
         for idx in range(self.combo_hfo_detector_version.count()):
             label = str(self.combo_hfo_detector_version.itemText(idx))
@@ -2176,7 +2186,7 @@ class ComputationPanel(QWidget):
             item = getattr(model, "item", lambda _idx: None)(idx)
             if item is not None:
                 item.setEnabled(False)
-                item.setToolTip("eHFO checkpoints are not configured yet.")
+                item.setToolTip("This HFO classifier option is not available in this build.")
 
     def _lock_hfo_legacy_parameter_controls(self) -> None:
         fixed_controls = (
@@ -3497,14 +3507,14 @@ class ComputationPanel(QWidget):
         )
 
     def _hfo_active_label_counts(self, result: HFOComputationResult) -> dict[str, int]:
-        counts = {
-            "artifact": 0,
-            "non-spike HFO": 0,
-            "spike-HFO": 0,
-            "unclassified": 0,
-        }
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        classifier_name = str(metadata.get("detector_version", "") or "")
+        counts = {label: 0 for label in HFO_DISPLAY_CLASSES if label != "deleted"}
         for event in result.events:
-            label = self._normalize_hfo_display_class(self._hfo_display_class(event))
+            label = self._normalize_hfo_display_class(
+                self._hfo_display_class(event),
+                classifier_name=classifier_name,
+            )
             if label == "deleted":
                 continue
             counts[label] = counts.get(label, 0) + 1
@@ -3569,22 +3579,23 @@ class ComputationPanel(QWidget):
             channel_events = list(channel_result.events)
             active_channel_events = [
                 event for event in channel_events
-                if self._normalize_hfo_display_class(self._hfo_display_class(event)) != "deleted"
+                if self._normalize_hfo_display_class(
+                    self._hfo_display_class(event),
+                    classifier_name=str(metadata.get("detector_version", "") or ""),
+                ) != "deleted"
+            ]
+            event_labels = [
+                self._normalize_hfo_display_class(
+                    self._hfo_display_class(event),
+                    classifier_name=str(metadata.get("detector_version", "") or ""),
+                )
+                for event in active_channel_events
             ]
             candidate_count = len(active_channel_events)
             deleted_count = len(channel_events) - candidate_count
-            artifact_count = sum(
-                1 for event in active_channel_events
-                if self._normalize_hfo_display_class(self._hfo_display_class(event)) == "artifact"
-            )
-            spike_count = sum(
-                1 for event in active_channel_events
-                if self._normalize_hfo_display_class(self._hfo_display_class(event)) == "spike-HFO"
-            )
-            non_spike_count = sum(
-                1 for event in active_channel_events
-                if self._normalize_hfo_display_class(self._hfo_display_class(event)) == "non-spike HFO"
-            )
+            artifact_count = sum(1 for label in event_labels if label == "artifact")
+            spike_count = sum(1 for label in event_labels if label in {"spike-HFO", "spike-eHFO"})
+            non_spike_count = sum(1 for label in event_labels if label in {"non-spike HFO", "HFO", "eHFO"})
             accepted_count = non_spike_count + spike_count
             accepted_rate = float(accepted_count) / duration_min if duration_min > 0.0 else 0.0
             spike_rate = float(spike_count) / duration_min if duration_min > 0.0 else 0.0
@@ -3739,8 +3750,11 @@ class ComputationPanel(QWidget):
                 edge_text = f"   edge excluded: {edge_excluded} candidate events"
         footer = QLabel(
             f"Total events: {len(result.events)}   "
+            f"HFO: {active_counts.get('HFO', 0)}   "
             f"non-spkHFO: {active_counts.get('non-spike HFO', 0)}   "
             f"spkHFO: {active_counts.get('spike-HFO', 0)}   "
+            f"eHFO: {active_counts.get('eHFO', 0)}   "
+            f"spk-eHFO: {active_counts.get('spike-eHFO', 0)}   "
             f"artifact: {active_counts.get('artifact', 0)}"
             f"{edge_text}"
         )
@@ -3843,6 +3857,7 @@ class ComputationPanel(QWidget):
         detection_fs = float(metadata.get("detection_fs", metadata.get("input_fs", 1000.0)) or 1000.0)
         data_start_s = float(metadata.get("data_start_s", 0.0) or 0.0)
         classification_status = self._effective_hfo_classification_status(result)
+        classifier_name = str(metadata.get("detector_version", "") or "")
         channel_event_counts: dict[str, int] = {}
 
         events: list[ExpertEvent] = []
@@ -3850,11 +3865,14 @@ class ComputationPanel(QWidget):
             label = self._hfo_display_class(event)
             if not label or label == "candidate":
                 label = "unclassified"
-            normalized_label = self._normalize_hfo_display_class(label)
+            normalized_label = self._normalize_hfo_display_class(
+                label,
+                classifier_name=classifier_name,
+            )
             if self._hfo_classification_failed(classification_status):
                 normalized_label = "unclassified"
-            accepted_hfo = normalized_label in {"non-spike HFO", "spike-HFO"}
-            spike_hfo = normalized_label == "spike-HFO"
+            accepted_hfo = normalized_label not in {"artifact", "deleted", "unclassified"}
+            spike_hfo = normalized_label in {"spike-HFO", "spike-eHFO"}
             detector = str(event.detector)
             channel_key = str(event.channel)
             channel_event_counts[channel_key] = channel_event_counts.get(channel_key, 0) + 1
@@ -3917,7 +3935,10 @@ class ComputationPanel(QWidget):
                     artifact_probability=artifact_probability,
                     spike_hfo_probability=spike_hfo_probability,
                     classification_status=classification_status,
-                    manual_class=self._normalize_hfo_display_class(getattr(event, "manual_class", None))
+                    manual_class=self._normalize_hfo_display_class(
+                        getattr(event, "manual_class", None),
+                        classifier_name=classifier_name,
+                    )
                     if getattr(event, "manual_class", None)
                     else "",
                     manual_review_status=str(getattr(event, "manual_review_status", "unreviewed") or "unreviewed"),
@@ -3952,11 +3973,15 @@ class ComputationPanel(QWidget):
 
     def _refresh_hfo_review_metadata(self, result: HFOComputationResult) -> None:
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        classifier_name = str(metadata.get("detector_version", "") or "")
         official_counts: dict[str, int] = {}
         reviewed_count = 0
         deleted_count = 0
         for event in result.events:
-            label = self._normalize_hfo_display_class(self._hfo_display_class(event))
+            label = self._normalize_hfo_display_class(
+                self._hfo_display_class(event),
+                classifier_name=classifier_name,
+            )
             official_counts[label] = official_counts.get(label, 0) + 1
             if label == "deleted":
                 deleted_count += 1
@@ -3967,7 +3992,12 @@ class ComputationPanel(QWidget):
         metadata["manual_deleted_events"] = int(deleted_count)
         result.metadata = metadata
 
-    def _normalize_hfo_display_class(self, label: object) -> str:
+    def _normalize_hfo_display_class(
+        self,
+        label: object,
+        *,
+        classifier_name: str | None = None,
+    ) -> str:
         text = str(label or "").strip()
         lowered = text.lower().replace("_", "-")
         if not lowered or lowered in {"candidate", "unknown", "none"}:
@@ -3976,7 +4006,13 @@ class ComputationPanel(QWidget):
             return "deleted"
         if "artifact" in lowered:
             return "artifact"
+        if lowered in {"spike-ehfo", "spike ehfo", "spkehfo", "spk-ehfo", "spk ehfo"}:
+            return "spike-eHFO"
+        if lowered in {"ehfo", "e-hfo"}:
+            return "eHFO"
         if lowered in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
+            if str(classifier_name or "").strip() == HFO_CLASSIFIER_EHFO and lowered in {"hfo", "real hfo", "real-hfo"}:
+                return "HFO"
             return "non-spike HFO"
         if lowered in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
             return "spike-HFO"

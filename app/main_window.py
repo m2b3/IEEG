@@ -223,6 +223,8 @@ class MainWindow(QMainWindow):
         self.chk_show_hfo_artifact = QCheckBox("artifact")
         self.chk_show_hfo_non_spike = QCheckBox("HFO")
         self.chk_show_hfo_spike = QCheckBox("spkHFO")
+        self.chk_show_hfo_ehfo = QCheckBox("eHFO")
+        self.chk_show_hfo_spike_ehfo = QCheckBox("spk-eHFO")
         self.chk_show_hfo_unclassified = QCheckBox("unclassified")
         event_filter_colors = {
             self.chk_show_non_gamma_spikes: "#4091ff",
@@ -230,6 +232,8 @@ class MainWindow(QMainWindow):
             self.chk_show_hfo_artifact: "#dc3232",
             self.chk_show_hfo_non_spike: "#3264dc",
             self.chk_show_hfo_spike: "#32af50",
+            self.chk_show_hfo_ehfo: "#0f766e",
+            self.chk_show_hfo_spike_ehfo: "#7c3aed",
             self.chk_show_hfo_unclassified: "#788291",
         }
         for checkbox, color in event_filter_colors.items():
@@ -2283,6 +2287,8 @@ class MainWindow(QMainWindow):
             self.chk_show_hfo_artifact,
             self.chk_show_hfo_non_spike,
             self.chk_show_hfo_spike,
+            self.chk_show_hfo_ehfo,
+            self.chk_show_hfo_spike_ehfo,
             self.chk_show_hfo_unclassified,
         ):
             checkbox.setVisible(show_hfo_controls)
@@ -2333,6 +2339,10 @@ class MainWindow(QMainWindow):
         normalized = str(kind).strip().lower().replace("_", "-")
         if "artifact" in normalized:
             return self.chk_show_hfo_artifact.isChecked()
+        if normalized in {"spike-ehfo", "spike ehfo", "spkehfo", "spk-ehfo", "spk ehfo"}:
+            return self.chk_show_hfo_spike_ehfo.isChecked()
+        if normalized in {"ehfo", "e-hfo"}:
+            return self.chk_show_hfo_ehfo.isChecked()
         if "spike" in normalized and "non-spike" not in normalized:
             return self.chk_show_hfo_spike.isChecked()
         if "non-spike" in normalized or normalized in {"hfo", "real-hfo", "real hfo"}:
@@ -2393,6 +2403,10 @@ class MainWindow(QMainWindow):
         if source_key == "hfo":
             if "artifact" in normalized:
                 return "#dc3232"
+            if normalized in {"spike-ehfo", "spike ehfo", "spkehfo", "spk-ehfo", "spk ehfo"}:
+                return "#7c3aed"
+            if normalized in {"ehfo", "e-hfo"}:
+                return "#0f766e"
             if "spike" in normalized and "non-spike" not in normalized:
                 return "#32af50"
             if "non-spike" in normalized or "hfo" in normalized:

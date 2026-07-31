@@ -1321,8 +1321,11 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         display_names = self.get_channel_names()
         colors = {
             "artifact": (220, 50, 50, 235),
+            "HFO": (40, 120, 210, 235),
             "non-spike HFO": (50, 100, 220, 235),
             "spike-HFO": (50, 175, 80, 235),
+            "eHFO": (15, 118, 110, 235),
+            "spike-eHFO": (124, 58, 237, 235),
             "unclassified": (120, 130, 145, 235),
         }
         overlay_pens = {kind: pg.mkPen(color, width=2.6) for kind, color in colors.items()}
@@ -1425,7 +1428,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         x = float(x_max) - 0.012 * max(1e-9, float(x_max) - float(x_min))
         y = float(y_max) - 0.11 * max(1e-9, float(y_max) - float(y_min))
 
-        label_order = ["artifact", "non-spike HFO", "spike-HFO", "unclassified"]
+        label_order = ["artifact", "HFO", "non-spike HFO", "spike-HFO", "eHFO", "spike-eHFO", "unclassified"]
         parts = []
         for kind in label_order:
             if kind not in visible_kinds:

@@ -423,7 +423,9 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
         artifact_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "artifact")
         spike_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "spike-HFO")
         non_spike_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "HFO")
-        accepted_count = non_spike_count + spike_count
+        ehfo_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "eHFO")
+        spike_ehfo_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "spike-eHFO")
+        accepted_count = non_spike_count + spike_count + ehfo_count + spike_ehfo_count
         boundary_count = sum(1 for event in active_channel_events if bool(getattr(event, "boundary_warning", event.is_boundary)))
         summary_rows.append(
             {
@@ -432,11 +434,15 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
                 "accepted_hfo_count": accepted_count,
                 "non_spike_hfo_count": non_spike_count,
                 "spike_hfo_count": spike_count,
+                "ehfo_count": ehfo_count,
+                "spike_ehfo_count": spike_ehfo_count,
                 "artifact_count": artifact_count,
                 "candidate_rate_per_min": _rate_per_min(candidate_count, analysis_duration_min),
                 "accepted_hfo_rate_per_min": _rate_per_min(accepted_count, analysis_duration_min),
                 "non_spike_hfo_rate_per_min": _rate_per_min(non_spike_count, analysis_duration_min),
                 "spike_hfo_rate_per_min": _rate_per_min(spike_count, analysis_duration_min),
+                "ehfo_rate_per_min": _rate_per_min(ehfo_count, analysis_duration_min),
+                "spike_ehfo_rate_per_min": _rate_per_min(spike_ehfo_count, analysis_duration_min),
                 "artifact_percentage": (
                     100.0 * float(artifact_count) / float(candidate_count)
                     if candidate_count > 0
@@ -491,11 +497,15 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
             "accepted_hfo_count",
             "non_spike_hfo_count",
             "spike_hfo_count",
+            "ehfo_count",
+            "spike_ehfo_count",
             "artifact_count",
             "candidate_rate_per_min",
             "accepted_hfo_rate_per_min",
             "non_spike_hfo_rate_per_min",
             "spike_hfo_rate_per_min",
+            "ehfo_rate_per_min",
+            "spike_ehfo_rate_per_min",
             "artifact_percentage",
             "deleted_event_count",
             "boundary_event_count",
@@ -573,6 +583,10 @@ def _hfo_event_class(event: Any) -> str:
         return "deleted"
     if "artifact" in label:
         return "artifact"
+    if label in {"spike-ehfo", "spkehfo", "spk-ehfo", "spk ehfo", "spike ehfo"}:
+        return "spike-eHFO"
+    if label in {"ehfo", "e-hfo"}:
+        return "eHFO"
     if label in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
         return "spike-HFO"
     if label in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
@@ -591,6 +605,8 @@ def _compact_hfo_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "resampled_to_hz": _finite_float(metadata.get("resampled_to_hz")),
         "input_units": metadata.get("input_units"),
         "detector_version": metadata.get("detector_version"),
+        "algorithm_details": _json_safe(metadata.get("algorithm_details", {})),
+        "source_repositories": _json_safe(metadata.get("source_repositories", [])),
         "active_candidate_detectors": _json_safe(
             metadata.get("active_candidate_detectors", [])
         ),
@@ -620,6 +636,7 @@ def _compact_hfo_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "preprocessing_log": _json_safe(metadata.get("preprocessing_log", [])),
         "classification_status": metadata.get("classification_status"),
         "classifier_implementation": metadata.get("classifier_implementation"),
+        "classifier_origin": _json_safe(metadata.get("classifier_origin", {})),
         "classifier_feature_freq_range_hz": _json_safe(
             metadata.get("classifier_feature_freq_range_hz")
         ),
@@ -794,16 +811,20 @@ Files:
 
 - hfo_metadata.json
   Records the analyzed file, manual analysis window, sampling frequencies,
-  internal 1000 Hz resampling, GUI notch settings, candidate detectors,
+  route-specific resampling behavior, GUI notch settings, candidate detectors,
   classifier status, model label counts, reviewed official label counts, input
-  boundary, and processing order.
+  boundary, processing order, selected HFO algorithm route, classifier origin,
+  checkpoint family, class mapping, and source GitHub repositories.
 
 Notes:
-- Recordings below 1000 Hz are rejected before HFO detection.
-- Recordings above 1000 Hz are resampled internally to 1000 Hz.
+- `pyhfo_omni_legacy` and `eHFO` reject recordings below 1000 Hz and resample
+  higher-rate recordings internally to 1000 Hz.
+- `pyhfo_pybrain` preserves native sampling to match the pyHFO/pyBrain route.
 - HFO uses the notch setting selected in the main GUI.
-- The validated pyhfo_omni_legacy default uses the 80-300 Hz detector band after internal
-  1000 Hz resampling.
+- The validated pyhfo_omni_legacy and eHFO routes use the 80-300 Hz detector
+  band after internal 1000 Hz resampling.
+- The validated pyhfo_pybrain route uses the 80-500 Hz pyBrain-native detector
+  and filter route.
 - Candidates longer than max_duration_ms are excluded before waveform extraction
   and classification; excluded counts are recorded in metadata.
 - Candidates inside boundary_padding_s from the selected analysis-window start or

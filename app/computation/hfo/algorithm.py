@@ -29,6 +29,10 @@ HFO_CLASSIFIER_PYHFO_OMNI_LEGACY = "pyhfo_omni_legacy"
 HFO_CLASSIFIER_PYHFO_PYBRAIN = "pyhfo_pybrain"
 HFO_CLASSIFIER_EHFO = "eHFO"
 
+OMNI_IEEG_REPO_URL = "https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg"
+PYHFO_PYBRAIN_REPO_URL = "https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain"
+PYHFO_REPO_URL = "https://github.com/roychowdhuryresearch/pyHFO"
+
 
 def compute_hfo_for_gui(
     *,
@@ -285,6 +289,8 @@ def compute_hfo_for_gui(
         {
             "algorithm": "HFO",
             "detector_version": str(detector_version),
+            "algorithm_details": _hfo_algorithm_details(str(detector_version)),
+            "source_repositories": _hfo_source_repositories(str(detector_version)),
             "active_candidate_detectors": list(map(str, active)),
             "analysis_window_s": [float(start_s), float(stop_s)],
             "data_start_s": float(data_start_s),
@@ -328,6 +334,7 @@ def compute_hfo_for_gui(
             "preprocessing_log": list(prepared.preprocessing_log),
             "classification_status": classification_status,
             "classifier_implementation": classification.get("implementation"),
+            "classifier_origin": _hfo_classifier_origin(str(detector_version)),
             "classifier_feature_freq_range_hz": classification.get("classifier_feature_freq_range_hz"),
             "classification_label_counts": classification_label_counts,
             "classification_probability_counts": classification_probability_counts,
@@ -393,6 +400,7 @@ def _validate_classification_output(
     if not (
         classifier_name == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY
         or classifier_name == HFO_CLASSIFIER_PYHFO_PYBRAIN
+        or classifier_name == HFO_CLASSIFIER_EHFO
     ):
         return
 
@@ -407,6 +415,7 @@ def _validate_classification_output(
     keep_scores = _score_array(classification.get("pyhfo_keep_score"))
     artifact_scores = _score_array(classification.get("artifact_score"))
     spike_scores = _score_array(classification.get("spike_score"))
+    hfo_scores = _score_array(classification.get("hfo_score"))
     missing: list[str] = []
     if labels is None or len(labels) < int(candidate_count):
         missing.append("classification_label")
@@ -416,6 +425,10 @@ def _validate_classification_output(
         missing.append("artifact_score")
     if spike_scores is None or int(spike_scores.size) < int(candidate_count):
         missing.append("spike_score")
+    if classifier_name == HFO_CLASSIFIER_EHFO and (
+        hfo_scores is None or int(hfo_scores.size) < int(candidate_count)
+    ):
+        missing.append("hfo_score")
     if missing:
         raise RuntimeError(
             f"{classifier_name} classification returned incomplete output "
@@ -451,6 +464,140 @@ def _classification_label_counts(events: list[HFOEventResult]) -> dict[str, int]
             label = "unclassified"
         counts[label] = counts.get(label, 0) + 1
     return counts
+
+
+def _hfo_source_repositories(detector_version: str) -> list[dict[str, str]]:
+    classifier_name = str(detector_version)
+    repositories = [
+        {
+            "name": "Omni-iEEG",
+            "url": OMNI_IEEG_REPO_URL,
+            "used_for": "Omni HFO/eHFO event-model code, Omni-compatible preprocessing route, and eHFO reference validation.",
+        },
+        {
+            "name": "pyHFO",
+            "url": PYHFO_REPO_URL,
+            "used_for": "Original pyHFO detector and classifier family context.",
+        },
+    ]
+    if classifier_name == HFO_CLASSIFIER_PYHFO_PYBRAIN:
+        repositories.append(
+            {
+                "name": "pyHFO pyBrain branch",
+                "url": PYHFO_PYBRAIN_REPO_URL,
+                "used_for": "Default pyBrain-compatible preprocessing, detector/filter behavior, and binary pyHFO classifier validation target.",
+            }
+        )
+    return repositories
+
+
+def _hfo_classifier_origin(detector_version: str) -> dict[str, Any]:
+    classifier_name = str(detector_version)
+    if classifier_name == HFO_CLASSIFIER_PYHFO_PYBRAIN:
+        return {
+            "name": "pyHFO pyBrain binary classifier",
+            "reference_repository": PYHFO_PYBRAIN_REPO_URL,
+            "models": ["model_a.tar", "model_s.tar"],
+            "classes": ["artifact", "HFO", "spike-HFO"],
+        }
+    if classifier_name == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY:
+        return {
+            "name": "Omni legacy pyHFO binary classifier",
+            "reference_repository": OMNI_IEEG_REPO_URL,
+            "models": ["model_a.tar", "model_s.tar"],
+            "classes": ["artifact", "HFO", "spike-HFO"],
+        }
+    if classifier_name == HFO_CLASSIFIER_EHFO:
+        return {
+            "name": "Omni eHFO three-model classifier",
+            "reference_repository": OMNI_IEEG_REPO_URL,
+            "models": ["artifacts.pth", "spikes.pth", "eHFOs.pth"],
+            "classes": ["artifact", "HFO", "spike-HFO", "eHFO", "spike-eHFO"],
+        }
+    return {
+        "name": classifier_name,
+        "reference_repository": "",
+        "models": [],
+        "classes": [],
+    }
+
+
+def _hfo_algorithm_details(detector_version: str) -> dict[str, Any]:
+    classifier_name = str(detector_version)
+    common = {
+        "pipeline": [
+            "GUI/file layer prepares selected channel x sample signal in microvolts",
+            "HFO backend excludes bad channels",
+            "HFO backend applies the GUI-selected notch once",
+            "selected route preprocessing",
+            "candidate detection with STE, MNI, and/or Hilbert",
+            "2-second waveform extraction around candidate events",
+            "selected classifier inference",
+            "event-level labels, probabilities, review fields, summaries, and export",
+        ],
+        "candidate_detector_origin": {
+            "name": "Omni/pyHFO-style STE, MNI, and Hilbert candidate detectors",
+            "reference_repositories": [OMNI_IEEG_REPO_URL, PYHFO_REPO_URL],
+            "role": "Candidate detectors find suspicious high-frequency events; they do not decide the final model class.",
+        },
+        "manual_review_rule": {
+            "final_model_class": "Immutable classifier proposition.",
+            "manual_class": "Reviewer correction, if any.",
+            "official_class": "manual_class after review; otherwise final_model_class.",
+        },
+    }
+    if classifier_name == HFO_CLASSIFIER_PYHFO_PYBRAIN:
+        common.update(
+            {
+                "selected_route": "pyhfo_pybrain",
+                "route_origin": "Original pyHFO/pyBrain GUI-compatible route.",
+                "reference_repository": PYHFO_PYBRAIN_REPO_URL,
+                "preprocessing": "Preserves native EDF sampling, applies pyBrain-style Chebyshev-II HFO bandpass before candidate detection, and reconstructs classifier features from the native signal plus candidate coordinates.",
+                "default_detector_band_hz": [80.0, 500.0],
+                "classifier": "Gated binary pyHFO classifier: Model A accepts/rejects real HFO; Model S classifies accepted events as spike-HFO or HFO.",
+                "checkpoint_directory": "app/computation/hfo/checkpoints/pyhfo_legacy_binary",
+            }
+        )
+    elif classifier_name == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY:
+        common.update(
+            {
+                "selected_route": "pyhfo_omni_legacy",
+                "route_origin": "Omni legacy pyHFO event-model route.",
+                "reference_repository": OMNI_IEEG_REPO_URL,
+                "preprocessing": "Rejects input below 1000 Hz, resamples higher-rate input to 1000 Hz, and uses the Omni-compatible 80-300 Hz detection route.",
+                "default_detector_band_hz": [80.0, 300.0],
+                "classifier": "Gated binary pyHFO classifier: Model A accepts/rejects real HFO; Model S classifies accepted events as spike-HFO or HFO.",
+                "checkpoint_directory": "app/computation/hfo/checkpoints/pyhfo_legacy_binary",
+            }
+        )
+    elif classifier_name == HFO_CLASSIFIER_EHFO:
+        common.update(
+            {
+                "selected_route": "eHFO",
+                "route_origin": "Omni eHFO event-model route.",
+                "reference_repository": OMNI_IEEG_REPO_URL,
+                "preprocessing": "Uses the Omni-compatible route: reject input below 1000 Hz, resample higher-rate input to 1000 Hz, extract 2-second waveforms, and build Omni eHFO image features.",
+                "default_detector_band_hz": [80.0, 300.0],
+                "classifier": "Three binary neural-network outputs are combined: artifact/keep, spike association, and eHFO positivity.",
+                "class_mapping": {
+                    "not_kept": "artifact",
+                    "kept_no_spike_no_ehfo": "HFO",
+                    "kept_spike_no_ehfo": "spike-HFO",
+                    "kept_no_spike_ehfo": "eHFO",
+                    "kept_spike_ehfo": "spike-eHFO",
+                },
+                "checkpoint_directory": "app/computation/hfo/checkpoints/ehfo",
+            }
+        )
+    else:
+        common.update(
+            {
+                "selected_route": classifier_name,
+                "route_origin": "Unsupported or unknown HFO classifier route.",
+                "reference_repository": "",
+            }
+        )
+    return common
 
 
 def _classification_label(

@@ -21,8 +21,22 @@ from PySide6.QtWidgets import (
 COLOR_REJECTED_ARTIFACT = QColor(220, 50, 50)  # red
 COLOR_SPK_HFO = QColor(50, 200, 50)            # green
 COLOR_NON_SPK_HFO = QColor(50, 100, 220)       # blue
+COLOR_HFO = QColor(40, 120, 210)               # blue
+COLOR_EHFO = QColor(15, 118, 110)              # teal
+COLOR_SPK_EHFO = QColor(124, 58, 237)          # violet
 COLOR_UNCLASSIFIED = QColor(120, 130, 145)     # gray
 COLOR_DELETED = QColor(90, 90, 90)             # dark gray
+
+HFO_REVIEW_CLASS_OPTIONS = [
+    "artifact",
+    "HFO",
+    "non-spike HFO",
+    "spike-HFO",
+    "eHFO",
+    "spike-eHFO",
+    "unclassified",
+    "deleted",
+]
 
 # Grid dimensions
 GRID_ROWS = 6
@@ -314,8 +328,6 @@ class ExpertEvent:
     @property
     def model_label(self) -> str:
         model_class = str(self.model_class or "").strip()
-        if model_class == "HFO":
-            return "non-spike HFO"
         return model_class or "unclassified"
     
     @property
@@ -342,6 +354,12 @@ class ExpertEvent:
             return COLOR_UNCLASSIFIED
         if "artifact" in label:
             return COLOR_REJECTED_ARTIFACT
+        if label in {"spike-ehfo", "spkehfo", "spk-ehfo"}:
+            return COLOR_SPK_EHFO
+        if label in {"ehfo", "e-hfo"}:
+            return COLOR_EHFO
+        if label == "hfo":
+            return COLOR_HFO
         if "non-spike" in label or "non-spk" in label or label == "hfo":
             return COLOR_NON_SPK_HFO
         if label in {"spike-hfo", "spkhfo", "spk-hfo"}:
@@ -609,7 +627,7 @@ class ZoomedEventView(QWidget):
         review_label.setStyleSheet("color: #374151; font-size: 12px; font-weight: bold;")
         detail_layout.addWidget(review_label)
         self._class_combo = QComboBox()
-        self._class_combo.addItems(["artifact", "non-spike HFO", "spike-HFO", "unclassified", "deleted"])
+        self._class_combo.addItems(HFO_REVIEW_CLASS_OPTIONS)
         self._class_combo.setStyleSheet("""
             QComboBox {
                 background-color: #ffffff;
@@ -1002,7 +1020,7 @@ class ExpertEventGrid(QWidget):
         self._channel_filter = QComboBox()
         self._type_filter = QComboBox()
         self._order_filter = QComboBox()
-        self._type_filter.addItems(["All active", "spike-HFO", "non-spike HFO", "artifact", "unclassified", "deleted"])
+        self._type_filter.addItems(["All active", *HFO_REVIEW_CLASS_OPTIONS])
         self._order_filter.addItems(["Channel order", "Time order"])
         for combo in (self._channel_filter, self._type_filter, self._order_filter):
             combo.setStyleSheet("""
@@ -1145,6 +1163,12 @@ class ExpertEventGrid(QWidget):
             return "artifact"
         if normalized in {"unclassified", "candidate", "unknown", "not-classified"}:
             return "unclassified"
+        if normalized in {"spike-ehfo", "spkehfo", "spk-ehfo", "spk-ehfo"}:
+            return "spike-eHFO"
+        if normalized in {"ehfo", "e-hfo"}:
+            return "eHFO"
+        if normalized == "hfo":
+            return "HFO"
         if normalized in {"hfo", "non-spike-hfo", "non-spkhfo", "non-spk-hfo"}:
             return "non-spike HFO"
         if "non-spike" in normalized or "non-spk" in normalized:
@@ -1180,13 +1204,7 @@ class ExpertEventGrid(QWidget):
         self._current_page = 0
         title = getattr(self, "_events_title", "Loaded events")
         type_counts = self._event_type_counts(self._all_events)
-        count_text = (
-            f"spike-HFO: {type_counts.get('spike-HFO', 0)}, "
-            f"non-spike HFO: {type_counts.get('non-spike HFO', 0)}, "
-            f"artifact: {type_counts.get('artifact', 0)}, "
-            f"unclassified: {type_counts.get('unclassified', 0)}, "
-            f"deleted: {type_counts.get('deleted', 0)}"
-        )
+        count_text = self._event_count_text(type_counts)
         if self._events:
             self._info_label.setText(
                 f"{title}: {len(self._events)} / {len(self._all_events)} events | "
@@ -1202,11 +1220,17 @@ class ExpertEventGrid(QWidget):
         self.filteredEventsChanged.emit(list(self._events))
 
     def _event_type_counts(self, events: list[ExpertEvent]) -> dict[str, int]:
-        counts = {"spike-HFO": 0, "non-spike HFO": 0, "artifact": 0, "unclassified": 0, "deleted": 0}
+        counts = {label: 0 for label in HFO_REVIEW_CLASS_OPTIONS}
         for event in events:
             event_type = self._event_filter_type(event)
             counts[event_type] = counts.get(event_type, 0) + 1
         return counts
+
+    def _event_count_text(self, type_counts: dict[str, int]) -> str:
+        labels = [label for label in HFO_REVIEW_CLASS_OPTIONS if int(type_counts.get(label, 0)) > 0]
+        if not labels:
+            labels = ["artifact", "non-spike HFO", "spike-HFO", "unclassified", "deleted"]
+        return ", ".join(f"{label}: {int(type_counts.get(label, 0))}" for label in labels)
 
     def _coerce_waveform_result(self, result) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
         if result is None:
@@ -1438,8 +1462,8 @@ class ExpertEventGrid(QWidget):
         normalized = self._normalize_event_class(label)
         event.manual_class = normalized
         event.manual_review_status = "deleted" if normalized == "deleted" else "reviewed"
-        event.artifact = normalized in {"non-spike HFO", "spike-HFO"}
-        event.spike = normalized == "spike-HFO"
+        event.artifact = normalized not in {"artifact", "deleted", "unclassified"}
+        event.spike = normalized in {"spike-HFO", "spike-eHFO"}
         if event.source_event is not None:
             try:
                 setattr(event.source_event, "manual_class", normalized)
@@ -1462,9 +1486,15 @@ class ExpertEventGrid(QWidget):
             return "deleted"
         if "artifact" in lowered:
             return "artifact"
+        if lowered in {"spike-ehfo", "spike ehfo", "spkehfo", "spk-ehfo", "spk ehfo"}:
+            return "spike-eHFO"
+        if lowered in {"ehfo", "e-hfo"}:
+            return "eHFO"
+        if lowered in {"hfo", "real hfo", "real-hfo"}:
+            return "HFO"
         if lowered in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
             return "spike-HFO"
-        if lowered in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
+        if lowered in {"non-spike hfo", "non-spkhfo", "non-spk hfo"}:
             return "non-spike HFO"
         return "unclassified"
 
@@ -1489,13 +1519,7 @@ class ExpertEventGrid(QWidget):
         self._total_pages = (len(self._events) + GRID_TOTAL - 1) // GRID_TOTAL if self._events else 0
         title = getattr(self, "_events_title", "Loaded events")
         type_counts = self._event_type_counts(self._all_events)
-        count_text = (
-            f"spike-HFO: {type_counts.get('spike-HFO', 0)}, "
-            f"non-spike HFO: {type_counts.get('non-spike HFO', 0)}, "
-            f"artifact: {type_counts.get('artifact', 0)}, "
-            f"unclassified: {type_counts.get('unclassified', 0)}, "
-            f"deleted: {type_counts.get('deleted', 0)}"
-        )
+        count_text = self._event_count_text(type_counts)
         if self._events:
             self._info_label.setText(
                 f"{title}: {len(self._events)} / {len(self._all_events)} events | "
