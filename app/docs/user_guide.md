@@ -10,7 +10,7 @@ Use **File > New Project...** to start a new review.
 2. Choose where to save the `.ieeg` project file
 3. Confirm
 
-The project is linked to the selected raw recording. Once loaded, the signal viewer, toolbar, time navigation, montage label, and window title update.
+The project is linked to the selected raw recording.
 
 ### 1.2 Open an Existing Project
 
@@ -22,11 +22,30 @@ When a project is reopened, the application restores:
 - annotations
 - hidden channels
 - bad channels
-- saved edited bipolar montage
-- display filter settings
-- computation panel state
+- macro/micro channel groups
+- a saved edited bipolar montage, ready for reuse after Bipolar is selected
+- macro and micro display-filter settings
+- display time range, visible-channel count, and amplitude scale
+- the selected computation algorithm and channels
+- REI seizure timing, baseline/ictal windows, and frequency settings
+- gamma-spike and HFO analysis intervals
+- HFO classifier, band, detector, and advanced-parameter settings
+- the last REI result metadata, when available
 
-The active reference mode itself is not automatically restored. If needed, reselect Bipolar, Average, Median, or Common Reference after opening.
+The project does not restore:
+
+- the active reference mode; the recording reopens in Monopolar
+- complete REI, gamma-spike, or HFO results
+- the Light/Dark theme
+- the main-viewer time position
+- open docks, review grids, PSD/scalogram windows, or other secondary windows
+- gamma/HFO event-filter checkbox selections
+
+If needed, reselect Bipolar, Average, Median, or Common Reference after opening.
+To recover complete computation results and viewer markers, use **Import
+results...** with a matching exported result folder.
+
+Once loaded, the signal viewer, toolbar, time navigation, montage label, and window title update.
 
 ### 1.3 Supported File Formats
 
@@ -72,8 +91,10 @@ The toolbar controls the main display:
 - **Time Range (s)**: number of seconds visible at once
 - **Channels**: number of channels visible at once
 - **Amplitude (uV)**: manual vertical display scaling
+- **Theme**: switch the interface and viewer between Light and Dark themes
 - **Hidden...**: restore hidden channels
 - **Bad...**: review and unmark bad channels
+- **Hide all Bad**: hide every channel currently marked as bad
 - **Edit Bipolar...**: edit the bipolar montage when bipolar mode is active
 
 ### 2.3 Signal Viewer
@@ -149,7 +170,11 @@ Selected channels are highlighted in the viewer.
 
 Use **File > Save** to save the current project.
 
-Saved projects preserve review state such as annotations, hidden channels, bad channels, edited bipolar montage state, display filters, selected computation settings, and last REI result metadata when available.
+Saved projects preserve annotations, hidden and bad channels, macro/micro channel
+groups, edited bipolar montage state, display filters, time range, visible-channel
+count, amplitude scale, selected computation settings, and the last REI result
+metadata when available. Complete computation results are stored through their
+export folders rather than inside the `.ieeg` project file.
 
 ### 4.2 Save As
 
@@ -338,6 +363,55 @@ Quick selection buttons:
 - **Macro**: select all displayed macro channels
 - **Micro**: select all displayed micro channels
 
+The **Output** section changes with the selected algorithm. Result review and
+export buttons become available after a successful run or import.
+
+#### 8.1.1 Import Previously Exported Results
+
+Use **Import results...** in the computation panel to restore a result folder
+previously exported by the application. The importer detects the algorithm from
+the files in the selected folder:
+
+- REI: `rei_summary.csv` and `rei_metadata.json`
+- Gamma spike: `gamma_spike_events.csv` and `gamma_metadata.json`
+- HFO: `hfo_events.csv` and `hfo_metadata.json`
+
+The application switches to the detected algorithm and restores its summaries,
+review grid, metadata, and viewer markers where available. The import is
+rejected if required files are missing, channels do not match the current
+recording/montage, or the metadata identifies a different source recording.
+
+Load the matching recording and select the matching montage before importing.
+
+#### 8.1.2 Event Filters and Global Timeline
+
+After gamma-spike or HFO results are opened, the main window shows event-class
+filters beside the montage label and a compact global event timeline below the
+viewer.
+
+Gamma filters:
+
+- **non-gamma**
+- **gamma**
+
+HFO filters:
+
+- **artifact**
+- **HFO**
+- **spkHFO**
+- **eHFO**
+- **spk-eHFO**
+- **unclassified**
+
+Clearing a checkbox hides that class from both the signal viewer and the global
+timeline. The timeline spans the full recording, marks the currently visible
+time window, and uses the same class colors as the viewer. Click a timeline
+event to jump the viewer to its channel and time. Click an event marker directly
+in the signal viewer to open the corresponding gamma or HFO review grid.
+
+Event markers follow the currently displayed channel names when the montage or
+reference display changes.
+
 ### 8.2 REI Mode
 
 REI mode is designed for manual seizure-window entry and delayed execution.
@@ -414,6 +488,8 @@ Gamma spike outputs inside the app:
 - channel-level summary
 - spike grid with raw trace, spike timing, boundary points, gamma window, and time-frequency view
 - gamma spike heatmaps for review
+- main-viewer markers and a global timeline with separate **non-gamma** and
+  **gamma** visibility controls
 
 Gamma spike export creates:
 
@@ -471,7 +547,8 @@ Sampling requirements depend on the selected HFO classifier route:
 - `eHFO` uses the Omni-compatible route: recordings below 1000 Hz are rejected,
   and higher-rate recordings are resampled internally to 1000 Hz
 
-The default validated user-facing HFO classifier is **pyhfo_pybrain**.
+The default validated user-facing HFO classifier is
+**pyhfo_pybrain-80-500 Hz**.
 It uses:
 
 - candidate detectors: STE, MNI, and Hilbert
@@ -492,10 +569,27 @@ At least one candidate detector must remain selected. Detector-specific
 parameter fields are disabled when their detector is disabled. Advanced changes
 are applied only after clicking **Save** in the dialog.
 
-The pyBrain 80-500 Hz band is the default for `pyhfo_pybrain`. Selecting
-`pyhfo_omni_legacy` or `eHFO` switches the band preset to the validated
-Omni-compatible 80-300 Hz route. Ripple, fast-ripple, and custom band options
-are disabled until those configurations are validated separately.
+Classifier options show their route-specific default band in the label:
+
+- **pyhfo_pybrain-80-500 Hz**
+- **pyhfo_omni_legacy-80-300 Hz**
+- **eHFO-80-300 Hz**
+
+Available band presets are:
+
+- **Default**: 80-500 Hz for `pyhfo_pybrain`, or 80-300 Hz for the two
+  Omni-compatible routes
+- **Ripples 80-250 Hz**
+- **Fast ripples 250-500 Hz**
+- **Custom**
+
+All four presets are selectable. For **Custom**, edit the low and high
+frequencies in **Advanced parameters...**. The selected range must remain valid
+for the route and sampling frequency; the Omni-compatible 1000 Hz processing
+path requires the high frequency to stay below its effective Nyquist limit. The
+validation results below describe each route's stated reference configuration;
+choosing another band does not make it an independently validated classifier
+configuration.
 
 Boundary handling:
 
@@ -516,6 +610,9 @@ HFO outputs inside the app:
 - event grid with card review
 - event filters by channel, class, and order
 - main-viewer HFO markers
+- global event timeline with class-colored markers and recording time labels
+- main-window visibility controls for **artifact**, **HFO**, **spkHFO**,
+  **eHFO**, **spk-eHFO**, and **unclassified** events
 - zoom review with raw trace, detector-band filtered trace, spectrogram, event
   metadata, classifier proposition, and manual class selector
 
@@ -538,13 +635,43 @@ The implemented HFO algorithms are derived from these source repositories:
 - pyHFO repository: https://github.com/roychowdhuryresearch/pyHFO
 
 Three HFO classifier routes are available. The default user-facing option is
-`pyhfo_pybrain`.
+**pyhfo_pybrain-80-500 Hz**; its internal route name is `pyhfo_pybrain`.
 
-| GUI classifier option | Internal implementation | Preprocessing expectation | Reference target | Validation result | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `pyhfo_pybrain` | pyBrain-compatible candidate-pool inference | Native EDF sampling in the original pyBrain GUI; detector/filter default is 80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop | Original pyHFO/pyBrain GUI classifier from https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain | Classifier-pool validation: Zurich15 53 / 53 labels matched; HUP134 500 / 500 labels matched. Full-pipeline validation on Zurich15: STE 1 / 1 events and labels, MNI 36 / 36 events and labels, Hilbert 43 / 43 events and labels. | Default user-facing option. |
-| `pyhfo_omni_legacy` | Omni-style batch waveform inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 10-500 Hz classifier feature range | Original Omni legacy pyHFO inference code from https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg | Zurich10: 611 / 611 labels matched; keep, artifact, spike, and HFO score max differences were 0.0 | Separate Omni-compatible analysis route. |
-| `eHFO` | Omni eHFO three-model inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 2-second waveform features for artifact, spike, and eHFO neural networks | Original Omni eHFO event-model code from https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg | Zurich10 candidate-pool validation: 611 / 611 labels matched; feature, artifact-score, spike-score, and eHFO-score max differences were 0.0 | Selectable Omni eHFO option; not the default. |
+#### `pyhfo_pybrain-80-500 Hz`
+
+- **Internal implementation**: pyBrain-compatible candidate-pool inference
+- **Preprocessing**: native EDF sampling; default detector/filter band is
+  80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop
+- **Reference target**: original pyHFO/pyBrain GUI classifier from
+  https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain
+- **Validation**: Zurich15 classifier pool, 53/53 labels matched; HUP134
+  classifier pool, 500/500 labels matched; Zurich15 full pipeline, STE 1/1,
+  MNI 36/36, and Hilbert 43/43 events and labels matched
+- **Status**: default user-facing option; internal name `pyhfo_pybrain`
+
+#### `pyhfo_omni_legacy-80-300 Hz`
+
+- **Internal implementation**: Omni-style batch waveform inference
+- **Preprocessing**: internal 1000 Hz processing, validated 80-300 Hz detector
+  band, and 10-500 Hz classifier feature range
+- **Reference target**: original Omni legacy pyHFO inference code from
+  https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg
+- **Validation**: Zurich10, 611/611 labels matched; maximum differences for
+  keep, artifact, spike, and HFO scores were 0.0
+- **Status**: separate Omni-compatible route; internal name
+  `pyhfo_omni_legacy`
+
+#### `eHFO-80-300 Hz`
+
+- **Internal implementation**: Omni eHFO three-model inference
+- **Preprocessing**: internal 1000 Hz processing, validated 80-300 Hz detector
+  band, and 2-second waveform features for artifact, spike, and eHFO neural
+  networks
+- **Reference target**: original Omni eHFO event-model code from
+  https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg
+- **Validation**: Zurich10 candidate pool, 611/611 labels matched; maximum
+  feature, artifact-score, spike-score, and eHFO-score differences were 0.0
+- **Status**: selectable Omni eHFO option; internal name `eHFO`; not the default
 
 Each route therefore reached 100% agreement with its own direct reference
 implementation in the tested candidate pools. They should not be described as a
@@ -585,7 +712,10 @@ repositories.
 HFO import restores exported HFO result folders produced by the application. The
 import validates that the result belongs to the same recording file, then
 restores events, manual review fields, classifier proposition, probabilities,
-metadata, filters where possible, and main-viewer markers.
+metadata, filters where possible, and main-viewer markers. Imported historical
+class aliases are normalized to the current HFO class names, and a reviewed or
+deleted event can recover its official class when an older export has no
+separate `manual_class` value.
 
 The `eHFO` route uses the Omni eHFO deep-learning classifier implementation
 with official checkpoints:
@@ -650,5 +780,7 @@ A common workflow is:
 5. Switch reference mode if useful
 6. Add annotations
 7. Open the computation panel or PSD panel if needed
-8. Export results when needed
-9. Save the project regularly
+8. Run a computation or import a matching exported result folder
+9. Review event classes and use the global timeline to navigate results
+10. Export results when needed
+11. Save the project regularly

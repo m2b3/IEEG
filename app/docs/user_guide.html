@@ -3,7 +3,6 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="2">
   <title>User Guide</title>
   <style>
     :root {
@@ -76,7 +75,7 @@
 </head>
 <body>
   <main>
-    <div class="preview-note">Live preview refreshes every 2 seconds after you save the Markdown.</div>
+    <div class="preview-note">Live preview reloads after you save the Markdown.</div>
 <h1 id="user-guide">User Guide</h1>
 <h2 id="1-first-start-create-or-open-a-project">1. First Start: Create or Open a Project</h2>
 <h3 id="1-1-create-a-new-project">1.1 Create a New Project</h3>
@@ -86,7 +85,7 @@
 <li>Choose where to save the <code>.ieeg</code> project file</li>
 <li>Confirm</li>
 </ol>
-<p>The project is linked to the selected raw recording. Once loaded, the signal viewer, toolbar, time navigation, montage label, and window title update.</p>
+<p>The project is linked to the selected raw recording.</p>
 <h3 id="1-2-open-an-existing-project">1.2 Open an Existing Project</h3>
 <p>Use <strong>File &gt; Open Project...</strong> to reopen a saved <code>.ieeg</code> project.</p>
 <p>When a project is reopened, the application restores:</p>
@@ -95,11 +94,27 @@
 <li>annotations</li>
 <li>hidden channels</li>
 <li>bad channels</li>
-<li>saved edited bipolar montage</li>
-<li>display filter settings</li>
-<li>computation panel state</li>
+<li>macro/micro channel groups</li>
+<li>a saved edited bipolar montage, ready for reuse after Bipolar is selected</li>
+<li>macro and micro display-filter settings</li>
+<li>display time range, visible-channel count, and amplitude scale</li>
+<li>the selected computation algorithm and channels</li>
+<li>REI seizure timing, baseline/ictal windows, and frequency settings</li>
+<li>gamma-spike and HFO analysis intervals</li>
+<li>HFO classifier, band, detector, and advanced-parameter settings</li>
+<li>the last REI result metadata, when available</li>
 </ul>
-<p>The active reference mode itself is not automatically restored. If needed, reselect Bipolar, Average, Median, or Common Reference after opening.</p>
+<p>The project does not restore:</p>
+<ul>
+<li>the active reference mode; the recording reopens in Monopolar</li>
+<li>complete REI, gamma-spike, or HFO results</li>
+<li>the Light/Dark theme</li>
+<li>the main-viewer time position</li>
+<li>open docks, review grids, PSD/scalogram windows, or other secondary windows</li>
+<li>gamma/HFO event-filter checkbox selections</li>
+</ul>
+<p>If needed, reselect Bipolar, Average, Median, or Common Reference after opening. To recover complete computation results and viewer markers, use <strong>Import results...</strong> with a matching exported result folder.</p>
+<p>Once loaded, the signal viewer, toolbar, time navigation, montage label, and window title update.</p>
 <h3 id="1-3-supported-file-formats">1.3 Supported File Formats</h3>
 <p>The current loader supports:</p>
 <ul>
@@ -138,8 +153,10 @@
 <li><strong>Time Range (s)</strong>: number of seconds visible at once</li>
 <li><strong>Channels</strong>: number of channels visible at once</li>
 <li><strong>Amplitude (uV)</strong>: manual vertical display scaling</li>
+<li><strong>Theme</strong>: switch the interface and viewer between Light and Dark themes</li>
 <li><strong>Hidden...</strong>: restore hidden channels</li>
 <li><strong>Bad...</strong>: review and unmark bad channels</li>
+<li><strong>Hide all Bad</strong>: hide every channel currently marked as bad</li>
 <li><strong>Edit Bipolar...</strong>: edit the bipolar montage when bipolar mode is active</li>
 </ul>
 <h3 id="2-3-signal-viewer">2.3 Signal Viewer</h3>
@@ -188,7 +205,7 @@
 <h2 id="4-file-menu">4. File Menu</h2>
 <h3 id="4-1-save">4.1 Save</h3>
 <p>Use <strong>File &gt; Save</strong> to save the current project.</p>
-<p>Saved projects preserve review state such as annotations, hidden channels, bad channels, edited bipolar montage state, display filters, selected computation settings, and last REI result metadata when available.</p>
+<p>Saved projects preserve annotations, hidden and bad channels, macro/micro channel groups, edited bipolar montage state, display filters, time range, visible-channel count, amplitude scale, selected computation settings, and the last REI result metadata when available. Complete computation results are stored through their export folders rather than inside the <code>.ieeg</code> project file.</p>
 <h3 id="4-2-save-as">4.2 Save As</h3>
 <p>Use <strong>File &gt; Save As...</strong> if the project does not yet have a save path or if you want to save it as another file.</p>
 <h3 id="4-3-close-project">4.3 Close Project</h3>
@@ -322,6 +339,34 @@
 <li><strong>Macro</strong>: select all displayed macro channels</li>
 <li><strong>Micro</strong>: select all displayed micro channels</li>
 </ul>
+<p>The <strong>Output</strong> section changes with the selected algorithm. Result review and export buttons become available after a successful run or import.</p>
+<h4 id="8-1-1-import-previously-exported-results">8.1.1 Import Previously Exported Results</h4>
+<p>Use <strong>Import results...</strong> in the computation panel to restore a result folder previously exported by the application. The importer detects the algorithm from the files in the selected folder:</p>
+<ul>
+<li>REI: <code>rei_summary.csv</code> and <code>rei_metadata.json</code></li>
+<li>Gamma spike: <code>gamma_spike_events.csv</code> and <code>gamma_metadata.json</code></li>
+<li>HFO: <code>hfo_events.csv</code> and <code>hfo_metadata.json</code></li>
+</ul>
+<p>The application switches to the detected algorithm and restores its summaries, review grid, metadata, and viewer markers where available. The import is rejected if required files are missing, channels do not match the current recording/montage, or the metadata identifies a different source recording.</p>
+<p>Load the matching recording and select the matching montage before importing.</p>
+<h4 id="8-1-2-event-filters-and-global-timeline">8.1.2 Event Filters and Global Timeline</h4>
+<p>After gamma-spike or HFO results are opened, the main window shows event-class filters beside the montage label and a compact global event timeline below the viewer.</p>
+<p>Gamma filters:</p>
+<ul>
+<li><strong>non-gamma</strong></li>
+<li><strong>gamma</strong></li>
+</ul>
+<p>HFO filters:</p>
+<ul>
+<li><strong>artifact</strong></li>
+<li><strong>HFO</strong></li>
+<li><strong>spkHFO</strong></li>
+<li><strong>eHFO</strong></li>
+<li><strong>spk-eHFO</strong></li>
+<li><strong>unclassified</strong></li>
+</ul>
+<p>Clearing a checkbox hides that class from both the signal viewer and the global timeline. The timeline spans the full recording, marks the currently visible time window, and uses the same class colors as the viewer. Click a timeline event to jump the viewer to its channel and time. Click an event marker directly in the signal viewer to open the corresponding gamma or HFO review grid.</p>
+<p>Event markers follow the currently displayed channel names when the montage or reference display changes.</p>
 <h3 id="8-2-rei-mode">8.2 REI Mode</h3>
 <p>REI mode is designed for manual seizure-window entry and delayed execution.</p>
 <p>The REI time section contains:</p>
@@ -388,6 +433,8 @@
 <li>channel-level summary</li>
 <li>spike grid with raw trace, spike timing, boundary points, gamma window, and time-frequency view</li>
 <li>gamma spike heatmaps for review</li>
+<li>main-viewer markers and a global timeline with separate <strong>non-gamma</strong> and</li>
+<p><strong>gamma</strong> visibility controls</p>
 </ul>
 <p>Gamma spike export creates:</p>
 <ul>
@@ -434,7 +481,7 @@
 <li><code>eHFO</code> uses the Omni-compatible route: recordings below 1000 Hz are rejected,</li>
 <p>and higher-rate recordings are resampled internally to 1000 Hz</p>
 </ul>
-<p>The default validated user-facing HFO classifier is <strong>pyhfo_pybrain</strong>. It uses:</p>
+<p>The default validated user-facing HFO classifier is <strong>pyhfo_pybrain-80-500 Hz</strong>. It uses:</p>
 <ul>
 <li>candidate detectors: STE, MNI, and Hilbert</li>
 <li>pyBrain-compatible default band: 80-500 Hz</li>
@@ -451,7 +498,21 @@
 <li>save the edited defaults for later GUI sessions</li>
 </ul>
 <p>At least one candidate detector must remain selected. Detector-specific parameter fields are disabled when their detector is disabled. Advanced changes are applied only after clicking <strong>Save</strong> in the dialog.</p>
-<p>The pyBrain 80-500 Hz band is the default for <code>pyhfo_pybrain</code>. Selecting <code>pyhfo_omni_legacy</code> or <code>eHFO</code> switches the band preset to the validated Omni-compatible 80-300 Hz route. Ripple, fast-ripple, and custom band options are disabled until those configurations are validated separately.</p>
+<p>Classifier options show their route-specific default band in the label:</p>
+<ul>
+<li><strong>pyhfo_pybrain-80-500 Hz</strong></li>
+<li><strong>pyhfo_omni_legacy-80-300 Hz</strong></li>
+<li><strong>eHFO-80-300 Hz</strong></li>
+</ul>
+<p>Available band presets are:</p>
+<ul>
+<li><strong>Default</strong>: 80-500 Hz for <code>pyhfo_pybrain</code>, or 80-300 Hz for the two</li>
+<p>Omni-compatible routes</p>
+<li><strong>Ripples 80-250 Hz</strong></li>
+<li><strong>Fast ripples 250-500 Hz</strong></li>
+<li><strong>Custom</strong></li>
+</ul>
+<p>All four presets are selectable. For <strong>Custom</strong>, edit the low and high frequencies in <strong>Advanced parameters...</strong>. The selected range must remain valid for the route and sampling frequency; the Omni-compatible 1000 Hz processing path requires the high frequency to stay below its effective Nyquist limit. The validation results below describe each route's stated reference configuration; choosing another band does not make it an independently validated classifier configuration.</p>
 <p>Boundary handling:</p>
 <ul>
 <li>candidates longer than the maximum duration are excluded before classification</li>
@@ -466,6 +527,9 @@
 <li>event grid with card review</li>
 <li>event filters by channel, class, and order</li>
 <li>main-viewer HFO markers</li>
+<li>global event timeline with class-colored markers and recording time labels</li>
+<li>main-window visibility controls for <strong>artifact</strong>, <strong>HFO</strong>, <strong>spkHFO</strong>,</li>
+<p><strong>eHFO</strong>, <strong>spk-eHFO</strong>, and <strong>unclassified</strong> events</p>
 <li>zoom review with raw trace, detector-band filtered trace, spectrogram, event</li>
 <p>metadata, classifier proposition, and manual class selector</p>
 </ul>
@@ -483,8 +547,41 @@
 <li>pyHFO pyBrain branch: https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain</li>
 <li>pyHFO repository: https://github.com/roychowdhuryresearch/pyHFO</li>
 </ul>
-<p>Three HFO classifier routes are available. The default user-facing option is <code>pyhfo_pybrain</code>.</p>
-<p>| GUI classifier option | Internal implementation | Preprocessing expectation | Reference target | Validation result | Notes | | --- | --- | --- | --- | --- | --- | | <code>pyhfo_pybrain</code> | pyBrain-compatible candidate-pool inference | Native EDF sampling in the original pyBrain GUI; detector/filter default is 80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop | Original pyHFO/pyBrain GUI classifier from https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain | Classifier-pool validation: Zurich15 53 / 53 labels matched; HUP134 500 / 500 labels matched. Full-pipeline validation on Zurich15: STE 1 / 1 events and labels, MNI 36 / 36 events and labels, Hilbert 43 / 43 events and labels. | Default user-facing option. | | <code>pyhfo_omni_legacy</code> | Omni-style batch waveform inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 10-500 Hz classifier feature range | Original Omni legacy pyHFO inference code from https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg | Zurich10: 611 / 611 labels matched; keep, artifact, spike, and HFO score max differences were 0.0 | Separate Omni-compatible analysis route. | | <code>eHFO</code> | Omni eHFO three-model inference | Internal 1000 Hz processing; validated 80-300 Hz detector band; 2-second waveform features for artifact, spike, and eHFO neural networks | Original Omni eHFO event-model code from https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg | Zurich10 candidate-pool validation: 611 / 611 labels matched; feature, artifact-score, spike-score, and eHFO-score max differences were 0.0 | Selectable Omni eHFO option; not the default. |</p>
+<p>Three HFO classifier routes are available. The default user-facing option is <strong>pyhfo_pybrain-80-500 Hz</strong>; its internal route name is <code>pyhfo_pybrain</code>.</p>
+<h4 id="pyhfo-pybrain-80-500-hz"><code>pyhfo_pybrain-80-500 Hz</code></h4>
+<ul>
+<li><strong>Internal implementation</strong>: pyBrain-compatible candidate-pool inference</li>
+<li><strong>Preprocessing</strong>: native EDF sampling; default detector/filter band is</li>
+<p>80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop</p>
+<li><strong>Reference target</strong>: original pyHFO/pyBrain GUI classifier from</li>
+<p>https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain</p>
+<li><strong>Validation</strong>: Zurich15 classifier pool, 53/53 labels matched; HUP134</li>
+<p>classifier pool, 500/500 labels matched; Zurich15 full pipeline, STE 1/1, MNI 36/36, and Hilbert 43/43 events and labels matched</p>
+<li><strong>Status</strong>: default user-facing option; internal name <code>pyhfo_pybrain</code></li>
+</ul>
+<h4 id="pyhfo-omni-legacy-80-300-hz"><code>pyhfo_omni_legacy-80-300 Hz</code></h4>
+<ul>
+<li><strong>Internal implementation</strong>: Omni-style batch waveform inference</li>
+<li><strong>Preprocessing</strong>: internal 1000 Hz processing, validated 80-300 Hz detector</li>
+<p>band, and 10-500 Hz classifier feature range</p>
+<li><strong>Reference target</strong>: original Omni legacy pyHFO inference code from</li>
+<p>https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg</p>
+<li><strong>Validation</strong>: Zurich10, 611/611 labels matched; maximum differences for</li>
+<p>keep, artifact, spike, and HFO scores were 0.0</p>
+<li><strong>Status</strong>: separate Omni-compatible route; internal name</li>
+<p><code>pyhfo_omni_legacy</code></p>
+</ul>
+<h4 id="ehfo-80-300-hz"><code>eHFO-80-300 Hz</code></h4>
+<ul>
+<li><strong>Internal implementation</strong>: Omni eHFO three-model inference</li>
+<li><strong>Preprocessing</strong>: internal 1000 Hz processing, validated 80-300 Hz detector</li>
+<p>band, and 2-second waveform features for artifact, spike, and eHFO neural networks</p>
+<li><strong>Reference target</strong>: original Omni eHFO event-model code from</li>
+<p>https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg</p>
+<li><strong>Validation</strong>: Zurich10 candidate pool, 611/611 labels matched; maximum</li>
+<p>feature, artifact-score, spike-score, and eHFO-score differences were 0.0</p>
+<li><strong>Status</strong>: selectable Omni eHFO option; internal name <code>eHFO</code>; not the default</li>
+</ul>
 <p>Each route therefore reached 100% agreement with its own direct reference implementation in the tested candidate pools. They should not be described as a single identical classifier path, because they reproduce different upstream execution flows.</p>
 <p>Implementation note: the codebase separates preprocessing modules under <code>app/computation/hfo/preprocessing/</code>. The <code>pyhfo_pybrain</code> pipeline uses <code>preprocessing/pybrain.py</code>, preserves native sampling, applies the pyBrain Chebyshev-II HFO bandpass before candidate detection, and sends the native non-bandpassed signal plus candidate coordinates to the pyBrain-style classifier. The <code>pyhfo_omni_legacy</code> and <code>eHFO</code> pipelines use <code>preprocessing/omni.py</code> and resample to 1000 Hz.</p>
 <p>HFO export creates:</p>
@@ -497,7 +594,7 @@
 <p><code>hfo_channel_summary.csv</code> contains per-channel candidate counts, accepted HFO counts, HFO counts, spike-HFO counts, eHFO counts, spike-eHFO counts, artifact counts, rates per minute, deleted event counts, and boundary event counts.</p>
 <p><code>hfo_events.csv</code> contains one row per retained event with channel, timing, candidate detector, boundary warning, probabilities, classifier proposition, manual class, official class, review status, selected band, and sampling details.</p>
 <p><code>hfo_metadata.json</code> records the analyzed file, analysis window, selected channels, bad-channel exclusion, montage/reference information, notch setting, candidate detectors, detector parameters, sampling rates, processing order, classifier status, output counts, selected algorithm route, algorithm origin, classifier origin, checkpoint family, class mapping, and source GitHub repositories.</p>
-<p>HFO import restores exported HFO result folders produced by the application. The import validates that the result belongs to the same recording file, then restores events, manual review fields, classifier proposition, probabilities, metadata, filters where possible, and main-viewer markers.</p>
+<p>HFO import restores exported HFO result folders produced by the application. The import validates that the result belongs to the same recording file, then restores events, manual review fields, classifier proposition, probabilities, metadata, filters where possible, and main-viewer markers. Imported historical class aliases are normalized to the current HFO class names, and a reviewed or deleted event can recover its official class when an older export has no separate <code>manual_class</code> value.</p>
 <p>The <code>eHFO</code> route uses the Omni eHFO deep-learning classifier implementation with official checkpoints:</p>
 <ul>
 <li><code>artifacts.pth</code></li>
@@ -542,9 +639,34 @@
 <li>Switch reference mode if useful</li>
 <li>Add annotations</li>
 <li>Open the computation panel or PSD panel if needed</li>
+<li>Run a computation or import a matching exported result folder</li>
+<li>Review event classes and use the global timeline to navigate results</li>
 <li>Export results when needed</li>
 <li>Save the project regularly</li>
 </ol>
   </main>
+  <script>
+    (() => {
+      let displayedVersion = null;
+
+      async function reloadAfterSavedChange() {
+        try {
+          const response = await fetch("/__preview_version", { cache: "no-store" });
+          if (!response.ok) return;
+          const currentVersion = await response.text();
+          if (displayedVersion === null) {
+            displayedVersion = currentVersion;
+          } else if (currentVersion !== displayedVersion) {
+            window.location.reload();
+          }
+        } catch (_error) {
+          // Keep the static page usable if the preview server is unavailable.
+        }
+      }
+
+      reloadAfterSavedChange();
+      window.setInterval(reloadAfterSavedChange, 1000);
+    })();
+  </script>
 </body>
 </html>

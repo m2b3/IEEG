@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import html
 import http.server
 import re
@@ -136,7 +137,6 @@ def html_document(body: str, title: str) -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="2">
   <title>{html.escape(title)}</title>
   <style>
     :root {{
@@ -209,9 +209,32 @@ def html_document(body: str, title: str) -> str:
 </head>
 <body>
   <main>
-    <div class="preview-note">Live preview refreshes every 2 seconds after you save the Markdown.</div>
+    <div class="preview-note">Live preview reloads after you save the Markdown.</div>
 {body}
   </main>
+  <script>
+    (() => {{
+      let displayedVersion = null;
+
+      async function reloadAfterSavedChange() {{
+        try {{
+          const response = await fetch("/__preview_version", {{ cache: "no-store" }});
+          if (!response.ok) return;
+          const currentVersion = await response.text();
+          if (displayedVersion === null) {{
+            displayedVersion = currentVersion;
+          }} else if (currentVersion !== displayedVersion) {{
+            window.location.reload();
+          }}
+        }} catch (_error) {{
+          // Keep the static page usable if the preview server is unavailable.
+        }}
+      }}
+
+      reloadAfterSavedChange();
+      window.setInterval(reloadAfterSavedChange, 1000);
+    }})();
+  </script>
 </body>
 </html>
 """
@@ -225,15 +248,41 @@ def build_html(input_path: Path = DEFAULT_INPUT, output_path: Path = DEFAULT_OUT
 
 
 class DocsRequestHandler(http.server.SimpleHTTPRequestHandler):
-    def __init__(self, *args, directory: str | None = None, **kwargs):
-        super().__init__(*args, directory=str(DOCS_DIR), **kwargs)
+    def __init__(
+        self,
+        *args,
+        directory: str | None = None,
+        output_path: Path = DEFAULT_OUTPUT,
+        **kwargs,
+    ):
+        self.output_path = Path(output_path)
+        super().__init__(*args, directory=str(directory or DOCS_DIR), **kwargs)
+
+    def do_GET(self) -> None:
+        if self.path.split("?", 1)[0] == "/__preview_version":
+            try:
+                version = str(self.output_path.stat().st_mtime_ns)
+            except OSError:
+                version = "missing"
+            payload = version.encode("ascii")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=ascii")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        super().do_GET()
 
     def log_message(self, format: str, *args) -> None:
         print(f"[preview] {format % args}")
 
 
 def watch_markdown(input_path: Path, output_path: Path, interval_s: float) -> None:
-    last_mtime = 0.0
+    try:
+        last_mtime = input_path.stat().st_mtime
+    except OSError:
+        last_mtime = 0.0
     while True:
         try:
             mtime = input_path.stat().st_mtime
@@ -254,10 +303,18 @@ def serve(port: int, input_path: Path, output_path: Path, interval_s: float) -> 
         daemon=True,
     )
     watcher.start()
-    with socketserver.TCPServer(("127.0.0.1", port), DocsRequestHandler) as httpd:
+    request_handler = functools.partial(
+        DocsRequestHandler,
+        directory=str(DOCS_DIR),
+        output_path=output_path,
+    )
+    with socketserver.TCPServer(("127.0.0.1", port), request_handler) as httpd:
         print(f"Preview: http://127.0.0.1:{port}/{output_path.name}")
-        print("Edit app/docs/user_guide.md and save; the page refreshes every 2 seconds.")
-        httpd.serve_forever()
+        print("Edit app/docs/user_guide.md and save; the page reloads after each save.")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\nPreview stopped.")
 
 
 def main() -> None:

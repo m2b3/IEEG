@@ -702,3 +702,45 @@ what are the two vertical red lines i m seeing
 The most likely explanation is that they are interval-boundary markers: one line for the start time and one for the end time of an event/selection. In the expert event waveform view, the app explicitly draws two vertical markers at `start_s` and `end_s` in [app/expert_event_grid.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/expert_event_grid.py:178), inside `add_event_region(...)` in [app/expert_event_grid.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/expert_event_grid.py:156).
 
 Those lines are not part of the raw iEEG signal itself. They are overlay guides showing the selected event window. If you are seeing them in the expert-event waveform panel, that is exactly what they are. If you mean the main viewer instead, send me where you are seeing them and I�ll trace that overlay too, because the main viewer uses a movable cursor line and annotation/selection overlays, but not the same paired event markers.
+
+
+## User
+update the user guide with latest updates
+
+## Assistant
+Updated both the Markdown source and generated HTML user guide. The guide now covers the Light/Dark theme and Hide all Bad controls, gamma/HFO event filters and the global timeline, importing exported REI/Gamma/HFO results, current HFO classifier labels and all band presets, HFO marker/review behavior, and historical class normalization during import. I also replaced the classifier comparison table with HTML-compatible structured sections. The generated HTML matches a clean second generation byte-for-byte, and `git diff --check` passes. The changes are not committed or pushed.
+
+
+## User
+let s not make the user guide recharge that often, only when i save it
+
+## Assistant
+Changed the preview so Safari no longer reloads every two seconds. The page now performs a lightweight background version check and reloads only after `user_guide.md` is saved and a new HTML build is available. Updated the preview tool, documentation, and generated HTML; tested the local version endpoint and confirmed the periodic HTML refresh tag is absent. Restart the preview server to use the new behavior.
+
+
+## User
+event filter and global timeline should appear later, in the computation section of the user guide
+
+## Assistant
+Moved “Event Filters and Global Timeline” from “Main Window Basics” to the Compute section, immediately after “Import Previously Exported Results” and before the REI/Gamma/HFO mode descriptions. Regenerated the HTML guide and verified the new heading order and clean diff.
+
+
+## User
+is the list of what is restore by application when opening a project up to date in the md file user gudie
+
+## Assistant
+No. The list is broadly correct but incomplete. It omits restored macro/micro channel groups and display settings (time range, visible-channel count, and amplitude). “Computation panel state” should be clarified to cover the selected algorithm/channels, REI timing and frequency settings, gamma/HFO analysis intervals, and HFO advanced parameters. Full computation results are not restored; only REI result metadata may be saved, so exported results must be imported. The active reference mode, theme, main-viewer time position, open panels/windows, and event-filter selections are not restored.
+
+
+## User
+update it
+
+## Assistant
+Updated the project reopening section to list all restored channel groups, display settings, computation setup, HFO parameters, and REI metadata, plus a separate list of state that is not restored. Clarified that complete computation results must be recovered with Import results, and aligned the File > Save section with the same behavior. Regenerated the HTML guide and verified `git diff --check`.
+
+
+## User
+i did some commit from another computer, can you safely push our updates and pulling the other commit here
+
+## Assistant
+Fetched every remote branch and confirmed that GitHub's `main` still matched this checkout at `0741843`; no newer commit from the other computer was available remotely. Validated, committed, rebased, and pushed the local user-guide and preview updates to `origin/main` without force-pushing. The other computer must pull `main` before making its next push.
