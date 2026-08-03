@@ -1196,8 +1196,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         _y_min, y_max = self._sig_vb.viewRange()[1]
         view_height = max(1e-9, float(y_max) - float(_y_min))
         top_rail_y = float(y_max) - 0.035 * view_height
-        drew_any = False
-
         for visible_row, abs_idx in enumerate(list(visible_abs)):
             abs_idx = int(abs_idx)
             if not (0 <= abs_idx < len(display_names)):
@@ -1262,43 +1260,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 rail.setZValue(24)
                 self.signal_plot.addItem(rail)
                 self._gamma_spike_marker_items.append(rail)
-                drew_any = True
-
-        if drew_any:
-            self._draw_gamma_spike_marker_legend(
-                regular_color=regular_color,
-                gamma_color=gamma_color,
-            )
-
-    def _draw_gamma_spike_marker_legend(
-        self,
-        *,
-        regular_color: tuple[int, int, int, int],
-        gamma_color: tuple[int, int, int, int],
-    ) -> None:
-        x_min, x_max = self._sig_vb.viewRange()[0]
-        y_min, y_max = self._sig_vb.viewRange()[1]
-        x = float(x_max) - 0.012 * max(1e-9, float(x_max) - float(x_min))
-        y = float(y_max) - 0.05 * max(1e-9, float(y_max) - float(y_min))
-
-        regular_rgb = regular_color[:3]
-        gamma_rgb = gamma_color[:3]
-        html = (
-            "<span style='color:#111; font-weight:600;'>"
-            f"<span style='color:rgb{regular_rgb}; font-weight:800;'>|</span> Non-gamma spike&nbsp;&nbsp;"
-            f"<span style='color:rgb{gamma_rgb}; font-weight:800;'>|</span> Gamma spike"
-            "</span>"
-        )
-        label = pg.TextItem(
-            html=html,
-            anchor=(1.0, 0.0),
-            fill=pg.mkBrush(255, 255, 255, 235),
-            border=pg.mkPen(80, 80, 80, 190),
-        )
-        label.setPos(x, y)
-        label.setZValue(31)
-        self.signal_plot.addItem(label)
-        self._gamma_spike_marker_items.append(label)
 
     def _draw_hfo_markers(
         self,
@@ -1336,7 +1297,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         _y_min, y_max = self._sig_vb.viewRange()[1]
         view_height = max(1e-9, float(y_max) - float(_y_min))
         top_rail_y = float(y_max) - 0.035 * view_height
-        drew_kinds: set[str] = set()
 
         for visible_row, abs_idx in enumerate(list(visible_abs)):
             abs_idx = int(abs_idx)
@@ -1412,46 +1372,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 rail.setZValue(24)
                 self.signal_plot.addItem(rail)
                 self._hfo_marker_items.append(rail)
-                drew_kinds.add(kind if kind in colors else "unclassified")
-
-        if drew_kinds:
-            self._draw_hfo_marker_legend(colors=colors, visible_kinds=drew_kinds)
-
-    def _draw_hfo_marker_legend(
-        self,
-        *,
-        colors: dict[str, tuple[int, int, int, int]],
-        visible_kinds: set[str],
-    ) -> None:
-        x_min, x_max = self._sig_vb.viewRange()[0]
-        y_min, y_max = self._sig_vb.viewRange()[1]
-        x = float(x_max) - 0.012 * max(1e-9, float(x_max) - float(x_min))
-        y = float(y_max) - 0.11 * max(1e-9, float(y_max) - float(y_min))
-
-        label_order = ["artifact", "HFO", "non-spike HFO", "spike-HFO", "eHFO", "spike-eHFO", "unclassified"]
-        parts = []
-        for kind in label_order:
-            if kind not in visible_kinds:
-                continue
-            rgb = colors[kind][:3]
-            parts.append(f"<span style='color:rgb{rgb}; font-weight:800;'>|</span> {kind}")
-        if not parts:
-            return
-        html = (
-            "<span style='color:#111; font-weight:600;'>"
-            + "&nbsp;&nbsp;".join(parts)
-            + "</span>"
-        )
-        label = pg.TextItem(
-            html=html,
-            anchor=(1.0, 0.0),
-            fill=pg.mkBrush(255, 255, 255, 235),
-            border=pg.mkPen(80, 80, 80, 190),
-        )
-        label.setPos(x, y)
-        label.setZValue(30)
-        self.signal_plot.addItem(label)
-        self._hfo_marker_items.append(label)
 
     def _draw_cursor(self, t_ds: np.ndarray):
         t0 = float(np.asarray(t_ds).reshape(-1)[0].item())

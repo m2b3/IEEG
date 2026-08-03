@@ -2324,6 +2324,9 @@ class MainWindow(QMainWindow):
         for channel_name, events in markers.items():
             if not isinstance(events, list):
                 continue
+            display_channel_name = self._display_channel_name_for_event_marker(str(channel_name))
+            if not display_channel_name:
+                continue
             kept: list[dict] = []
             for event in events:
                 if not isinstance(event, dict):
@@ -2332,8 +2335,15 @@ class MainWindow(QMainWindow):
                     continue
                 kept.append(dict(event))
             if kept:
-                filtered[str(channel_name)] = kept
+                filtered.setdefault(display_channel_name, []).extend(kept)
         return filtered
+
+    def _display_channel_name_for_event_marker(self, channel_name: str) -> str:
+        display_names = self.viewer.get_channel_names()
+        idx = self._find_display_channel_index_for_event_channel(str(channel_name))
+        if idx is not None and 0 <= int(idx) < len(display_names):
+            return str(display_names[int(idx)])
+        return str(channel_name).strip()
 
     def _hfo_marker_kind_visible(self, kind: str) -> bool:
         normalized = str(kind).strip().lower().replace("_", "-")
@@ -2343,9 +2353,13 @@ class MainWindow(QMainWindow):
             return self.chk_show_hfo_spike_ehfo.isChecked()
         if normalized in {"ehfo", "e-hfo"}:
             return self.chk_show_hfo_ehfo.isChecked()
-        if "spike" in normalized and "non-spike" not in normalized:
+        if normalized in {"spike-hfo", "spike hfo", "spkhfo", "spk-hfo", "spk hfo"}:
             return self.chk_show_hfo_spike.isChecked()
-        if "non-spike" in normalized or normalized in {"hfo", "real-hfo", "real hfo"}:
+        if (
+            "non-spike" in normalized
+            or "non-spk" in normalized
+            or normalized in {"hfo", "real-hfo", "real hfo", "non-spkhfo"}
+        ):
             return self.chk_show_hfo_non_spike.isChecked()
         return self.chk_show_hfo_unclassified.isChecked()
 
@@ -2438,6 +2452,8 @@ class MainWindow(QMainWindow):
         self._sync_comp_panel_context()
         self._refresh_annotation_list()
         self._refresh_psd_panel_context()
+        if self._active_event_marker_source in {"gamma", "hfo"}:
+            self._apply_event_class_visibility()
 
     def _is_psd_tab_open(self) -> bool:
         return bool(self.main_tabs.isTabVisible(self._psd_tab_index))

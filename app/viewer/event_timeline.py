@@ -37,8 +37,8 @@ class EventTimelineOverlay(QWidget):
         self._view_start_s = 0.0
         self._view_end_s = 0.0
         self._hit_rects: list[tuple[QRectF, TimelineEvent]] = []
-        self.setMinimumHeight(44)
-        self.setMaximumHeight(54)
+        self.setMinimumHeight(58)
+        self.setMaximumHeight(66)
         self.setMouseTracking(True)
         self.hide()
 
@@ -111,7 +111,7 @@ class EventTimelineOverlay(QWidget):
         rect = self.rect()
         painter.fillRect(rect, QColor("#f8fafc"))
         painter.setPen(QPen(QColor("#cbd5e1"), 1))
-        baseline_y = rect.center().y()
+        baseline_y = max(18, rect.center().y() - 5)
         left = 12
         right = max(left + 1, rect.width() - 12)
         width = right - left
@@ -122,19 +122,17 @@ class EventTimelineOverlay(QWidget):
 
         view_start_x = left + width * max(0.0, min(1.0, self._view_start_s / self._duration_s))
         view_end_x = left + width * max(0.0, min(1.0, self._view_end_s / self._duration_s))
-        view_rect = QRectF(view_start_x, 8, max(1.0, view_end_x - view_start_x), rect.height() - 16)
+        view_rect = QRectF(view_start_x, 8, max(1.0, view_end_x - view_start_x), max(8, baseline_y + 8 - 8))
         painter.fillRect(view_rect, QColor(15, 23, 42, 22))
         painter.setPen(QPen(QColor(15, 23, 42, 95), 1))
         painter.drawRect(view_rect)
 
         painter.setPen(QPen(QColor("#64748b"), 1.5))
         painter.drawLine(left, baseline_y, right, baseline_y)
-        tick_half_height = 4
-        for x in (left, right, view_start_x, view_end_x):
-            painter.drawLine(int(round(x)), baseline_y - tick_half_height, int(round(x)), baseline_y + tick_half_height)
+        self._draw_time_labels(painter, left, right, baseline_y)
 
         lanes = {"hfo": baseline_y - 10, "gamma": baseline_y + 10, "rei": baseline_y + 19}
-        marker_radius = 2.6
+        marker_radius = 3.4
         for event in self._events:
             source = event.source.lower()
             y = lanes.get(source, baseline_y)
@@ -145,18 +143,6 @@ class EventTimelineOverlay(QWidget):
             outline = QColor(color)
             outline.setAlpha(255)
 
-            if source == "hfo":
-                tick_y0 = baseline_y - 15
-                tick_y1 = baseline_y + 3
-            elif source == "gamma":
-                tick_y0 = baseline_y - 3
-                tick_y1 = baseline_y + 15
-            else:
-                tick_y0 = max(4, baseline_y - 4)
-                tick_y1 = min(rect.height() - 4, baseline_y + 19)
-
-            painter.setPen(QPen(outline.darker(110), 2.2))
-            painter.drawLine(int(round(x)), int(round(tick_y0)), int(round(x)), int(round(tick_y1)))
             event_rect = QRectF(
                 x - marker_radius,
                 y - marker_radius,
@@ -166,9 +152,57 @@ class EventTimelineOverlay(QWidget):
             painter.setPen(QPen(outline.darker(120), 1))
             painter.setBrush(color)
             painter.drawEllipse(event_rect)
-            hit_y0 = min(tick_y0, y - marker_radius)
-            hit_y1 = max(tick_y1, y + marker_radius)
-            self._hit_rects.append((QRectF(x - 5, hit_y0 - 3, 10, hit_y1 - hit_y0 + 6), event))
+            self._hit_rects.append((QRectF(x - 6, y - 8, 12, 16), event))
+
+    def _draw_time_labels(self, painter: QPainter, left: int, right: int, baseline_y: int) -> None:
+        if self._duration_s <= 0.0:
+            return
+        width = max(1, int(right) - int(left))
+        font = painter.font()
+        font.setPointSize(max(7, font.pointSize() - 1))
+        painter.setFont(font)
+        painter.setPen(QPen(QColor("#475569"), 1))
+        metrics = painter.fontMetrics()
+        label_y = int(baseline_y) + 17
+        candidates = [
+            (0.0, int(left), Qt.AlignmentFlag.AlignLeft),
+            (0.5 * self._duration_s, int(left + 0.5 * width), Qt.AlignmentFlag.AlignHCenter),
+            (self._duration_s, int(right), Qt.AlignmentFlag.AlignRight),
+        ]
+        if width >= 520:
+            candidates.insert(1, (0.25 * self._duration_s, int(left + 0.25 * width), Qt.AlignmentFlag.AlignHCenter))
+            candidates.insert(-1, (0.75 * self._duration_s, int(left + 0.75 * width), Qt.AlignmentFlag.AlignHCenter))
+
+        used_rects: list[QRectF] = []
+        for time_s, x, alignment in candidates:
+            text = self._format_time_label(time_s)
+            text_width = metrics.horizontalAdvance(text)
+            if alignment == Qt.AlignmentFlag.AlignLeft:
+                text_rect = QRectF(x, label_y, text_width + 2, metrics.height() + 2)
+            elif alignment == Qt.AlignmentFlag.AlignRight:
+                text_rect = QRectF(x - text_width - 2, label_y, text_width + 2, metrics.height() + 2)
+            else:
+                text_rect = QRectF(x - 0.5 * text_width - 1, label_y, text_width + 2, metrics.height() + 2)
+            if any(text_rect.intersects(existing.adjusted(-4, 0, 4, 0)) for existing in used_rects):
+                continue
+            painter.drawText(text_rect, int(alignment | Qt.AlignmentFlag.AlignTop), text)
+            used_rects.append(text_rect)
+
+    @staticmethod
+    def _format_time_label(seconds: float) -> str:
+        value = max(0.0, float(seconds))
+        if value < 60.0:
+            return f"{value:.1f}s" if value < 10.0 else f"{value:.0f}s"
+        minutes = int(value // 60.0)
+        sec = int(round(value - 60.0 * minutes))
+        if sec == 60:
+            minutes += 1
+            sec = 0
+        if minutes < 60:
+            return f"{minutes}:{sec:02d}"
+        hours = minutes // 60
+        minutes = minutes % 60
+        return f"{hours}:{minutes:02d}:{sec:02d}"
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:

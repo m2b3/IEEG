@@ -58,20 +58,21 @@ from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
 from app.ui_busy import busy_cursor
 
-HFO_BAND_PRESETS: dict[str, tuple[float, float]] = {
-    "HFO 80-300 Hz": (80.0, 300.0),
-    "pyhfo_pybrain 80-500 Hz": (80.0, 500.0),
-    "Ripple 80-250 Hz": (80.0, 250.0),
-    "Fast ripple 250-500 Hz": (250.0, 500.0),
-}
-OMNI_LEGACY_HFO_BAND_PRESET = "HFO 80-300 Hz"
-PYBRAIN_HFO_BAND_PRESET = "pyhfo_pybrain 80-500 Hz"
-DEFAULT_HFO_BAND_PRESET = PYBRAIN_HFO_BAND_PRESET
+DEFAULT_HFO_BAND_PRESET = "Default"
+RIPPLE_HFO_BAND_PRESET = "Ripples"
+FAST_RIPPLE_HFO_BAND_PRESET = "Fast ripples"
 CUSTOM_HFO_BAND_PRESET = "Custom"
-DISABLED_HFO_BAND_PRESETS = {
-    "Ripple 80-250 Hz",
-    "Fast ripple 250-500 Hz",
-    CUSTOM_HFO_BAND_PRESET,
+HFO_BAND_PRESETS: dict[str, tuple[float, float] | None] = {
+    DEFAULT_HFO_BAND_PRESET: None,
+    RIPPLE_HFO_BAND_PRESET: (80.0, 250.0),
+    FAST_RIPPLE_HFO_BAND_PRESET: (250.0, 500.0),
+    CUSTOM_HFO_BAND_PRESET: None,
+}
+DISABLED_HFO_BAND_PRESETS: set[str] = set()
+HFO_DEFAULT_BANDS_BY_CLASSIFIER: dict[str, tuple[float, float]] = {
+    HFO_CLASSIFIER_PYHFO_PYBRAIN: (80.0, 500.0),
+    HFO_CLASSIFIER_PYHFO_OMNI_LEGACY: (80.0, 300.0),
+    HFO_CLASSIFIER_EHFO: (80.0, 300.0),
 }
 HFO_DETECTOR_VERSIONS: tuple[str, ...] = (
     HFO_CLASSIFIER_PYHFO_PYBRAIN,
@@ -79,6 +80,16 @@ HFO_DETECTOR_VERSIONS: tuple[str, ...] = (
     HFO_CLASSIFIER_EHFO,
 )
 DEFAULT_HFO_DETECTOR_VERSION = HFO_CLASSIFIER_PYHFO_PYBRAIN
+HFO_CLASSIFIER_DISPLAY_NAMES: dict[str, str] = {
+    classifier: f"{classifier}-{low:g}-{high:g} Hz"
+    for classifier, (low, high) in HFO_DEFAULT_BANDS_BY_CLASSIFIER.items()
+}
+HFO_BAND_PRESET_DISPLAY_NAMES: dict[str, str] = {
+    DEFAULT_HFO_BAND_PRESET: "Default",
+    RIPPLE_HFO_BAND_PRESET: "Ripples 80-250 Hz",
+    FAST_RIPPLE_HFO_BAND_PRESET: "Fast ripples 250-500 Hz",
+    CUSTOM_HFO_BAND_PRESET: "Custom",
+}
 DISABLED_HFO_CLASSIFIER_OPTIONS: set[str] = set()
 HFO_DISPLAY_CLASSES = (
     "artifact",
@@ -93,6 +104,61 @@ HFO_DISPLAY_CLASSES = (
 HFO_GUI_SETTINGS_ORG = "EpilepsyTools"
 HFO_GUI_SETTINGS_APP = "I_EEG"
 HFO_GUI_SETTINGS_KEY = "hfo/advanced_defaults"
+
+
+def _hfo_default_band_for_classifier(classifier_name: object) -> tuple[float, float]:
+    return HFO_DEFAULT_BANDS_BY_CLASSIFIER.get(
+        str(classifier_name),
+        HFO_DEFAULT_BANDS_BY_CLASSIFIER[DEFAULT_HFO_DETECTOR_VERSION],
+    )
+
+
+def _hfo_band_for_preset(preset: object, classifier_name: object) -> tuple[float, float] | None:
+    preset_text = _normalize_hfo_band_preset_name(preset)
+    if preset_text == DEFAULT_HFO_BAND_PRESET:
+        return _hfo_default_band_for_classifier(classifier_name)
+    return HFO_BAND_PRESETS.get(preset_text)
+
+
+def _normalize_hfo_band_preset_name(preset: object) -> str:
+    text = str(preset or "").strip()
+    lowered = text.lower().replace("_", " ").replace("-", " ")
+    compact = re.sub(r"\s+", " ", lowered).strip()
+    if not compact:
+        return DEFAULT_HFO_BAND_PRESET
+    if compact in {"default", "hfo 80 300 hz", "pyhfo pybrain 80 500 hz"}:
+        return DEFAULT_HFO_BAND_PRESET
+    if compact in {"ripple", "ripples", "ripple 80 250 hz", "ripples 80 250 hz"}:
+        return RIPPLE_HFO_BAND_PRESET
+    if compact in {
+        "fast ripple",
+        "fast ripples",
+        "fast ripple 250 500 hz",
+        "fast ripples 250 500 hz",
+    }:
+        return FAST_RIPPLE_HFO_BAND_PRESET
+    if compact == "custom":
+        return CUSTOM_HFO_BAND_PRESET
+    return text if text in HFO_BAND_PRESETS else CUSTOM_HFO_BAND_PRESET
+
+
+def _normalize_hfo_classifier_name(classifier_name: object) -> str:
+    text = str(classifier_name or "").strip()
+    if text in HFO_DETECTOR_VERSIONS:
+        return text
+    for internal_name, display_name in HFO_CLASSIFIER_DISPLAY_NAMES.items():
+        if text == display_name:
+            return internal_name
+    for internal_name in HFO_DETECTOR_VERSIONS:
+        if text.startswith(f"{internal_name}-"):
+            return internal_name
+    return DEFAULT_HFO_DETECTOR_VERSION
+
+
+def _set_combo_current_data(combo: QComboBox, value: object) -> None:
+    index = combo.findData(value)
+    if index >= 0:
+        combo.setCurrentIndex(index)
 
 
 @dataclass
@@ -374,7 +440,7 @@ class ComputationPanel(QWidget):
             "energy_window_sec": 0.5,
             "hfer_window_sec": 0.25,
         }
-        default_hfo_low, default_hfo_high = HFO_BAND_PRESETS[DEFAULT_HFO_BAND_PRESET]
+        default_hfo_low, default_hfo_high = _hfo_default_band_for_classifier(DEFAULT_HFO_DETECTOR_VERSION)
         self.hfo_params = {
             "detector_version": DEFAULT_HFO_DETECTOR_VERSION,
             "active_candidate_detectors": list(DEFAULT_CANDIDATE_DETECTORS),
@@ -656,8 +722,11 @@ class ComputationPanel(QWidget):
         hfo_detector_form = QFormLayout()
         self.combo_hfo_detector_version = QComboBox()
         for detector_version in HFO_DETECTOR_VERSIONS:
-            self.combo_hfo_detector_version.addItem(detector_version, userData=detector_version)
-        self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
+            self.combo_hfo_detector_version.addItem(
+                HFO_CLASSIFIER_DISPLAY_NAMES.get(detector_version, detector_version),
+                userData=detector_version,
+            )
+        _set_combo_current_data(self.combo_hfo_detector_version, DEFAULT_HFO_DETECTOR_VERSION)
         self._disable_unvalidated_hfo_classifier_options()
         hfo_detector_form.addRow("Classifier:", self.combo_hfo_detector_version)
         hfo_time_layout.addLayout(hfo_detector_form)
@@ -665,10 +734,12 @@ class ComputationPanel(QWidget):
         hfo_band_form = QFormLayout()
         self.combo_hfo_band_preset = QComboBox()
         for preset_name in HFO_BAND_PRESETS:
-            self.combo_hfo_band_preset.addItem(preset_name, userData=preset_name)
-        self.combo_hfo_band_preset.addItem(CUSTOM_HFO_BAND_PRESET, userData=CUSTOM_HFO_BAND_PRESET)
+            self.combo_hfo_band_preset.addItem(
+                HFO_BAND_PRESET_DISPLAY_NAMES.get(preset_name, preset_name),
+                userData=preset_name,
+            )
         self._disable_unvalidated_hfo_band_presets()
-        self.combo_hfo_band_preset.setCurrentText(DEFAULT_HFO_BAND_PRESET)
+        _set_combo_current_data(self.combo_hfo_band_preset, DEFAULT_HFO_BAND_PRESET)
         hfo_band_form.addRow("Band preset:", self.combo_hfo_band_preset)
         hfo_time_layout.addLayout(hfo_band_form)
 
@@ -693,8 +764,8 @@ class ComputationPanel(QWidget):
             spin.setSingleStep(5.0)
             spin.setSuffix(" Hz")
             spin.setValue(float(value))
-        hfo_filter_form.addRow("Low frequency:", QLabel(f"{self.hfo_params['low_freq']:g} Hz"))
-        hfo_filter_form.addRow("High frequency:", QLabel(f"{self.hfo_params['high_freq']:g} Hz"))
+        hfo_filter_form.addRow("Low frequency:", self.edit_hfo_low_freq)
+        hfo_filter_form.addRow("High frequency:", self.edit_hfo_high_freq)
         hfo_filter_form.addRow("Notch handling:", QLabel("Uses active notch if enabled"))
         hfo_advanced_layout.addWidget(hfo_filter_box)
 
@@ -1560,23 +1631,23 @@ class ComputationPanel(QWidget):
         return float(start_s), float(end_s)
 
     def _on_hfo_detector_version_changed(self, _text: str) -> None:
-        detector_version = str(
+        detector_version = _normalize_hfo_classifier_name(
             self.combo_hfo_detector_version.currentData()
             or DEFAULT_HFO_DETECTOR_VERSION
         )
         if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
-            self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
+            _set_combo_current_data(self.combo_hfo_detector_version, DEFAULT_HFO_DETECTOR_VERSION)
             detector_version = DEFAULT_HFO_DETECTOR_VERSION
         self.hfo_params["detector_version"] = detector_version
-        target_preset = (
-            PYBRAIN_HFO_BAND_PRESET
-            if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN
-            else OMNI_LEGACY_HFO_BAND_PRESET
+        target_preset = _normalize_hfo_band_preset_name(
+            self.combo_hfo_band_preset.currentData() or DEFAULT_HFO_BAND_PRESET
         )
-        self.combo_hfo_band_preset.blockSignals(True)
-        self.combo_hfo_band_preset.setCurrentText(target_preset)
-        self.combo_hfo_band_preset.blockSignals(False)
-        band = HFO_BAND_PRESETS[target_preset]
+        band = _hfo_band_for_preset(target_preset, detector_version)
+        if band is None:
+            band = (
+                float(self.edit_hfo_low_freq.value()),
+                float(self.edit_hfo_high_freq.value()),
+            )
         self.hfo_params["band_preset"] = target_preset
         self.hfo_params["low_freq"] = float(band[0])
         self.hfo_params["high_freq"] = float(band[1])
@@ -1590,14 +1661,19 @@ class ComputationPanel(QWidget):
         self.settingsChanged.emit()
 
     def _on_hfo_band_preset_changed(self, _text: str) -> None:
-        preset = str(self.combo_hfo_band_preset.currentData() or DEFAULT_HFO_BAND_PRESET)
+        preset = _normalize_hfo_band_preset_name(
+            self.combo_hfo_band_preset.currentData() or DEFAULT_HFO_BAND_PRESET
+        )
         if preset in DISABLED_HFO_BAND_PRESETS:
             self.combo_hfo_band_preset.blockSignals(True)
-            self.combo_hfo_band_preset.setCurrentText(DEFAULT_HFO_BAND_PRESET)
+            _set_combo_current_data(self.combo_hfo_band_preset, DEFAULT_HFO_BAND_PRESET)
             self.combo_hfo_band_preset.blockSignals(False)
             preset = DEFAULT_HFO_BAND_PRESET
         self.hfo_params["band_preset"] = preset
-        band = HFO_BAND_PRESETS.get(preset)
+        detector_version = _normalize_hfo_classifier_name(
+            self.hfo_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+        )
+        band = _hfo_band_for_preset(preset, detector_version)
         if band is not None:
             low_freq, high_freq = band
             for spin, value in (
@@ -1617,7 +1693,7 @@ class ComputationPanel(QWidget):
         params = deepcopy(self.hfo_params)
         low_freq = float(self.edit_hfo_low_freq.value())
         high_freq = float(self.edit_hfo_high_freq.value())
-        detector_version = str(
+        detector_version = _normalize_hfo_classifier_name(
             self.combo_hfo_detector_version.currentData()
             or DEFAULT_HFO_DETECTOR_VERSION
         )
@@ -1649,7 +1725,11 @@ class ComputationPanel(QWidget):
         params["active_candidate_detectors"] = active_candidate_detectors
         if update_preset:
             matched_preset = CUSTOM_HFO_BAND_PRESET
-            for preset_name, (preset_low, preset_high) in HFO_BAND_PRESETS.items():
+            for preset_name in HFO_BAND_PRESETS:
+                band = _hfo_band_for_preset(preset_name, detector_version)
+                if band is None:
+                    continue
+                preset_low, preset_high = band
                 if abs(low_freq - preset_low) < 1e-9 and abs(high_freq - preset_high) < 1e-9:
                     matched_preset = preset_name
                     break
@@ -1679,43 +1759,41 @@ class ComputationPanel(QWidget):
     ) -> None:
         params = self._collect_hfo_params_from_ui(update_preset=update_preset)
         low_freq = float(params["low_freq"])
-        detector_version = str(params["detector_version"])
+        detector_version = _normalize_hfo_classifier_name(params["detector_version"])
         if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
-            self.combo_hfo_detector_version.setCurrentText(DEFAULT_HFO_DETECTOR_VERSION)
+            _set_combo_current_data(self.combo_hfo_detector_version, DEFAULT_HFO_DETECTOR_VERSION)
             detector_version = DEFAULT_HFO_DETECTOR_VERSION
             params["detector_version"] = detector_version
         self.hfo_params = params
         self._sync_hfo_detector_parameter_enabled()
         if update_preset:
             matched_preset = str(params.get("band_preset", CUSTOM_HFO_BAND_PRESET))
-            if self.combo_hfo_band_preset.currentText() != matched_preset:
+            if self.combo_hfo_band_preset.currentData() != matched_preset:
                 self.combo_hfo_band_preset.blockSignals(True)
-                self.combo_hfo_band_preset.setCurrentText(matched_preset)
+                _set_combo_current_data(self.combo_hfo_band_preset, matched_preset)
                 self.combo_hfo_band_preset.blockSignals(False)
         if emit:
             self._clear_hfo_outputs()
             self.settingsChanged.emit()
 
     def _restore_hfo_params(self, saved_params: dict, *, apply_to_params: bool = True) -> None:
-        detector_version = str(
+        detector_version = _normalize_hfo_classifier_name(
             saved_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
         )
         if detector_version in DISABLED_HFO_CLASSIFIER_OPTIONS:
             detector_version = DEFAULT_HFO_DETECTOR_VERSION
         if detector_version not in HFO_DETECTOR_VERSIONS:
             detector_version = DEFAULT_HFO_DETECTOR_VERSION
-        preset = str(saved_params.get("band_preset", DEFAULT_HFO_BAND_PRESET))
-        if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN:
-            preset = PYBRAIN_HFO_BAND_PRESET
-        elif detector_version in {HFO_CLASSIFIER_PYHFO_OMNI_LEGACY, HFO_CLASSIFIER_EHFO}:
-            preset = OMNI_LEGACY_HFO_BAND_PRESET
+        preset = _normalize_hfo_band_preset_name(
+            saved_params.get("band_preset", DEFAULT_HFO_BAND_PRESET)
+        )
         if preset in DISABLED_HFO_BAND_PRESETS:
             preset = DEFAULT_HFO_BAND_PRESET
         if preset not in HFO_BAND_PRESETS and preset != CUSTOM_HFO_BAND_PRESET:
             preset = DEFAULT_HFO_BAND_PRESET
-        default_low, default_high = HFO_BAND_PRESETS.get(
-            preset,
-            HFO_BAND_PRESETS[DEFAULT_HFO_BAND_PRESET],
+        default_low, default_high = (
+            _hfo_band_for_preset(preset, detector_version)
+            or _hfo_default_band_for_classifier(detector_version)
         )
         values = {
             "low_freq": saved_params.get("low_freq", default_low),
@@ -1727,10 +1805,8 @@ class ComputationPanel(QWidget):
             "merge_gap_ms": saved_params.get("merge_gap_ms", self.hfo_params["merge_gap_ms"]),
             "min_cycles": saved_params.get("min_cycles", self.hfo_params["min_cycles"]),
         }
-        if detector_version == HFO_CLASSIFIER_PYHFO_PYBRAIN:
-            values["low_freq"], values["high_freq"] = HFO_BAND_PRESETS[PYBRAIN_HFO_BAND_PRESET]
-        elif detector_version == HFO_CLASSIFIER_PYHFO_OMNI_LEGACY:
-            values["low_freq"], values["high_freq"] = HFO_BAND_PRESETS[OMNI_LEGACY_HFO_BAND_PRESET]
+        if preset != CUSTOM_HFO_BAND_PRESET:
+            values["low_freq"], values["high_freq"] = default_low, default_high
         spin_by_key = {
             "low_freq": self.edit_hfo_low_freq,
             "high_freq": self.edit_hfo_high_freq,
@@ -1764,10 +1840,10 @@ class ComputationPanel(QWidget):
             spin.setValue(int(round(value)) if isinstance(spin, QSpinBox) else value)
             spin.blockSignals(False)
         self.combo_hfo_detector_version.blockSignals(True)
-        self.combo_hfo_detector_version.setCurrentText(detector_version)
+        _set_combo_current_data(self.combo_hfo_detector_version, detector_version)
         self.combo_hfo_detector_version.blockSignals(False)
         self.combo_hfo_band_preset.blockSignals(True)
-        self.combo_hfo_band_preset.setCurrentText(preset)
+        _set_combo_current_data(self.combo_hfo_band_preset, preset)
         self.combo_hfo_band_preset.blockSignals(False)
         active_candidate_detectors = saved_params.get(
             "active_candidate_detectors",
@@ -2180,7 +2256,7 @@ class ComputationPanel(QWidget):
             return
         model = self.combo_hfo_detector_version.model()
         for idx in range(self.combo_hfo_detector_version.count()):
-            label = str(self.combo_hfo_detector_version.itemText(idx))
+            label = str(self.combo_hfo_detector_version.itemData(idx))
             if label not in DISABLED_HFO_CLASSIFIER_OPTIONS:
                 continue
             item = getattr(model, "item", lambda _idx: None)(idx)
@@ -2189,13 +2265,9 @@ class ComputationPanel(QWidget):
                 item.setToolTip("This HFO classifier option is not available in this build.")
 
     def _lock_hfo_legacy_parameter_controls(self) -> None:
-        fixed_controls = (
-            self.edit_hfo_low_freq,
-            self.edit_hfo_high_freq,
-        )
-        for control in fixed_controls:
-            control.setEnabled(False)
-            control.setToolTip("Fixed by the validated 80-300 Hz legacy pyHFO integration.")
+        for control in (self.edit_hfo_low_freq, self.edit_hfo_high_freq):
+            control.setEnabled(True)
+            control.setToolTip("Editable when Band preset is Custom; presets fill these values automatically.")
         for control in (
             self.edit_hfo_threshold_sigma,
             self.edit_hfo_min_duration,
@@ -2796,6 +2868,14 @@ class ComputationPanel(QWidget):
         start_s, stop_s = self._read_hfo_window_from_ui()
         return self._build_hfo_compute_callback(start_s, stop_s)(lambda: None)
 
+    def _hfo_band_label_from_params(self, hfo_params: dict) -> str:
+        preset = _normalize_hfo_band_preset_name(
+            hfo_params.get("band_preset", DEFAULT_HFO_BAND_PRESET)
+        )
+        low = float(hfo_params.get("low_freq", 0.0) or 0.0)
+        high = float(hfo_params.get("high_freq", 0.0) or 0.0)
+        return f"{preset} {low:g}-{high:g} Hz"
+
     def _build_hfo_compute_callback(
         self,
         start_s: float,
@@ -2855,7 +2935,9 @@ class ComputationPanel(QWidget):
                 data_start_s=float(start_s),
                 analysis_window_s=(float(start_s), float(stop_s)),
                 detector_version=str(
-                    hfo_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+                    _normalize_hfo_classifier_name(
+                        hfo_params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION)
+                    )
                 ),
                 active_candidate_detectors=list(
                     hfo_params.get(
@@ -2863,7 +2945,7 @@ class ComputationPanel(QWidget):
                         DEFAULT_CANDIDATE_DETECTORS,
                     )
                 ),
-                band_label=str(hfo_params.get("band_preset", DEFAULT_HFO_BAND_PRESET)),
+                band_label=self._hfo_band_label_from_params(hfo_params),
                 low_freq_hz=float(hfo_params["low_freq"]),
                 high_freq_hz=float(hfo_params["high_freq"]),
                 threshold_sigma=float(hfo_params["threshold_sigma"]),
@@ -3794,7 +3876,9 @@ class ComputationPanel(QWidget):
                 self._hfo_markers_from_events(list(events))
             )
         )
-        grid.eventClassChanged.connect(lambda _event: self._refresh_hfo_review_metadata(result))
+        grid.eventClassChanged.connect(
+            lambda _event: self._on_hfo_event_class_changed(result)
+        )
         layout.addWidget(grid)
         pending_selection = self._pending_hfo_event_selection
         self._pending_hfo_event_selection = None
@@ -3991,6 +4075,10 @@ class ComputationPanel(QWidget):
         metadata["manual_reviewed_events"] = int(reviewed_count)
         metadata["manual_deleted_events"] = int(deleted_count)
         result.metadata = metadata
+
+    def _on_hfo_event_class_changed(self, result: HFOComputationResult) -> None:
+        self._refresh_hfo_review_metadata(result)
+        self.settingsChanged.emit()
 
     def _normalize_hfo_display_class(
         self,

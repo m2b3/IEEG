@@ -86,6 +86,10 @@ def _import_hfo_result(input_dir: Path) -> HFOComputationResult:
         peak_time_s = _float_or_none(row.get("peak_time_s"))
         if peak_time_s is None:
             peak_time_s = start_time_s + max(0.0, end_time_s - start_time_s) / 2.0
+        manual_review_status = str(row.get("manual_review_status") or "unreviewed")
+        manual_class = _normalize_imported_hfo_class(row.get("manual_class"))
+        if manual_class is None and manual_review_status.strip().lower() in {"reviewed", "deleted"}:
+            manual_class = _normalize_imported_hfo_class(row.get("official_class"))
 
         event = HFOEventResult(
             event_id=str(row.get("event_id") or f"hfo_{event_number:06d}"),
@@ -106,8 +110,8 @@ def _import_hfo_result(input_dir: Path) -> HFOComputationResult:
             artifact_probability=_float_or_none(row.get("artifact_probability")),
             spike_hfo_probability=_float_or_none(row.get("spike_hfo_probability")),
             final_model_class=_none_if_blank(row.get("final_model_class")),
-            manual_class=_none_if_blank(row.get("manual_class")),
-            manual_review_status=str(row.get("manual_review_status") or "unreviewed"),
+            manual_class=manual_class,
+            manual_review_status=manual_review_status,
             artifact_score=_float_or_none(row.get("legacy_artifact_score")),
             spike_score=_float_or_none(row.get("legacy_spike_score")),
             hfo_score=_float_or_none(row.get("legacy_hfo_score")),
@@ -330,6 +334,30 @@ def _required_text(row: dict[str, Any], field: str, row_number: int) -> str:
 def _none_if_blank(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _normalize_imported_hfo_class(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    lowered = text.lower().replace("_", "-")
+    if lowered in {"deleted", "excluded"}:
+        return "deleted"
+    if "artifact" in lowered:
+        return "artifact"
+    if lowered in {"spike-ehfo", "spike ehfo", "spkehfo", "spk-ehfo", "spk ehfo"}:
+        return "spike-eHFO"
+    if lowered in {"ehfo", "e-hfo"}:
+        return "eHFO"
+    if lowered in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
+        return "spike-HFO"
+    if lowered in {"hfo", "real hfo", "real-hfo"}:
+        return "HFO"
+    if lowered in {"non-spike hfo", "non-spkhfo", "non-spk hfo"}:
+        return "non-spike HFO"
+    if lowered in {"unclassified", "candidate", "unknown", "not-classified"}:
+        return "unclassified"
+    return text
 
 
 def _float_or_none(value: Any) -> float | None:
