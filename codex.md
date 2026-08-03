@@ -744,3 +744,45 @@ i did some commit from another computer, can you safely push our updates and pul
 
 ## Assistant
 Fetched every remote branch and confirmed that GitHub's `main` still matched this checkout at `0741843`; no newer commit from the other computer was available remotely. Validated, committed, rebased, and pushed the local user-guide and preview updates to `origin/main` without force-pushing. The other computer must pull `main` before making its next push.
+
+
+## User
+would it be better to have what is saved by the saving along the tutorial rather than in one place at the beginning ? so the user is less lost. or to have the list under save and save as ?
+
+## Assistant
+A hybrid structure would be clearest: keep a short summary under Open an Existing Project, put the complete authoritative list under Save, and state under Save As that it preserves the same information in a new project file. Add brief contextual notes only where a setting's persistence may surprise the user. Avoid repeating the complete list throughout the tutorial because duplicate lists become distracting and can fall out of sync. The opening section can link readers to the Save section for full details, while the Save section should clearly distinguish project state stored in the `.ieeg` file from computation results stored in exported result folders.
+
+
+## User
+under open just one sentence like, restore the saved element 5 listed under the save section), and the full list under saved, do that
+
+## Assistant
+Updated the user guide so Open an Existing Project contains only one sentence pointing readers to 4.1 Save. Moved the complete saved/not-saved lists and exported-results explanation under Save, and clarified that Save As stores the same elements in a new `.ieeg` file. Regenerated the HTML guide and verified `git diff --check`.
+
+
+## User
+how do i integrate an image in th md file
+
+## Assistant
+Place the image in `app/docs/images/`, then add it to `app/docs/user_guide.md` on its own line using standard Markdown, for example `![Main window with a loaded recording](images/main-window.png)`. The guide converter automatically uses the alternative text as a caption. Save the Markdown while the preview server is running, or regenerate once with `.venv/bin/python -B app/docs/preview_user_guide.py --once`. Use relative paths and simple lowercase filenames with hyphens.
+
+
+## User
+can we change the color of the text or add a pastille of a certain color
+
+## Assistant
+Yes, but the guide's current custom Markdown converter does not support colored text or inline HTML spans. A colored pill/badge is preferable to color-only text because it remains understandable and accessible when it includes a label such as Saved, Not saved, or Important. The clean implementation would add a small custom badge syntax to the converter, for example `{{badge:green|Saved}}`, with centrally defined CSS colors. This avoids scattered inline styles and keeps the generated guide consistent. I can implement that syntax if requested.
+
+
+## User
+i m gonna create an image with the main window description in the 2.1 overview section ( just to say which part is what), is there any improvement to make to the description or developement : Information of the file / Menu bar / Toolbar / Current montage/reference label / Main signal viewer showing eeg/ieeg traces / Channel label / Amplitude bar / Time navigation bar
+
+## Assistant
+The planned overview is useful. For terminology consistent with the application, use: Window title and recording summary; Menu bar; Toolbar; Current montage/reference indicator; Channel labels; Main signal viewer (EEG/iEEG traces); Amplitude axis (µV); and Time navigation bar. The window title includes the file path, selected/total channels, duration, macro/micro sampling rates, and an asterisk for unsaved changes. Use numbered callouts with a legend instead of long text over the traces, use a clean state before computation so result-only controls remain in the computation section, and use anonymized or synthetic data with no identifying path. If Overview becomes section 2.1, renumber the existing Main Window subsections accordingly.
+
+
+## User
+merge section 2.3 and 3 into one 5 should be positioned at 2.3
+
+## Assistant
+Merged the former 2.3 Signal Viewer section and section 3 Toolbar and Navigation into 2.3 Signal Viewer and Navigation. Converted the navigation topics into nested headings, kept Side Panels at 2.4, renumbered every later top-level and nested section, and updated the Open Project reference to 3.1 Save. Regenerated the HTML guide and verified `git diff --check`. Left the user's new untracked `app/docs/images/` directory untouched.
