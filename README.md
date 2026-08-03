@@ -235,10 +235,60 @@ https://www.python.org/downloads/
 From the project root folder:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-The project is typically run from the local virtual environment in `.venv`.
+Use a machine-local virtual environment. Do not copy `.venv` between Windows
+and macOS.
+
+On macOS:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+On Windows PowerShell:
+
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+After installing dependencies, verify the application imports:
+
+```bash
+python -m compileall -q app
+python -c "import PySide6, mne, pyqtgraph, torch, torchvision, skimage, safetensors; print('dependency check ok')"
+```
+
+HFO/pyHFO/eHFO checkpoints are tracked under:
+
+```text
+app/computation/hfo/checkpoints/
+```
+
+Verify they are present after cloning or copying:
+
+```bash
+ls app/computation/hfo/checkpoints/pyhfo_legacy_binary
+ls app/computation/hfo/checkpoints/ehfo
+```
+
+Expected files:
+
+```text
+model_a.tar
+model_s.tar
+artifacts.pth
+spikes.pth
+eHFOs.pth
+```
 
 ## Running
 
@@ -252,6 +302,13 @@ If you are using the project virtual environment on Windows:
 
 ```bash
 .\.venv\Scripts\python.exe main.py
+```
+
+If you are using the project virtual environment on macOS:
+
+```bash
+source .venv/bin/activate
+python main.py
 ```
 
 ## User Guide
