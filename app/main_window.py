@@ -226,6 +226,23 @@ class MainWindow(QMainWindow):
         self.chk_show_hfo_ehfo = QCheckBox("eHFO")
         self.chk_show_hfo_spike_ehfo = QCheckBox("spk-eHFO")
         self.chk_show_hfo_unclassified = QCheckBox("unclassified")
+        self.lbl_hfo_range_filter = QLabel("Range")
+        self.lbl_hfo_range_filter.setStyleSheet("color: #000000; font-weight: 700; border: none; background: transparent;")
+        self.combo_hfo_range_filter = QComboBox()
+        self.combo_hfo_range_filter.addItem("All", userData=None)
+        self.combo_hfo_range_filter.addItem("80-300 Hz", userData=(80.0, 300.0))
+        self.combo_hfo_range_filter.addItem("Ripple", userData=(80.0, 250.0))
+        self.combo_hfo_range_filter.addItem("Fast ripple", userData=(250.0, 500.0))
+        self.combo_hfo_range_filter.setStyleSheet("""
+            QComboBox {
+                color: #000000;
+                background: #ffffff;
+                border: 1px solid #475569;
+                border-radius: 3px;
+                padding: 2px 6px;
+            }
+        """)
+        self.combo_hfo_range_filter.currentIndexChanged.connect(self._apply_event_class_visibility)
         event_filter_colors = {
             self.chk_show_non_gamma_spikes: "#4091ff",
             self.chk_show_gamma_spikes: "#ff9743",
@@ -258,6 +275,8 @@ class MainWindow(QMainWindow):
             """)
             checkbox.toggled.connect(self._apply_event_class_visibility)
             event_class_row.addWidget(checkbox)
+        event_class_row.addWidget(self.lbl_hfo_range_filter)
+        event_class_row.addWidget(self.combo_hfo_range_filter)
         self.event_class_controls_widget.hide()
         top.addWidget(self.event_class_controls_widget)
 
@@ -1416,7 +1435,6 @@ class MainWindow(QMainWindow):
                 if isinstance(saved_montage_raw, dict)
                 else None
             )
-            self.comp_panel.restore_project_state(computation)
         finally:
             self._restoring_project = False
 
@@ -1428,10 +1446,23 @@ class MainWindow(QMainWindow):
         self._act_save.setEnabled(True)
         self._update_window_title()
 
-        self.viewer.set_monopolar_mode()
-        self.btn_edit_bipolar.setEnabled(False)
+        reference_state = display.get("reference")
+        if isinstance(reference_state, dict):
+            self._restore_reference_state(reference_state)
+        elif self._saved_bipolar_montage is not None:
+            self.viewer.set_bipolar_mode(self._saved_bipolar_montage)
+            self.btn_edit_bipolar.setEnabled(True)
+        else:
+            self.viewer.set_monopolar_mode()
+            self.btn_edit_bipolar.setEnabled(False)
         self._refresh_display_name_dependent_ui()
         self._update_montage_label()
+        self._restoring_project = True
+        try:
+            self.comp_panel.restore_project_state(computation)
+        finally:
+            self._restoring_project = False
+        self._apply_event_class_visibility()
 
         self.console.log(f"Project opened: {project_path}")
 
@@ -1674,7 +1705,7 @@ class MainWindow(QMainWindow):
 
         def _clamp_float(value, spin: QDoubleSpinBox) -> float | None:
             try:
-                numeric = float(value)
+                numeric = float(cast(Any, value))
             except (TypeError, ValueError):
                 return None
             if not np.isfinite(numeric):
@@ -1683,7 +1714,7 @@ class MainWindow(QMainWindow):
 
         def _clamp_int(value, spin: QSpinBox) -> int | None:
             try:
-                numeric = int(round(float(value)))
+                numeric = int(round(float(cast(Any, value))))
             except (TypeError, ValueError):
                 return None
             return max(int(spin.minimum()), min(int(spin.maximum()), numeric))
@@ -1897,6 +1928,8 @@ class MainWindow(QMainWindow):
             self.btn_edit_bipolar.setEnabled(False)
         elif mode == "bipolar":
             montage = ref_state.get("bipolar_montage")
+            if isinstance(montage, dict):
+                montage = self._restore_bipolar_montage_from_dict(montage)
             if montage is not None:
                 self.viewer.set_bipolar_mode(montage)
                 self.btn_edit_bipolar.setEnabled(True)
@@ -2222,6 +2255,10 @@ class MainWindow(QMainWindow):
     def _on_hfo_markers_changed(self, markers: dict) -> None:
         self._raw_hfo_marker_events = markers if isinstance(markers, dict) else {}
         self._active_event_marker_source = "hfo"
+        if hasattr(self, "combo_hfo_range_filter"):
+            self.combo_hfo_range_filter.blockSignals(True)
+            self.combo_hfo_range_filter.setCurrentIndex(0)
+            self.combo_hfo_range_filter.blockSignals(False)
         self._apply_event_class_visibility()
 
     def _on_hfo_event_activated(self, channel_name: str, time_s: float) -> None:
@@ -2292,6 +2329,8 @@ class MainWindow(QMainWindow):
             self.chk_show_hfo_unclassified,
         ):
             checkbox.setVisible(show_hfo_controls)
+        self.lbl_hfo_range_filter.setVisible(show_hfo_controls)
+        self.combo_hfo_range_filter.setVisible(show_hfo_controls)
         self.event_class_controls_widget.setVisible(bool(show_gamma_controls or show_hfo_controls))
 
     def _filtered_gamma_marker_events(self, markers: dict) -> dict:
@@ -2333,6 +2372,8 @@ class MainWindow(QMainWindow):
                     continue
                 if not self._hfo_marker_kind_visible(str(event.get("kind", "unclassified"))):
                     continue
+                if not self._hfo_marker_frequency_visible(event):
+                    continue
                 kept.append(dict(event))
             if kept:
                 filtered.setdefault(display_channel_name, []).extend(kept)
@@ -2344,6 +2385,48 @@ class MainWindow(QMainWindow):
         if idx is not None and 0 <= int(idx) < len(display_names):
             return str(display_names[int(idx)])
         return str(channel_name).strip()
+
+    def _hfo_marker_frequency_visible(self, event: dict) -> bool:
+        selected_band = self.combo_hfo_range_filter.currentData()
+        band = self._hfo_frequency_filter_band(selected_band)
+        if band is None:
+            return True
+        event_low = self._optional_float(event.get("low_freq_hz"))
+        event_high = self._optional_float(event.get("high_freq_hz"))
+        if event_low is None or event_high is None:
+            return False
+        selected_low, selected_high = band
+        return (
+            abs(event_low - selected_low) < 1e-6
+            and abs(event_high - selected_high) < 1e-6
+        )
+
+    @staticmethod
+    def _hfo_frequency_filter_band(value: object) -> tuple[float, float] | None:
+        if value is None:
+            return None
+        if not isinstance(value, (tuple, list)) or len(value) != 2:
+            return None
+        low_value = value[0]
+        high_value = value[1]
+        if low_value is None or high_value is None:
+            return None
+        try:
+            low = float(cast(Any, low_value))
+            high = float(cast(Any, high_value))
+        except (TypeError, ValueError):
+            return None
+        return low, high
+
+    @staticmethod
+    def _optional_float(value: object) -> float | None:
+        if value is None:
+            return None
+        try:
+            result = float(cast(Any, value))
+        except (TypeError, ValueError):
+            return None
+        return result if np.isfinite(result) else None
 
     def _hfo_marker_kind_visible(self, kind: str) -> bool:
         normalized = str(kind).strip().lower().replace("_", "-")

@@ -1,4 +1,5 @@
 colorama==0.4.6
+HFODetector==0.0.25
 mne>=1.0
 matplotlib>=3.8
 numpy==2.2.6

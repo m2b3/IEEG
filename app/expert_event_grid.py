@@ -55,12 +55,12 @@ SPECTROGRAM_FREQ_MAX_HZ = 400.0
 SPECTROGRAM_DYNAMIC_RANGE_DB = 45.0
 
 DISPLAY_FILTERS: dict[str, tuple[float | None, float | None]] = {
-    "Default (unfiltered)": (None, None),
-    "HFO 80-300 Hz": (80.0, 300.0),
-    "Ripple 80-250 Hz": (80.0, 250.0),
-    "Fast ripple 250-500 Hz": (250.0, 500.0),
+    "Default": (None, None),
+    "80-300 Hz": (80.0, 300.0),
+    "Ripple": (80.0, 250.0),
+    "Fast ripple": (250.0, 500.0),
 }
-DEFAULT_DISPLAY_FILTER = "HFO 80-300 Hz"
+DEFAULT_DISPLAY_FILTER = "80-300 Hz"
 
 
 def get_event_context_window(
@@ -310,6 +310,8 @@ class ExpertEvent:
     event_number: str = ""
     model_class: str = ""
     band_label: str = "80-300 Hz"
+    low_freq_hz: float | None = None
+    high_freq_hz: float | None = None
     boundary_warning: bool = False
     real_hfo_probability: float | None = None
     artifact_probability: float | None = None
@@ -727,7 +729,7 @@ class ZoomedEventView(QWidget):
             display_waveform = _filtered_waveform_for_display(
                 waveform,
                 times,
-                DISPLAY_FILTERS.get(band_name, DISPLAY_FILTERS["Default (unfiltered)"]),
+                DISPLAY_FILTERS.get(band_name, DISPLAY_FILTERS["Default"]),
             )
             plot_start_s, plot_end_s = get_event_context_window(self._event)
             self._draw_signal_panel(
@@ -807,7 +809,15 @@ class ZoomedEventView(QWidget):
         self._context_combo.blockSignals(False)
 
     def _on_context_changed(self, _index: int) -> None:
-        window_s = float(self._context_combo.currentData() or EVENT_CONTEXT_WINDOW_SECONDS)
+        raw_window_s = self._context_combo.currentData()
+        try:
+            window_s = float(
+                raw_window_s
+                if raw_window_s is not None
+                else EVENT_CONTEXT_WINDOW_SECONDS
+            )
+        except (TypeError, ValueError):
+            window_s = EVENT_CONTEXT_WINDOW_SECONDS
         self._event.review_context_window_s = window_s
         self.contextWindowChanged.emit(self._event, window_s)
 
@@ -857,7 +867,7 @@ class ZoomedEventView(QWidget):
                 window="hann",
                 nperseg=nperseg,
                 noverlap=noverlap,
-                detrend=False,
+                detrend="constant",
                 scaling="density",
                 mode="psd",
             )
@@ -935,7 +945,7 @@ class ZoomedEventView(QWidget):
         if value is None:
             return "n/a"
         try:
-            return f"{float(value):.3f}"
+            return f"{float(cast(Any, value)):.3f}"
         except (TypeError, ValueError):
             return "n/a"
 
@@ -1019,10 +1029,20 @@ class ExpertEventGrid(QWidget):
         filter_layout.setSpacing(8)
         self._channel_filter = QComboBox()
         self._type_filter = QComboBox()
+        self._frequency_filter = QComboBox()
         self._order_filter = QComboBox()
         self._type_filter.addItems(["All active", *HFO_REVIEW_CLASS_OPTIONS])
+        self._frequency_filter.addItem("All ranges", userData=None)
+        self._frequency_filter.addItem("80-300 Hz", userData=(80.0, 300.0))
+        self._frequency_filter.addItem("Ripple", userData=(80.0, 250.0))
+        self._frequency_filter.addItem("Fast ripple", userData=(250.0, 500.0))
         self._order_filter.addItems(["Channel order", "Time order"])
-        for combo in (self._channel_filter, self._type_filter, self._order_filter):
+        for combo in (
+            self._channel_filter,
+            self._type_filter,
+            self._frequency_filter,
+            self._order_filter,
+        ):
             combo.setStyleSheet("""
                 QComboBox {
                     background-color: #ffffff;
@@ -1038,6 +1058,8 @@ class ExpertEventGrid(QWidget):
         filter_layout.addWidget(self._channel_filter)
         filter_layout.addWidget(QLabel("Type"))
         filter_layout.addWidget(self._type_filter)
+        filter_layout.addWidget(QLabel("Range"))
+        filter_layout.addWidget(self._frequency_filter)
         filter_layout.addWidget(QLabel("Order"))
         filter_layout.addWidget(self._order_filter)
         filter_layout.addStretch()
@@ -1179,9 +1201,42 @@ class ExpertEventGrid(QWidget):
             return "spike-HFO"
         return "non-spike HFO"
 
+    @staticmethod
+    def _event_frequency_matches(event: ExpertEvent, frequency_filter: object) -> bool:
+        band = ExpertEventGrid._frequency_filter_band(frequency_filter)
+        if band is None:
+            return True
+        if event.low_freq_hz is None or event.high_freq_hz is None:
+            return False
+        try:
+            event_low = float(event.low_freq_hz)
+            event_high = float(event.high_freq_hz)
+        except (TypeError, ValueError):
+            return False
+        filter_low, filter_high = band
+        return abs(event_low - filter_low) < 1e-6 and abs(event_high - filter_high) < 1e-6
+
+    @staticmethod
+    def _frequency_filter_band(value: object) -> tuple[float, float] | None:
+        if value is None:
+            return None
+        if not isinstance(value, (tuple, list)) or len(value) != 2:
+            return None
+        low_value = value[0]
+        high_value = value[1]
+        if low_value is None or high_value is None:
+            return None
+        try:
+            low = float(cast(Any, low_value))
+            high = float(cast(Any, high_value))
+        except (TypeError, ValueError):
+            return None
+        return low, high
+
     def _apply_event_filters(self) -> None:
         channel_filter = str(self._channel_filter.currentText() or "All channels")
         type_filter = str(self._type_filter.currentText() or "All active")
+        frequency_filter = self._frequency_filter.currentData()
         order_filter = str(self._order_filter.currentText() or "Channel order")
 
         events = list(self._all_events)
@@ -1191,6 +1246,9 @@ class ExpertEventGrid(QWidget):
             events = [event for event in events if self._event_filter_type(event) != "deleted"]
         else:
             events = [event for event in events if self._event_filter_type(event) == type_filter]
+        events = [
+            event for event in events if self._event_frequency_matches(event, frequency_filter)
+        ]
 
         if order_filter == "Time order":
             events.sort(key=lambda e: (float(e.start), str(e.channel), str(e.event_number)))
@@ -1501,6 +1559,7 @@ class ExpertEventGrid(QWidget):
     def _refresh_after_class_change(self, changed_event: ExpertEvent) -> None:
         channel_filter = str(self._channel_filter.currentText() or "All channels")
         type_filter = str(self._type_filter.currentText() or "All active")
+        frequency_filter = self._frequency_filter.currentData()
         order_filter = str(self._order_filter.currentText() or "Channel order")
         events = list(self._all_events)
         if channel_filter != "All channels":
@@ -1509,6 +1568,9 @@ class ExpertEventGrid(QWidget):
             events = [event for event in events if self._event_filter_type(event) != "deleted"]
         else:
             events = [event for event in events if self._event_filter_type(event) == type_filter]
+        events = [
+            event for event in events if self._event_frequency_matches(event, frequency_filter)
+        ]
         if order_filter == "Time order":
             events.sort(key=lambda e: (float(e.start), str(e.channel), str(e.event_number)))
             order_text = "Sorted by time"
@@ -1612,3 +1674,7 @@ class ExpertEventGrid(QWidget):
     @property
     def events(self) -> List[ExpertEvent]:
         return self._events
+
+    @property
+    def all_events(self) -> List[ExpertEvent]:
+        return self._all_events

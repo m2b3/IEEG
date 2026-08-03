@@ -53,8 +53,6 @@ def build_menubar(main_window):
     # -------- Channels --------
     channels_menu = menubar.addMenu("Channels")
     add_action(channels_menu, "Channel Groups...", main_window.on_edit_channel_groups)
-    add_action(channels_menu, "Hidden Channels...", main_window._show_hidden_channels_menu)
-    add_action(channels_menu, "Bad Channels...", main_window._show_bad_channels_menu)
 
     # -------- Preprocessing --------
     pre_menu = menubar.addMenu("Preprocessing")

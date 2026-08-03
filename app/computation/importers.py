@@ -91,6 +91,10 @@ def _import_hfo_result(input_dir: Path) -> HFOComputationResult:
         if manual_class is None and manual_review_status.strip().lower() in {"reviewed", "deleted"}:
             manual_class = _normalize_imported_hfo_class(row.get("official_class"))
 
+        manual_class = _none_if_blank(row.get("manual_class"))
+        review_status = str(row.get("manual_review_status") or "unreviewed")
+        if manual_class is None and review_status.strip().lower() in {"reviewed", "deleted"}:
+            manual_class = _none_if_blank(row.get("official_class"))
         event = HFOEventResult(
             event_id=str(row.get("event_id") or f"hfo_{event_number:06d}"),
             channel=channel,

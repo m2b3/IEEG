@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -37,8 +37,8 @@ class EventTimelineOverlay(QWidget):
         self._view_start_s = 0.0
         self._view_end_s = 0.0
         self._hit_rects: list[tuple[QRectF, TimelineEvent]] = []
-        self.setMinimumHeight(58)
-        self.setMaximumHeight(66)
+        self.setMinimumHeight(72)
+        self.setMaximumHeight(82)
         self.setMouseTracking(True)
         self.hide()
 
@@ -68,11 +68,10 @@ class EventTimelineOverlay(QWidget):
         for item in events:
             if not isinstance(item, dict):
                 continue
-            try:
-                start_s = float(item.get("start_s", item.get("time_s", np.nan)))
-                end_s = float(item.get("end_s", item.get("time_s", start_s)))
-            except (TypeError, ValueError):
+            start_s = self._coerce_float(item.get("start_s", item.get("time_s")), np.nan)
+            if not np.isfinite(start_s):
                 continue
+            end_s = self._coerce_float(item.get("end_s", item.get("time_s")), start_s)
             if not np.isfinite(start_s) or not np.isfinite(end_s):
                 continue
             if end_s < start_s:
@@ -111,7 +110,7 @@ class EventTimelineOverlay(QWidget):
         rect = self.rect()
         painter.fillRect(rect, QColor("#f8fafc"))
         painter.setPen(QPen(QColor("#cbd5e1"), 1))
-        baseline_y = max(18, rect.center().y() - 5)
+        baseline_y = rect.center().y() - 12
         left = 12
         right = max(left + 1, rect.width() - 12)
         width = right - left
@@ -122,7 +121,7 @@ class EventTimelineOverlay(QWidget):
 
         view_start_x = left + width * max(0.0, min(1.0, self._view_start_s / self._duration_s))
         view_end_x = left + width * max(0.0, min(1.0, self._view_end_s / self._duration_s))
-        view_rect = QRectF(view_start_x, 8, max(1.0, view_end_x - view_start_x), max(8, baseline_y + 8 - 8))
+        view_rect = QRectF(view_start_x, 8, max(1.0, view_end_x - view_start_x), rect.height() - 34)
         painter.fillRect(view_rect, QColor(15, 23, 42, 22))
         painter.setPen(QPen(QColor(15, 23, 42, 95), 1))
         painter.drawRect(view_rect)
@@ -203,6 +202,16 @@ class EventTimelineOverlay(QWidget):
         hours = minutes // 60
         minutes = minutes % 60
         return f"{hours}:{minutes:02d}:{sec:02d}"
+
+    @staticmethod
+    def _coerce_float(value: object, fallback: float) -> float:
+        if value is None:
+            return float(fallback)
+        try:
+            result = float(cast(Any, value))
+        except (TypeError, ValueError):
+            return float(fallback)
+        return result
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:

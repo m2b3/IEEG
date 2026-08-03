@@ -6,16 +6,12 @@ from pathlib import Path
 from dataclasses import asdict
 from typing import Any
 
-PROJECT_VERSION = 6
+PROJECT_VERSION = 8
 PROJECT_FORMAT = "ieeg-review-project"
 
 
-def _serialize_bipolar_montage_if_edited(montage) -> dict[str, Any] | None:
+def _serialize_bipolar_montage(montage) -> dict[str, Any] | None:
     if montage is None or not getattr(montage, "pairs", None):
-        return None
-
-    has_manual_edit = any(getattr(pair, "origin", "") == "manual" for pair in montage.pairs)
-    if not has_manual_edit:
         return None
 
     return {
@@ -32,6 +28,17 @@ def _serialize_bipolar_montage_if_edited(montage) -> dict[str, Any] | None:
         "non_consecutive_channels": list(getattr(montage, "non_consecutive_channels", [])),
         "bad_channel_skips": list(getattr(montage, "bad_channel_skips", [])),
     }
+
+
+def _serialize_bipolar_montage_if_edited(montage) -> dict[str, Any] | None:
+    if montage is None or not getattr(montage, "pairs", None):
+        return None
+
+    has_manual_edit = any(getattr(pair, "origin", "") == "manual" for pair in montage.pairs)
+    if not has_manual_edit:
+        return None
+    return _serialize_bipolar_montage(montage)
+
 
 def build_project_dict(main_window) -> dict[str, Any]:
     viewer = main_window.viewer
@@ -110,7 +117,7 @@ def load_project(path: Path) -> dict[str, Any]:
     version_raw = payload.get("version")
     if not isinstance(version_raw, int):
         raise ValueError(f"Invalid project version: {version_raw!r}")
-    if version_raw not in (1, 2, 3, 4, 5, 6):
+    if version_raw not in (1, 2, 3, 4, 5, 6, 7, 8):
         raise ValueError(f"Unsupported project version: {version_raw!r}")
 
     source = payload.get("source")
@@ -155,8 +162,17 @@ def _serialize_filter_profiles(profiles) -> dict[str, Any]:
 
 
 def _serialize_display_settings(main_window) -> dict[str, Any]:
+    viewer = main_window.viewer
+    reference_mode = str(viewer.reference_mode())
     return {
         "time_range_s": float(main_window.time_range.value()),
         "channel_range": int(main_window.chan_range.value()),
         "amplitude_uv": float(main_window.gain.value()),
+        "reference": {
+            "mode": reference_mode,
+            "common_ref_name": viewer.common_reference_name(),
+            "bipolar_montage": _serialize_bipolar_montage(
+                viewer.get_bipolar_montage() if reference_mode == "bipolar" else None
+            ),
+        },
     }

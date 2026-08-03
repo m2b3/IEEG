@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import re
 import sys
 import time
 from typing import Optional, List, cast, Any
@@ -1094,6 +1095,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                         start_time_s, end_time_s = end_time_s, start_time_s
                     kind = str(event.get("kind", "hfo"))
                     event_id = str(event.get("event_id", ""))
+                    low_freq_hz = event.get("low_freq_hz", "")
+                    high_freq_hz = event.get("high_freq_hz", "")
                     cleaned_events.append(
                         {
                             "time_s": time_s,
@@ -1101,6 +1104,8 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                             "end_time_s": end_time_s,
                             "kind": kind,
                             "event_id": event_id,
+                            "low_freq_hz": low_freq_hz,
+                            "high_freq_hz": high_freq_hz,
                         }
                     )
                 if cleaned_events:
@@ -1108,6 +1113,51 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._hfo_marker_events = cleaned
         if self._raw is not None:
             self.render()
+
+    @staticmethod
+    def _event_channel_match_key(label: object) -> str:
+        text = str(label or "").strip()
+        if text.upper().startswith("EEG "):
+            text = text[4:].strip()
+        return re.sub(r"\s+", "", text).casefold()
+
+    @staticmethod
+    def _split_bipolar_event_label(label: object) -> tuple[str, str] | None:
+        text = str(label or "").strip()
+        if text.upper().startswith("EEG "):
+            text = text[4:].strip()
+        parts = [
+            part.strip()
+            for part in re.split(r"\s*(?:-|\u2013|\u2014)\s*", text)
+            if part.strip()
+        ]
+        if len(parts) != 2:
+            return None
+        return parts[0], parts[1]
+
+    def _marker_events_for_display_channel(
+        self,
+        marker_events: dict[str, list[dict[str, float | str]]],
+        display_channel_name: str,
+    ) -> list[dict[str, float | str]]:
+        exact_events = marker_events.get(str(display_channel_name))
+        if exact_events:
+            return exact_events
+
+        display_key = self._event_channel_match_key(display_channel_name)
+        matched: list[dict[str, float | str]] = []
+        for event_channel, events in marker_events.items():
+            if not events:
+                continue
+            event_key = self._event_channel_match_key(event_channel)
+            if event_key == display_key:
+                matched.extend(events)
+                continue
+
+            pair = self._split_bipolar_event_label(event_channel)
+            if pair is not None and self._event_channel_match_key(pair[0]) == display_key:
+                matched.extend(events)
+        return matched
 
     def set_ei_label_styles(self, styles: dict[str, dict[str, float | int]] | None) -> None:
         cleaned: dict[str, dict[str, float | int]] = {}
@@ -1196,6 +1246,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         _y_min, y_max = self._sig_vb.viewRange()[1]
         view_height = max(1e-9, float(y_max) - float(_y_min))
         top_rail_y = float(y_max) - 0.035 * view_height
+
         for visible_row, abs_idx in enumerate(list(visible_abs)):
             abs_idx = int(abs_idx)
             if not (0 <= abs_idx < len(display_names)):
@@ -1303,7 +1354,10 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
             if not (0 <= abs_idx < len(display_names)):
                 continue
             channel_name = str(display_names[abs_idx])
-            events = self._hfo_marker_events.get(channel_name, [])
+            events = self._marker_events_for_display_channel(
+                self._hfo_marker_events,
+                channel_name,
+            )
             if not events:
                 continue
 
