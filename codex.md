@@ -786,3 +786,45 @@ merge section 2.3 and 3 into one 5 should be positioned at 2.3
 
 ## Assistant
 Merged the former 2.3 Signal Viewer section and section 3 Toolbar and Navigation into 2.3 Signal Viewer and Navigation. Converted the navigation topics into nested headings, kept Side Panels at 2.4, renumbered every later top-level and nested section, and updated the Open Project reference to 3.1 Save. Regenerated the HTML guide and verified `git diff --check`. Left the user's new untracked `app/docs/images/` directory untouched.
+
+
+## User
+how do i opened the updated html user guide
+
+## Assistant
+From the repository root, activate the virtual environment and run `python -B app/docs/preview_user_guide.py`. Keep that terminal open, then open `http://127.0.0.1:8765/user_guide.html` in Safari, or run `open -a Safari http://127.0.0.1:8765/user_guide.html` in a second terminal. The preview regenerates the HTML on startup and reloads it after the Markdown is saved. Stop the server with Ctrl+C.
+
+
+## User
+the image isnt visible : ![Main window with a loaded recording](images/main-window.png)
+
+## Assistant
+The image file is `app/docs/images/main-viewer.png`, while the Markdown references `main-window.png`. Use `![Main window with a loaded recording](images/main-viewer.png)` on its own line and save `user_guide.md`. The image line is not currently present in the saved Markdown, so it is also absent from the generated HTML. With the preview server running, saving the file will regenerate and reload the page; otherwise run `.venv/bin/python -B app/docs/preview_user_guide.py --once`.
+
+
+## User
+review the beginning of the user guide, check it s complete and accurate, go up to the section 6
+
+## Assistant
+Reviewed the guide through the complete Section 6 against the current application. It is not fully complete or accurate yet. Major findings: broken section order and cross-references; unfinished placeholders in the Menu Bar description; outdated PSD text describing one combined plot instead of separate Macro and Micro panels; HFO documentation that conflicts with the GUI's unconditional 1000 Hz minimum and its rejection of the documented 500 Hz upper bound; incorrect yellow channel-selection wording; incomplete display-filter controls and validation; and several smaller workflow, rendering, and terminology issues. Confirmed that the supported formats, keyboard navigation, zoom/scalogram workflows, channel hiding/bad-channel behavior, reference modes, result-import file detection, and most REI/gamma behavior match the implementation. No guide files were edited during the review.
+
+
+## User
+explain more clearly the bug point 2 and how to fix it, correct the psd and filters description description, and the REI full name. Correct point 6, 7
+
+## Assistant
+Updated the Markdown and generated HTML guide. Expanded Display Filters with All/Macro/Micro scope, controls, zero-as-off behavior, validation, non-destructive windowed filtering, PSD behavior, and computation boundaries. Replaced the obsolete combined-PSD description with separate Macro and Micro panels and group-specific controls. Expanded REI to Recruitment Energy Index, corrected selection highlighting to describe thicker traces and theme/group colors, and converted the overview legend to valid Markdown numbering with the Signal Viewer link pointing to Section 3. The HFO issue was not changed because it is an implementation inconsistency: validation applies a universal 1000 Hz requirement and rejects the documented 500 Hz default, while the backend is route-specific and Omni caps detection at 300 Hz. Recommended route-specific validation and preset availability plus regression tests. Regenerated HTML and verified `git diff --check`.
+
+
+## User
+updates the computation and fix it for pybrain
+
+## Assistant
+Updated HFO computation validation for the pyhfo_pybrain route. PyBrain now preserves native sampling without the universal 1000 Hz minimum, accepts the documented 500 Hz requested upper setting, caps the effective upper cutoff below native Nyquist through the existing backend behavior, and reports a route-specific error only when the low cutoff cannot fit. Omni and eHFO retain their 1000 Hz minimum and existing Nyquist validation. Updated the Markdown and generated HTML guide to document this behavior and the Omni 300 Hz effective ceiling. Focused checks passed for pyBrain at 512, 1000, and 2000 Hz, insufficient native Nyquist, an upper setting above 500 Hz, and unchanged Omni/eHFO sampling restrictions. Python compilation and `git diff --check` also passed.
+
+
+## User
+how do i commit on mac
+
+## Assistant
+The current computation, guide, generated HTML, and project-log changes are already staged. From the repository root, run `git add codex.md`, then `git commit -m "Fix pyBrain HFO validation and update user guide"`. Use `git status` and `git log -1 --oneline` to verify the local commit. To publish safely afterward, run `git pull --rebase origin main` followed by `git push origin main`; no force-push is needed.

@@ -1,194 +1,98 @@
 # User Guide
 
-## 1. First Start: Create or Open a Project
+## 1. Getting started
 
 ### 1.1 Create a New Project
 
-Use **File > New Project...** to start a new review.
+To start a new project, select File > New Project....
 
-1. Choose the raw EEG/iEEG recording
+1. Select the raw EEG/iEEG recording
 2. Choose where to save the `.ieeg` project file
-3. Confirm
+3. Click Confirm
 
 The project is linked to the selected raw recording.
 
+Supported recording formats: `.edf` ; `.bdf` ; `.fif` ; `.vhdr` ; `.set` ; `.cnt`
+
 ### 1.2 Open an Existing Project
 
-Use **File > Open Project...** to reopen a saved `.ieeg` project.
+To reopen a previously saved project, select File > Open Project... and choose an existing .ieeg project file.
 
-The application restores the saved elements listed under **3.1 Save**.
-
-### 1.3 Supported File Formats
-
-The current loader supports:
-
-- `.edf`
-- `.bdf`
-- `.fif`
-- `.vhdr`
-- `.set`
-- `.cnt`
-
-### 1.4 What Loads After Opening
-
-After a recording or project opens:
-
-- the signal viewer shows the traces
-- the toolbar becomes active
-- the time navigation bar appears
-- the current montage/reference label is shown above the viewer
-- menus linked to the loaded recording become available
+The application restores all saved project information (see Section 4.1 – Save).
 
 ---
 
-## 2. Main Window Basics
+## 2. Main Window
 
-### 2.1 Menu Bar
+### 2.1 Overview
 
-The menu bar groups the main actions:
+![Main window with a loaded recording](images/main-viewer.png)
 
-- **File**: create, open, save, close, and exit projects
-- **View**: zoom selection, reset zoom, and scalogram mode
-- **Channels**: channel groups, hidden channels, and bad channels
-- **Preprocessing**: montage/reference tools, display filters, and power spectrum
-- **Compute**: open the computation panel
-- **Review**: annotations
-- **Help**: open this user guide
+1. Window title and recording summary (file path, selected/total channels, duration, and sampling rates)
+2. Menu bar (see Section 2.2)
+3. Toolbar (see Section 2.3)
+4. Current montage/reference indicator
+5. Signal viewer displaying EEG/iEEG traces (see Section 3)
+6. Channel labels
+7. Amplitude axis (µV)
+8. Time navigation bar
 
-### 2.2 Toolbar
+### 2.2 Menu Bar
 
-The toolbar controls the main display:
+The menu bar provides access to the application's main functions.
 
-- **Time Range (s)**: number of seconds visible at once
-- **Channels**: number of channels visible at once
-- **Amplitude (uV)**: manual vertical display scaling
-- **Theme**: switch the interface and viewer between Light and Dark themes
+- **File**: **Create**, **open**, **save** and **close** projects, or **exit** the application.
+- **View**: Explore the recording more in depth using tools such as **zoom** and **scalogram mode**.
+- **Channels**: Manually organize channel groups (e.g., micro vs. macro). By default, the interface labels every channel as macro.
+- **Preprocessing**: Configure the signal representation by selecting the montage/reference, applying display filters, and inspecting the power spectrum.
+- **Compute**: Run the Recruitment Energy Index (REI), gamma-spike, and high-frequency oscillation (HFO) algorithms from the computation panel (see Section 6).
+- **Review**: Inspect and manage manual annotations
+- **Help**: Open the user guide and the keyboard shortcut summary.
+
+
+### 2.3 Toolbar
+
+The toolbar provides quick access to the main display settings.
+
+- **Time Range (s)**: number of seconds displayed in the viewer
+- **Channels**: number of channels displayed simultaneously
+- **Amplitude (µV)**: vertical scaling of the displayed signal. This affects only the visualization and does not modify the raw data or computation results.
+
+For these three settings, you can either enter a value directly or choose one from the drop-down menu.
+
+Additional controls include:
+
+- **Theme**: switch between Light and Dark interface themes
 - **Hidden...**: restore hidden channels
 - **Bad...**: review and unmark bad channels
-- **Hide all Bad**: hide every channel currently marked as bad
+- **Hide all Bad**: hide all channel currently marked as bad
 - **Edit Bipolar...**: edit the bipolar montage when bipolar mode is active
 
-### 2.3 Signal Viewer and Navigation
 
-The signal viewer displays stacked EEG/iEEG traces over time.
+## 3. Exploring the Recording
+### 3.1 Navigation
+#### 3.1.1 Channel Navigation
 
-You can select channels, scroll through the recording, inspect annotations, and open context-menu actions from the viewer.
+Move vertically through the channel list by:
 
-#### Time Range
+- Scrolling the mouse wheel over the signal viewer.
+- Pressing **Up Arrow** or **Down Arrow**.
+- Holding Shift while pressing the arrow keys to move faster.
+- Holding Ctrl while pressing the arrow keys to move much faster.
 
-Use **Time Range (s)** in the toolbar to choose how many seconds are visible at once.
 
-You can type a value directly or use the preset arrow menu.
+#### 3.1.2 Time navigation
 
-#### Visible Channels
+Use the navigation bar below the signal viewer to move through the recording.
 
-Use **Channels** in the toolbar to choose how many channels are visible at once.
-
-You can type a value directly or use the preset arrow menu.
-
-#### Amplitude Scale
-
-Use **Amplitude (uV)** in the toolbar to change the vertical size of the traces.
-
-This changes only the display. It does not change the raw data or computation results.
-
-#### Move Through Time
-
-Use the time bar below the viewer to move through the recording.
-
-You can also use:
+Keyboard shortcuts:
 
 - **Left Arrow** and **Right Arrow** to move backward or forward
 - **Shift + Left Arrow** and **Shift + Right Arrow** to move faster
 - **Ctrl + Left Arrow** and **Ctrl + Right Arrow** to move much faster
 
-#### Move Through Channels
 
-To move vertically through channels:
-
-- use the mouse wheel in the signal area
-- use **Up Arrow** and **Down Arrow**
-- hold **Shift** with the arrow keys to move faster
-- hold **Ctrl** with the arrow keys to move much faster
-
-#### Select Channels
-
-To select one channel, left-click the trace or its label.
-
-To select several channels:
-
-- **Ctrl + click** adds or removes one channel
-- **Shift + click** selects a range
-- **Ctrl + Shift + click** adds a range to the current selection
-
-Selected channels are highlighted in the viewer.
-
-### 2.4 Side Panels
-
-The application may show docked panels for annotations, computations, and PSD review.
-
-Dock panels can be resized by dragging their divider. The Annotations and Computation docks can also be moved to another dock area or floated from their title bars.
-
----
-
-## 3. File Menu
-
-### 3.1 Save
-
-Use **File > Save** to save the current project.
-
-The `.ieeg` project file saves:
-
-- the linked raw file
-- annotations
-- hidden channels
-- bad channels
-- macro/micro channel groups
-- an edited bipolar montage, ready for reuse after Bipolar is selected
-- macro and micro display-filter settings
-- display time range, visible-channel count, and amplitude scale
-- the selected computation algorithm and channels
-- REI seizure timing, baseline/ictal windows, and frequency settings
-- gamma-spike and HFO analysis intervals
-- HFO classifier, band, detector, and advanced-parameter settings
-- the last REI result metadata, when available
-
-The project file does not save:
-
-- the active reference mode; a project reopens in Monopolar
-- complete REI, gamma-spike, or HFO results
-- the Light/Dark theme
-- the main-viewer time position
-- open docks, review grids, PSD/scalogram windows, or other secondary windows
-- gamma/HFO event-filter checkbox selections
-
-Complete computation results are stored in exported result folders rather than
-inside the `.ieeg` project file. To recover those results and their viewer
-markers, use **Import results...** with the matching exported folder.
-
-### 3.2 Save As
-
-Use **File > Save As...** if the project does not yet have a save path or if you want to save it as another file.
-
-**Save As...** stores the same elements as **Save**, but in a new `.ieeg` project file.
-
-### 3.3 Close Project
-
-Use **File > Close Project** to close the current project while keeping the application open.
-
-If there are unsaved changes, the application asks whether to save, continue without saving, or cancel.
-
-### 3.4 Exit
-
-Use **File > Exit** to quit the application.
-
-If there are unsaved changes, the application asks what to do before closing.
-
----
-
-## 4. View Menu
-
-### 4.1 Zoom Selection
+### 3.2 Zoom Selection
 
 Use **View > Zoom Selection** to zoom directly into a time and channel region.
 
@@ -200,11 +104,10 @@ The viewer zooms into the selected time range and channel range. Press **Escape*
 
 Double left-click in the viewer to go back one zoom step.
 
-### 4.2 Reset Zoom
 
 Use **View > Reset Zoom** to return to the view that was active before the zoom sequence started.
 
-### 4.3 Scalogram Mode
+### 3.3 Scalogram Mode
 
 Use **View > Scalogram Mode** to open a time-frequency view from one channel and one selected time interval.
 
@@ -216,11 +119,10 @@ The scalogram window shows the selected channel context, raw signal, scalogram i
 
 Press **Escape** to cancel scalogram mode before opening a window.
 
----
 
-## 5. Channels Menu
+## 4. Managing Channels
 
-### 5.1 Channel Groups
+### 4.1 Micro/Macro Groups
 
 Use **Channels > Channel Groups...** to set channels as macro or micro.
 
@@ -230,29 +132,43 @@ Use **Channels > Channel Groups...** to set channels as macro or micro.
 
 Channel groups control macro/micro styling and group-aware review tools.
 
-### 5.2 Hidden Channels
+### 4.2 Selecting Channels
 
-To hide channels, right-click a selected trace and choose **Hide**.
+To select one channel, left-click the trace or its label.
+To select several channels:
 
-Use **Channels > Hidden Channels...** or the toolbar **Hidden...** button to see hidden channels and restore them.
+- **Ctrl + click** adds or removes one channel
+- **Shift + click** selects a range
+- **Ctrl + Shift + click** adds a range to the current selection
+
+Selected channels are emphasized with a thicker trace. Trace and label colors
+continue to indicate the channel group and current theme; bad channels remain
+red.
+
+### 4.3 Hidden Channels
+
+To hide one or more channels, right-click a selected trace and choose **Hide**..
+
+To restore hidden channels, select **Channels > Hidden Channels...** or click **Hidden...** on the toolbar.
 
 Hidden channels disappear from the visible display but are not deleted from the recording.
 
-### 5.3 Bad Channels
+### 4.4 Bad Channels
 
-To mark channels as bad, right-click a selected trace and choose **Mark as bad**.
+To mark one or more channels as bad, right-click a selected trace and choose **Mark as bad**.
 
-If all selected channels are already bad, the context menu offers **Unmark as bad**.
+If all selected channels are already marked as bad, the context menu instead offers **Unmark as bad**.
 
-Use **Channels > Bad Channels...** or the toolbar **Bad...** button to see channels currently marked as bad. From that list, you can unmark one channel or unmark all bad channels.
+To review or unmark bad channels, select **Channels > Bad Channels...**  or click **Bad...** on the toolbar. From the dialog, you can unmark individual channels or clear all bad-channel markings.
 
-Bad channels are treated as unusable for review-related computations and montage generation.
+Bad channels are excluded from review-related computations and from automatic montage generation.
+
 
 ---
 
-## 6. Preprocessing Menu
+## 5. Preprocessing
 
-### 6.1 Montage / Reference
+### 5.1 Montage / Reference
 
 Use **Preprocessing > Montage / Reference** to switch reference mode.
 
@@ -268,7 +184,7 @@ Average and Median exclude channels marked as bad and time intervals annotated a
 
 If the raw channel labels already look bipolar, the Bipolar command asks for confirmation before applying another bipolar derivation.
 
-### 6.2 Edit Bipolar Montage
+### 5.2 Edit Bipolar Montage
 
 The toolbar **Edit Bipolar...** button becomes available when bipolar mode is active.
 
@@ -287,61 +203,69 @@ Rules checked by the editor:
 - cross-electrode pairs trigger a warning, but can be kept intentionally
 - bad channels cannot be used as Channel 1 in manual rows
 
-### 6.3 Display Filters
+### 5.3 Display Filters
 
-Use **Preprocessing > Display Filters...** to show or hide application-level display filters.
+Use **Preprocessing > Display Filters...** to show or hide the display-filter
+controls above the signal viewer.
 
-Available filters:
+Use **Scope** to edit the filter profile for **All**, **Macro**, or **Micro**
+channels. The Macro and Micro profiles can use different settings:
 
-- high-pass filter
-- low-pass filter
-- notch off
-- 50 Hz + harmonics notch
-- 60 Hz + harmonics notch
+- **High Pass (Hz)**
+- **Low Pass (Hz)**
+- **Notch: Off**
+- **Notch: 50 Hz + harmonics**
+- **Notch: 60 Hz + harmonics**
 
-Display filters are non-destructive. The original recording is never modified.
+Enter `0` to turn the high-pass or low-pass filter off. Click **Apply filters**
+to apply the displayed values to the selected scope. Click **Back to default**
+to clear the selected scope's filters.
 
-Signal flow for display:
+The high-pass and low-pass values must both remain below the recording's
+Nyquist frequency. When both are enabled, the high-pass value must be lower
+than the low-pass value.
 
-`raw data -> reference choice -> display filters -> viewer + PSD + computation panel display`
+Display filters are non-destructive: the original recording is never modified.
+In the main viewer, the reference is applied first, followed by the appropriate
+Macro or Micro display-filter profile. Only the visible time window and extra
+padding are read and filtered, then the padding is cropped before plotting.
 
-Validation rules:
+The PSD applies the active Macro and Micro display-filter profiles to the
+selected PSD interval. Computation algorithms have their own preprocessing
+rules; the high-pass and low-pass display settings do not automatically become
+computation filters, while the selected notch setting is used where stated in
+the relevant computation section.
 
-- values must be positive
-- high-pass must be lower than low-pass
-- low-pass must be below Nyquist
-- empty input means that filter is off
-
-For large recordings, filters are applied only to the visible time window with padding, then cropped back before plotting.
-
-### 6.4 Power Spectrum
+### 5.4 Power Spectrum
 
 Use **Preprocessing > Power Spectrum** to inspect power spectral density over a chosen interval.
 
 Before opening, the software asks for start and stop times. The interval must stay inside the recording and `stop` must be after `start`.
 
-The PSD panel contains:
+The PSD panel contains separate **Macro** and **Micro** panels. Each panel has:
 
 - excluded channels on the left
 - displayed channels on the right
-- one combined PSD plot at the bottom
+- a PSD plot for that channel group at the bottom
+
+If no channels have been assigned to Micro, the Micro panel is empty.
 
 PSD behavior:
 
-- all channels are displayed by default, including bad channels in red
+- all channels in each group are displayed by default, including bad channels in red
 - hidden channels are shown in the PSD panel
 - selected channels have highlighted PSD curves and list labels
-- `<<` moves channels to Excluded
-- `>>` moves channels to Displayed
-- **Exclude all** and **Include all** move all channels at once
-- double left-click inside the PSD plot resets the PSD zoom
+- `<<` moves selected channels to Excluded within that group
+- `>>` moves selected channels to Displayed within that group
+- **Exclude all** and **Include all** affect the corresponding group
+- double left-click inside either PSD plot resets that plot's zoom
 - **Mark selected as bad** and **Unmark selected as bad** update bad-channel state
 
 ---
 
-## 7. Compute Menu
+## 6. Compute Menu
 
-### 7.1 Open Computation Panel
+### 6.1 Open Computation Panel
 
 Use **Compute > Open Computation Panel** to open the computation panel.
 
@@ -358,7 +282,7 @@ Quick selection buttons:
 The **Output** section changes with the selected algorithm. Result review and
 export buttons become available after a successful run or import.
 
-#### 7.1.1 Import Previously Exported Results
+#### 8.1.1 Import Previously Exported Results
 
 Use **Import results...** in the computation panel to restore a result folder
 previously exported by the application. The importer detects the algorithm from
@@ -375,7 +299,7 @@ recording/montage, or the metadata identifies a different source recording.
 
 Load the matching recording and select the matching montage before importing.
 
-#### 7.1.2 Event Filters and Global Timeline
+#### 8.1.2 Event Filters and Global Timeline
 
 After gamma-spike or HFO results are opened, the main window shows event-class
 filters beside the montage label and a compact global event timeline below the
@@ -404,7 +328,7 @@ in the signal viewer to open the corresponding gamma or HFO review grid.
 Event markers follow the currently displayed channel names when the montage or
 reference display changes.
 
-### 7.2 REI Mode
+### 8.2 REI Mode
 
 REI mode is designed for manual seizure-window entry and delayed execution.
 
@@ -444,7 +368,7 @@ REI outputs:
 - heatmap with HFER activity around seizure onset, REI score side bars, sorting controls, and top-N display control
 - export files with metadata, CSV outputs, saved heatmap figures, and `README.txt`
 
-### 7.3 Gamma Spike Mode
+### 8.3 Gamma Spike Mode
 
 Gamma spike mode is designed for spike detection and gamma-activity review on selected channels.
 
@@ -494,7 +418,7 @@ Gamma spike heatmaps are not saved during export because saving one heatmap per 
 
 Existing output files are not silently overwritten. If the target folder already contains gamma output files, the software asks for confirmation first.
 
-### 7.4 HFO Mode
+### 8.4 HFO Mode
 
 HFO mode is designed for high-frequency oscillation candidate detection,
 classification, review, and export on the selected channels.
@@ -533,7 +457,11 @@ uses the selected notch setting for computation.
 
 Sampling requirements depend on the selected HFO classifier route:
 
-- `pyhfo_pybrain` preserves native EDF sampling, matching the pyBrain GUI route
+- `pyhfo_pybrain` preserves the recording's native sampling and does not impose
+  a fixed 1000 Hz minimum. Its requested upper frequency can be as high as
+  500 Hz. When necessary, the backend reduces the effective upper cutoff to
+  remain just below the native Nyquist frequency. The run is rejected if the
+  selected low frequency is not below that effective cutoff.
 - `pyhfo_omni_legacy` rejects recordings below 1000 Hz and resamples higher-rate
   recordings internally to 1000 Hz
 - `eHFO` uses the Omni-compatible route: recordings below 1000 Hz are rejected,
@@ -575,13 +503,15 @@ Available band presets are:
 - **Fast ripples 250-500 Hz**
 - **Custom**
 
-All four presets are selectable. For **Custom**, edit the low and high
+All four presets appear in the selector. For **Custom**, edit the low and high
 frequencies in **Advanced parameters...**. The selected range must remain valid
-for the route and sampling frequency; the Omni-compatible 1000 Hz processing
-path requires the high frequency to stay below its effective Nyquist limit. The
-validation results below describe each route's stated reference configuration;
-choosing another band does not make it an independently validated classifier
-configuration.
+for the classifier route and sampling frequency. `pyhfo_pybrain` accepts a
+requested upper frequency of 500 Hz and records the effective native-sampling
+cutoff used by the backend. The Omni-compatible routes retain their 1000 Hz
+input requirement and 300 Hz effective detector ceiling, so the 250-500 Hz
+Fast ripples preset is not compatible with those routes. The validation results
+below describe each route's stated reference configuration; choosing another
+band does not make it an independently validated classifier configuration.
 
 Boundary handling:
 
@@ -723,9 +653,9 @@ user-facing HFO classifier option.
 
 ---
 
-## 8. Review Menu
+## 9. Review Menu
 
-### 8.1 Annotate
+### 9.1 Annotate
 
 Use **Review > Annotate** to add annotations to the signal display.
 
@@ -749,19 +679,76 @@ When annotations exist, the Annotations dock appears. From the list, you can cli
 
 ---
 
-## 9. Help Menu
 
-### 9.1 User Guide
+## 3. File Menu
+
+### 3.1 Save
+
+Use **File > Save** to save the current project.
+
+The `.ieeg` project file saves:
+
+- the linked raw file
+- annotations
+- hidden channels
+- bad channels
+- macro/micro channel groups
+- an edited bipolar montage, ready for reuse after Bipolar is selected
+- macro and micro display-filter settings
+- display time range, visible-channel count, and amplitude scale
+- the selected computation algorithm and channels
+- REI seizure timing, baseline/ictal windows, and frequency settings
+- gamma-spike and HFO analysis intervals
+- HFO classifier, band, detector, and advanced-parameter settings
+- the last REI result metadata, when available
+
+The project file does not save:
+
+- the active reference mode; a project reopens in Monopolar
+- complete REI, gamma-spike, or HFO results
+- the Light/Dark theme
+- the main-viewer time position
+- open docks, review grids, PSD/scalogram windows, or other secondary windows
+- gamma/HFO event-filter checkbox selections
+
+Complete computation results are stored in exported result folders rather than
+inside the `.ieeg` project file. To recover those results and their viewer
+markers, use **Import results...** with the matching exported folder.
+
+### 4.2 Save As
+
+Use **File > Save As...** if the project does not yet have a save path or if you want to save it as another file.
+
+**Save As...** stores the same elements as **Save**, but in a new `.ieeg` project file.
+
+### 4.3 Close Project
+
+Use **File > Close Project** to close the current project while keeping the application open.
+
+If there are unsaved changes, the application asks whether to save, continue without saving, or cancel.
+
+### 4.4 Exit
+
+Use **File > Exit** to quit the application.
+
+If there are unsaved changes, the application asks what to do before closing.
+
+---
+
+
+## 10. Help Menu
+
+### 10.1 User Guide
 
 Use **Help > User Guide** to open this guide from inside the application.
 
-### 9.2 Shortcuts
+### 10.2 Shortcuts
 
 Use **Help > Shortcuts** to open the keyboard and mouse shortcut list.
 
 ---
 
-## 10. Practical Review Workflow
+## 11. Practical Review Workflow
 
 A common workflow is:
 
