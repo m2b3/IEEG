@@ -702,3 +702,129 @@ what are the two vertical red lines i m seeing
 The most likely explanation is that they are interval-boundary markers: one line for the start time and one for the end time of an event/selection. In the expert event waveform view, the app explicitly draws two vertical markers at `start_s` and `end_s` in [app/expert_event_grid.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/expert_event_grid.py:178), inside `add_event_region(...)` in [app/expert_event_grid.py](c:/Users/F15/Desktop/Eva/EpilepsyTools/I_EEG/app/expert_event_grid.py:156).
 
 Those lines are not part of the raw iEEG signal itself. They are overlay guides showing the selected event window. If you are seeing them in the expert-event waveform panel, that is exactly what they are. If you mean the main viewer instead, send me where you are seeing them and I�ll trace that overlay too, because the main viewer uses a movable cursor line and annotation/selection overlays, but not the same paired event markers.
+
+
+## User
+update the user guide with latest updates
+
+## Assistant
+Updated both the Markdown source and generated HTML user guide. The guide now covers the Light/Dark theme and Hide all Bad controls, gamma/HFO event filters and the global timeline, importing exported REI/Gamma/HFO results, current HFO classifier labels and all band presets, HFO marker/review behavior, and historical class normalization during import. I also replaced the classifier comparison table with HTML-compatible structured sections. The generated HTML matches a clean second generation byte-for-byte, and `git diff --check` passes. The changes are not committed or pushed.
+
+
+## User
+let s not make the user guide recharge that often, only when i save it
+
+## Assistant
+Changed the preview so Safari no longer reloads every two seconds. The page now performs a lightweight background version check and reloads only after `user_guide.md` is saved and a new HTML build is available. Updated the preview tool, documentation, and generated HTML; tested the local version endpoint and confirmed the periodic HTML refresh tag is absent. Restart the preview server to use the new behavior.
+
+
+## User
+event filter and global timeline should appear later, in the computation section of the user guide
+
+## Assistant
+Moved “Event Filters and Global Timeline” from “Main Window Basics” to the Compute section, immediately after “Import Previously Exported Results” and before the REI/Gamma/HFO mode descriptions. Regenerated the HTML guide and verified the new heading order and clean diff.
+
+
+## User
+is the list of what is restore by application when opening a project up to date in the md file user gudie
+
+## Assistant
+No. The list is broadly correct but incomplete. It omits restored macro/micro channel groups and display settings (time range, visible-channel count, and amplitude). “Computation panel state” should be clarified to cover the selected algorithm/channels, REI timing and frequency settings, gamma/HFO analysis intervals, and HFO advanced parameters. Full computation results are not restored; only REI result metadata may be saved, so exported results must be imported. The active reference mode, theme, main-viewer time position, open panels/windows, and event-filter selections are not restored.
+
+
+## User
+update it
+
+## Assistant
+Updated the project reopening section to list all restored channel groups, display settings, computation setup, HFO parameters, and REI metadata, plus a separate list of state that is not restored. Clarified that complete computation results must be recovered with Import results, and aligned the File > Save section with the same behavior. Regenerated the HTML guide and verified `git diff --check`.
+
+
+## User
+i did some commit from another computer, can you safely push our updates and pulling the other commit here
+
+## Assistant
+Fetched every remote branch and confirmed that GitHub's `main` still matched this checkout at `0741843`; no newer commit from the other computer was available remotely. Validated, committed, rebased, and pushed the local user-guide and preview updates to `origin/main` without force-pushing. The other computer must pull `main` before making its next push.
+
+
+## User
+would it be better to have what is saved by the saving along the tutorial rather than in one place at the beginning ? so the user is less lost. or to have the list under save and save as ?
+
+## Assistant
+A hybrid structure would be clearest: keep a short summary under Open an Existing Project, put the complete authoritative list under Save, and state under Save As that it preserves the same information in a new project file. Add brief contextual notes only where a setting's persistence may surprise the user. Avoid repeating the complete list throughout the tutorial because duplicate lists become distracting and can fall out of sync. The opening section can link readers to the Save section for full details, while the Save section should clearly distinguish project state stored in the `.ieeg` file from computation results stored in exported result folders.
+
+
+## User
+under open just one sentence like, restore the saved element 5 listed under the save section), and the full list under saved, do that
+
+## Assistant
+Updated the user guide so Open an Existing Project contains only one sentence pointing readers to 4.1 Save. Moved the complete saved/not-saved lists and exported-results explanation under Save, and clarified that Save As stores the same elements in a new `.ieeg` file. Regenerated the HTML guide and verified `git diff --check`.
+
+
+## User
+how do i integrate an image in th md file
+
+## Assistant
+Place the image in `app/docs/images/`, then add it to `app/docs/user_guide.md` on its own line using standard Markdown, for example `![Main window with a loaded recording](images/main-window.png)`. The guide converter automatically uses the alternative text as a caption. Save the Markdown while the preview server is running, or regenerate once with `.venv/bin/python -B app/docs/preview_user_guide.py --once`. Use relative paths and simple lowercase filenames with hyphens.
+
+
+## User
+can we change the color of the text or add a pastille of a certain color
+
+## Assistant
+Yes, but the guide's current custom Markdown converter does not support colored text or inline HTML spans. A colored pill/badge is preferable to color-only text because it remains understandable and accessible when it includes a label such as Saved, Not saved, or Important. The clean implementation would add a small custom badge syntax to the converter, for example `{{badge:green|Saved}}`, with centrally defined CSS colors. This avoids scattered inline styles and keeps the generated guide consistent. I can implement that syntax if requested.
+
+
+## User
+i m gonna create an image with the main window description in the 2.1 overview section ( just to say which part is what), is there any improvement to make to the description or developement : Information of the file / Menu bar / Toolbar / Current montage/reference label / Main signal viewer showing eeg/ieeg traces / Channel label / Amplitude bar / Time navigation bar
+
+## Assistant
+The planned overview is useful. For terminology consistent with the application, use: Window title and recording summary; Menu bar; Toolbar; Current montage/reference indicator; Channel labels; Main signal viewer (EEG/iEEG traces); Amplitude axis (µV); and Time navigation bar. The window title includes the file path, selected/total channels, duration, macro/micro sampling rates, and an asterisk for unsaved changes. Use numbered callouts with a legend instead of long text over the traces, use a clean state before computation so result-only controls remain in the computation section, and use anonymized or synthetic data with no identifying path. If Overview becomes section 2.1, renumber the existing Main Window subsections accordingly.
+
+
+## User
+merge section 2.3 and 3 into one 5 should be positioned at 2.3
+
+## Assistant
+Merged the former 2.3 Signal Viewer section and section 3 Toolbar and Navigation into 2.3 Signal Viewer and Navigation. Converted the navigation topics into nested headings, kept Side Panels at 2.4, renumbered every later top-level and nested section, and updated the Open Project reference to 3.1 Save. Regenerated the HTML guide and verified `git diff --check`. Left the user's new untracked `app/docs/images/` directory untouched.
+
+
+## User
+how do i opened the updated html user guide
+
+## Assistant
+From the repository root, activate the virtual environment and run `python -B app/docs/preview_user_guide.py`. Keep that terminal open, then open `http://127.0.0.1:8765/user_guide.html` in Safari, or run `open -a Safari http://127.0.0.1:8765/user_guide.html` in a second terminal. The preview regenerates the HTML on startup and reloads it after the Markdown is saved. Stop the server with Ctrl+C.
+
+
+## User
+the image isnt visible : ![Main window with a loaded recording](images/main-window.png)
+
+## Assistant
+The image file is `app/docs/images/main-viewer.png`, while the Markdown references `main-window.png`. Use `![Main window with a loaded recording](images/main-viewer.png)` on its own line and save `user_guide.md`. The image line is not currently present in the saved Markdown, so it is also absent from the generated HTML. With the preview server running, saving the file will regenerate and reload the page; otherwise run `.venv/bin/python -B app/docs/preview_user_guide.py --once`.
+
+
+## User
+review the beginning of the user guide, check it s complete and accurate, go up to the section 6
+
+## Assistant
+Reviewed the guide through the complete Section 6 against the current application. It is not fully complete or accurate yet. Major findings: broken section order and cross-references; unfinished placeholders in the Menu Bar description; outdated PSD text describing one combined plot instead of separate Macro and Micro panels; HFO documentation that conflicts with the GUI's unconditional 1000 Hz minimum and its rejection of the documented 500 Hz upper bound; incorrect yellow channel-selection wording; incomplete display-filter controls and validation; and several smaller workflow, rendering, and terminology issues. Confirmed that the supported formats, keyboard navigation, zoom/scalogram workflows, channel hiding/bad-channel behavior, reference modes, result-import file detection, and most REI/gamma behavior match the implementation. No guide files were edited during the review.
+
+
+## User
+explain more clearly the bug point 2 and how to fix it, correct the psd and filters description description, and the REI full name. Correct point 6, 7
+
+## Assistant
+Updated the Markdown and generated HTML guide. Expanded Display Filters with All/Macro/Micro scope, controls, zero-as-off behavior, validation, non-destructive windowed filtering, PSD behavior, and computation boundaries. Replaced the obsolete combined-PSD description with separate Macro and Micro panels and group-specific controls. Expanded REI to Recruitment Energy Index, corrected selection highlighting to describe thicker traces and theme/group colors, and converted the overview legend to valid Markdown numbering with the Signal Viewer link pointing to Section 3. The HFO issue was not changed because it is an implementation inconsistency: validation applies a universal 1000 Hz requirement and rejects the documented 500 Hz default, while the backend is route-specific and Omni caps detection at 300 Hz. Recommended route-specific validation and preset availability plus regression tests. Regenerated HTML and verified `git diff --check`.
+
+
+## User
+updates the computation and fix it for pybrain
+
+## Assistant
+Updated HFO computation validation for the pyhfo_pybrain route. PyBrain now preserves native sampling without the universal 1000 Hz minimum, accepts the documented 500 Hz requested upper setting, caps the effective upper cutoff below native Nyquist through the existing backend behavior, and reports a route-specific error only when the low cutoff cannot fit. Omni and eHFO retain their 1000 Hz minimum and existing Nyquist validation. Updated the Markdown and generated HTML guide to document this behavior and the Omni 300 Hz effective ceiling. Focused checks passed for pyBrain at 512, 1000, and 2000 Hz, insufficient native Nyquist, an upper setting above 500 Hz, and unchanged Omni/eHFO sampling restrictions. Python compilation and `git diff --check` also passed.
+
+
+## User
+how do i commit on mac
+
+## Assistant
+The current computation, guide, generated HTML, and project-log changes are already staged. From the repository root, run `git add codex.md`, then `git commit -m "Fix pyBrain HFO validation and update user guide"`. Use `git status` and `git log -1 --oneline` to verify the local commit. To publish safely afterward, run `git pull --rebase origin main` followed by `git push origin main`; no force-push is needed.

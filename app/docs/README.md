@@ -14,5 +14,6 @@ Then open:
 http://127.0.0.1:8765/user_guide.html
 ```
 
-The preview rebuilds `user_guide.html` when you save the Markdown, and the
-browser page refreshes every 2 seconds.
+The preview rebuilds `user_guide.html` when you save the Markdown. The browser
+checks for a saved change in the background and reloads the page only after a
+new build is available.

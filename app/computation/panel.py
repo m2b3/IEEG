@@ -183,6 +183,55 @@ def _normalize_hfo_classifier_name(classifier_name: object) -> str:
     return DEFAULT_HFO_DETECTOR_VERSION
 
 
+def _validate_hfo_route_constraints(
+    *,
+    detector_version: object,
+    input_fs_hz: float,
+    low_freq_hz: float,
+    high_freq_hz: float,
+) -> tuple[bool, str]:
+    classifier = _normalize_hfo_classifier_name(detector_version)
+    fs = float(input_fs_hz)
+    low = float(low_freq_hz)
+    high = float(high_freq_hz)
+
+    if classifier == HFO_CLASSIFIER_PYHFO_PYBRAIN:
+        pybrain_max_hz = HFO_DEFAULT_BANDS_BY_CLASSIFIER[
+            HFO_CLASSIFIER_PYHFO_PYBRAIN
+        ][1]
+        if high > pybrain_max_hz:
+            return False, (
+                "pyhfo_pybrain high frequency must not exceed "
+                f"{pybrain_max_hz:g} Hz."
+            )
+
+        native_nyquist_hz = 0.5 * fs
+        effective_high_hz = min(high, native_nyquist_hz * 0.99)
+        if low >= effective_high_hz:
+            return False, (
+                "The pyhfo_pybrain frequency band is not available at the "
+                f"recording's native sampling rate ({fs:g} Hz). The low "
+                "frequency must remain below the effective native Nyquist "
+                f"limit ({effective_high_hz:g} Hz)."
+            )
+        return True, ""
+
+    if fs < OMNI_TARGET_FS_HZ:
+        return False, (
+            f"{classifier} requires recordings sampled at "
+            f"{OMNI_TARGET_FS_HZ:g} Hz or higher. The loaded recording is "
+            f"{fs:g} Hz."
+        )
+
+    detection_nyquist_hz = 0.5 * OMNI_TARGET_FS_HZ
+    if high >= detection_nyquist_hz:
+        return False, (
+            f"{classifier} high frequency must stay below the 1000 Hz "
+            f"detection Nyquist limit ({detection_nyquist_hz:g} Hz)."
+        )
+    return True, ""
+
+
 def _set_combo_current_data(combo: QComboBox, value: object) -> None:
     index = combo.findData(value)
     if index >= 0:
@@ -2757,27 +2806,23 @@ class ComputationPanel(QWidget):
         high_freq = float(params["high_freq"])
         if low_freq <= 0.0 or high_freq <= low_freq:
             return False, "HFO frequency range must have positive low < high values."
-        detector_version = str(params.get("detector_version", DEFAULT_HFO_DETECTOR_VERSION))
-        max_supported_high = self._hfo_max_high_freq_for_classifier(detector_version)
-        if high_freq > max_supported_high:
-            return False, (
-                f"The selected HFO classifier supports a maximum high cutoff of "
-                f"{max_supported_high:g} Hz."
-            )
-        detection_nyquist = 0.5 * OMNI_TARGET_FS_HZ
-        if high_freq >= detection_nyquist:
-            return False, (
-                "HFO high frequency must stay below the 1000 Hz detection Nyquist "
-                f"({detection_nyquist:g} Hz)."
-            )
-        if low_freq >= high_freq:
-            return False, "HFO low frequency must be lower than high frequency."
+        ok, message = _validate_hfo_route_constraints(
+            detector_version=params.get(
+                "detector_version",
+                DEFAULT_HFO_DETECTOR_VERSION,
+            ),
+            input_fs_hz=self._sampling_frequency_hz(),
+            low_freq_hz=low_freq,
+            high_freq_hz=high_freq,
+        )
+        if not ok:
+            return False, message
         if float(params["threshold_sigma"]) <= 0.0:
             return False, "HFO threshold sigma must be positive."
         if float(params["min_duration_ms"]) < 1.0:
-            return False, "HFO minimum duration must be at least 1 ms at 1000 Hz processing."
+            return False, "HFO minimum duration must be at least 1 ms."
         if float(params["max_duration_ms"]) < 1.0:
-            return False, "HFO maximum duration must be at least 1 ms at 1000 Hz processing."
+            return False, "HFO maximum duration must be at least 1 ms."
         if float(params["max_duration_ms"]) <= float(params["min_duration_ms"]):
             return False, "HFO maximum duration must be longer than minimum duration."
         if float(params["boundary_padding_s"]) < 0.0:
@@ -2972,19 +3017,6 @@ class ComputationPanel(QWidget):
         )
         if not ok:
             return False, message
-        fs = self._sampling_frequency_hz()
-        if fs < OMNI_TARGET_FS_HZ:
-            return False, (
-                "HFO detection requires recordings sampled at 1000 Hz or higher. "
-                f"The loaded recording is {fs:g} Hz."
-            )
-        detection_nyquist = 0.5 * OMNI_TARGET_FS_HZ
-        low_freq = float(self.hfo_params["low_freq"])
-        if low_freq >= detection_nyquist:
-            return False, (
-                "HFO low frequency must be below the 1000 Hz detection Nyquist "
-                f"({detection_nyquist:g} Hz)."
-            )
         return True, ""
 
     def _run_computation(self) -> None:
