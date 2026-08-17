@@ -19,8 +19,10 @@ from PySide6.QtWidgets import (
     QHeaderView, QTextBrowser, QTabWidget, QTabBar, QSizePolicy
 )
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCursor, QKeySequence, QShortcut, QPixmap, QIcon, QColor
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import (
+    QAction, QCursor, QDesktopServices, QKeySequence, QShortcut, QPixmap, QIcon, QColor
+)
 
 from app.menus import build_menubar
 from app.viewer.plot import MultiChannelViewer
@@ -4289,7 +4291,22 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def on_open_user_guide(self) -> None:
-        self._open_markdown_help_dialog(filename="user_guide.md", title="User Guide")
+        doc_path = Path(__file__).resolve().parent / "docs" / "user_guide.html"
+
+        if not doc_path.exists():
+            QMessageBox.information(
+                self,
+                "User Guide",
+                f"Help file not found:\n{doc_path}",
+            )
+            return
+
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(doc_path))):
+            QMessageBox.critical(
+                self,
+                "User Guide",
+                f"Could not open the user guide in the default browser:\n{doc_path}",
+            )
 
     def on_open_shortcuts(self) -> None:
         self._open_markdown_help_dialog(filename="shortcuts.md", title="Shortcuts")
