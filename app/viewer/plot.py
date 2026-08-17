@@ -2007,8 +2007,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
 
         menu = QtWidgets.QMenu()
         act_open_panel = menu.addAction("Open Computation Panel")
-        act_open_annos = menu.addAction("Open Annotations Panel")
-        act_edit_groups = menu.addAction("Edit Channel Groups...")
         menu.addSeparator()
         act_hide = menu.addAction(f"Hide ({len(selected_names)})")
 
@@ -2018,10 +2016,6 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         chosen = menu.exec_(QtGui.QCursor.pos())
         if chosen == act_open_panel:
             self.requestOpenComputationPanel.emit(selected_abs)
-        elif chosen == act_open_annos:
-            self.requestOpenAnnotationsPanel.emit()
-        elif chosen == act_edit_groups:
-            self.requestEditChannelGroups.emit()
         elif chosen == act_hide:
             self._hide_channels(selected_names)
         elif chosen == act_bad:

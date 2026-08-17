@@ -1,24 +1,27 @@
 # User Guide
 
-## 1. Getting started
+## 1. Getting Started
 
 ### 1.1 Create a New Project
 
-To start a new project, select File > New Project....
+Select **File > New Project...** to create a project.
 
-1. Select the raw EEG/iEEG recording
-2. Choose where to save the `.ieeg` project file
-3. Click Confirm
+1. Select the raw EEG/iEEG recording.
+2. Choose the name and location of the `.ieeg` project file.
+3. Confirm the file-selection dialogs.
 
-The project is linked to the selected raw recording.
+The application opens the recording, links it to the project, and creates the
+initial project file.
 
-Supported recording formats: `.edf` ; `.bdf` ; `.fif` ; `.vhdr` ; `.set` ; `.cnt`
+Supported recording formats are `.edf`, `.bdf`, `.fif`, `.vhdr`, `.set`, and
+`.cnt`.
 
 ### 1.2 Open an Existing Project
 
-To reopen a previously saved project, select File > Open Project... and choose an existing .ieeg project file.
+Select **File > Open Project...** and choose an existing `.ieeg` project file.
 
-The application restores all saved project information (see Section 4.1 – Save).
+The application restores the state stored in the project. If the linked raw
+recording has moved, it asks you to locate the recording before continuing.
 
 ---
 
@@ -28,11 +31,12 @@ The application restores all saved project information (see Section 4.1 – Save
 
 ![Main window with a loaded recording](images/main-viewer.png)
 
-1. Window title and recording summary (file path, selected/total channels, duration, and sampling rates)
-2. Menu bar (see Section 2.2)
-3. Toolbar (see Section 2.3)
+1. Window title and recording summary: file path, selected/total channels,
+   duration, and sampling frequencies
+2. Menu bar (Section 2.2)
+3. Toolbar (Section 2.3)
 4. Current montage/reference indicator
-5. Signal viewer displaying EEG/iEEG traces (see Section 3)
+5. Signal viewer displaying EEG/iEEG traces (Section 3)
 6. Channel labels
 7. Amplitude axis (µV)
 8. Time navigation bar
@@ -41,13 +45,16 @@ The application restores all saved project information (see Section 4.1 – Save
 
 The menu bar provides access to the application's main functions.
 
-- **File**: **Create**, **open**, **save** and **close** projects, or **exit** the application.
-- **View**: Explore the recording more in depth using tools such as **zoom** and **scalogram mode**.
-- **Channels**: Manually organize channel groups (e.g., micro vs. macro). By default, the interface labels every channel as macro.
-- **Preprocessing**: Configure the signal representation by selecting the montage/reference, applying display filters, and inspecting the power spectrum.
-- **Compute**: Run the Recruitment Energy Index (REI), gamma-spike, and high-frequency oscillation (HFO) algorithms from the computation panel (see Section 6).
-- **Review**: Inspect and manage manual annotations
-- **Help**: Open the user guide and the keyboard shortcut summary.
+- **File**: Create, open, save, and close projects, or exit the application.
+- **View**: Use Zoom Selection, Reset Zoom, and Scalogram Mode.
+- **Channels**: Assign channels to the Macro or Micro group. All channels are
+  assigned to Macro by default.
+- **Preprocessing**: Select a montage/reference, configure display filters, and
+  inspect power spectra.
+- **Compute**: Run Recruitment Energy Index (REI), gamma-spike, and
+  high-frequency oscillation (HFO) analyses from the computation panel.
+- **Review**: Create and manage manual annotations.
+- **Help**: Open the HTML user guide or the keyboard and mouse shortcut summary.
 
 
 ### 2.3 Toolbar
@@ -56,32 +63,35 @@ The toolbar provides quick access to the main display settings.
 
 - **Time Range (s)**: number of seconds displayed in the viewer
 - **Channels**: number of channels displayed simultaneously
-- **Amplitude (µV)**: vertical scaling of the displayed signal. This affects only the visualization and does not modify the raw data or computation results.
+- **Amplitude (µV)**: vertical scale of the displayed signal; this affects only
+  visualization and does not modify the raw data or computation results
 
 For these three settings, you can either enter a value directly or choose one from the drop-down menu.
 
 Additional controls include:
 
 - **Theme**: switch between Light and Dark interface themes
-- **Hidden...**: restore hidden channels
+- **Hidden...**: review and restore hidden channels
 - **Bad...**: review and unmark bad channels
-- **Hide all Bad**: hide all channel currently marked as bad
-- **Edit Bipolar...**: edit the bipolar montage when bipolar mode is active
+- **Hide all Bad**: hide all channels currently marked as bad
+- **Edit Bipolar...**: edit the active bipolar montage; this button is visible
+  only in Bipolar mode (Section 5.2)
 
 
 ## 3. Exploring the Recording
+
 ### 3.1 Navigation
+
 #### 3.1.1 Channel Navigation
 
 Move vertically through the channel list by:
 
-- Scrolling the mouse wheel over the signal viewer.
-- Pressing **Up Arrow** or **Down Arrow**.
-- Holding Shift while pressing the arrow keys to move faster.
-- Holding Ctrl while pressing the arrow keys to move much faster.
+- scrolling the mouse wheel over the signal viewer or channel labels
+- pressing **Up Arrow** or **Down Arrow**
+- holding **Shift** while pressing an arrow key to move faster
+- holding **Ctrl** while pressing an arrow key to move much faster
 
-
-#### 3.1.2 Time navigation
+#### 3.1.2 Time Navigation
 
 Use the navigation bar below the signal viewer to move through the recording.
 
@@ -91,8 +101,9 @@ Keyboard shortcuts:
 - **Shift + Left Arrow** and **Shift + Right Arrow** to move faster
 - **Ctrl + Left Arrow** and **Ctrl + Right Arrow** to move much faster
 
+### 3.2 View Menu
 
-### 3.2 Zoom Selection
+#### 3.2.1 Zoom Selection
 
 Use **View > Zoom Selection** to zoom directly into a time and channel region.
 
@@ -100,14 +111,14 @@ Use **View > Zoom Selection** to zoom directly into a time and channel region.
 2. Drag a rectangle over the region you want to inspect
 3. Release the mouse button
 
-The viewer zooms into the selected time range and channel range. Press **Escape** to cancel before applying the zoom.
+The viewer zooms into the selected time and channel ranges. Press **Escape** to
+cancel selection mode before applying a zoom.
 
 Double left-click in the viewer to go back one zoom step.
 
-
 Use **View > Reset Zoom** to return to the view that was active before the zoom sequence started.
 
-### 3.3 Scalogram Mode
+#### 3.2.2 Scalogram Mode
 
 Use **View > Scalogram Mode** to open a time-frequency view from one channel and one selected time interval.
 
@@ -115,7 +126,9 @@ Use **View > Scalogram Mode** to open a time-frequency view from one channel and
 2. Drag horizontally on the channel you want to inspect
 3. Release the mouse button
 
-The scalogram window shows the selected channel context, raw signal, scalogram image, frequency-range slider, and hover readout. Very short selections are ignored.
+The scalogram window shows the selected channel context, raw signal, scalogram
+image, frequency-range slider, and hover readout. Very short selections are
+ignored.
 
 Press **Escape** to cancel scalogram mode before opening a window.
 
@@ -124,45 +137,48 @@ Press **Escape** to cancel scalogram mode before opening a window.
 
 ### 4.1 Micro/Macro Groups
 
-Use **Channels > Channel Groups...** to set channels as macro or micro.
+The application assigns all channels to Macro by default. Use
+**Channels > Channel Groups...** to assign the appropriate channels to Micro.
 
-1. Select one or more channel rows
-2. Click **Set selected to Micro** or **Set selected to Macro**
-3. Click **OK**
+1. Use the search field or sort the table by Channel or Group if needed.
+2. Select one or more channel rows.
+3. Click **Set selected to Micro** or **Set selected to Macro**.
+4. Click **OK** to apply the assignments, or **Cancel** to discard them.
 
 Channel groups control macro/micro styling and group-aware review tools.
 
 ### 4.2 Selecting Channels
 
-To select one channel, left-click the trace or its label.
+To select one channel, left-click its trace or label.
 To select several channels:
 
 - **Ctrl + click** adds or removes one channel
 - **Shift + click** selects a range
 - **Ctrl + Shift + click** adds a range to the current selection
 
-Selected channels are emphasized with a thicker trace. Trace and label colors
-continue to indicate the channel group and current theme; bad channels remain
-red.
+Selected channels use thicker traces. Trace and label colors continue to show
+the channel group and current theme; bad channels remain red.
 
 ### 4.3 Hidden Channels
 
-To hide one or more channels, right-click a selected trace and choose **Hide**..
+To hide one or more channels, select them, right-click a selected trace or
+label, and choose **Hide**.
 
-To restore hidden channels, select **Channels > Hidden Channels...** or click **Hidden...** on the toolbar.
+To restore hidden channels, click **Hidden...** on the toolbar.
 
 Hidden channels disappear from the visible display but are not deleted from the recording.
 
 ### 4.4 Bad Channels
 
-To mark one or more channels as bad, right-click a selected trace and choose **Mark as bad**.
+To mark one or more channels as bad, select them, right-click a selected trace
+or label, and choose **Mark as bad**.
 
 If all selected channels are already marked as bad, the context menu instead offers **Unmark as bad**.
 
-To review or unmark bad channels, select **Channels > Bad Channels...**  or click **Bad...** on the toolbar. From the dialog, you can unmark individual channels or clear all bad-channel markings.
+To review or unmark bad channels, click **Bad...** on the toolbar. From this
+menu, you can unmark individual channels or clear all bad-channel markings.
 
 Bad channels are excluded from review-related computations and from automatic montage generation.
-
 
 ---
 
@@ -175,25 +191,31 @@ Use **Preprocessing > Montage / Reference** to switch reference mode.
 Available options:
 
 - **Monopolar**: shows each channel as imported
-- **Bipolar**: builds an automatic bipolar montage and displays `Channel 1 - Channel 2`
+- **Bipolar**: builds consecutive pairs within each electrode and displays
+  `Channel 1 - Channel 2`
 - **Average**: subtracts the shared average from each channel
 - **Median**: subtracts the shared median from each channel
 - **Common Reference...**: subtracts one chosen physical channel from each displayed channel
 
-Average and Median exclude channels marked as bad and time intervals annotated as "Bad segment".
+Average and Median exclude bad channels from the reference pool and mask
+samples annotated as **Bad segment** while calculating the shared reference.
+Hidden channels remain in the reference pool.
 
-If the raw channel labels already look bipolar, the Bipolar command asks for confirmation before applying another bipolar derivation.
+The automatic bipolar montage skips bad, unrecognized, and non-consecutive
+contacts. If the imported channel labels already look bipolar, the application
+asks for confirmation before applying another bipolar derivation.
 
 ### 5.2 Edit Bipolar Montage
 
-The toolbar **Edit Bipolar...** button becomes available when bipolar mode is active.
+The toolbar **Edit Bipolar...** button is visible and enabled only while a valid
+Bipolar montage is active.
 
 The editor lets you:
 
 - change Channel 2 in automatic pairs
 - add manual pairs
-- sort rows by pair label or origin
-- restore the default automatic montage
+- sort rows by pair name or origin
+- restore the automatic montage with **Back to default**
 - apply edits with **OK** or discard them with **Cancel**
 
 Rules checked by the editor:
@@ -201,15 +223,20 @@ Rules checked by the editor:
 - Channel 1 and Channel 2 cannot be the same
 - duplicate bipolar names are not allowed
 - cross-electrode pairs trigger a warning, but can be kept intentionally
-- bad channels cannot be used as Channel 1 in manual rows
+- bad channels are unavailable when choosing channels for edited pairs
 
 ### 5.3 Display Filters
 
 Use **Preprocessing > Display Filters...** to show or hide the display-filter
 controls above the signal viewer.
 
-Use **Scope** to edit the filter profile for **All**, **Macro**, or **Micro**
-channels. The Macro and Micro profiles can use different settings:
+Use **Scope** to choose which filter profile to edit:
+
+- **All** applies the same settings to Macro and Micro channels.
+- **Macro** changes only the Macro profile.
+- **Micro** changes only the Micro profile.
+
+Each profile contains:
 
 - **High Pass (Hz)**
 - **Low Pass (Hz)**
@@ -217,49 +244,88 @@ channels. The Macro and Micro profiles can use different settings:
 - **Notch: 50 Hz + harmonics**
 - **Notch: 60 Hz + harmonics**
 
-Enter `0` to turn the high-pass or low-pass filter off. Click **Apply filters**
-to apply the displayed values to the selected scope. Click **Back to default**
-to clear the selected scope's filters.
+The high-pass and low-pass controls are numeric and cannot be empty. Enter `0`
+to disable that cutoff. For example, High Pass = `0` means that no high-pass
+filter is applied; Low Pass = `0` means that no low-pass filter is applied.
 
-The high-pass and low-pass values must both remain below the recording's
-Nyquist frequency. When both are enabled, the high-pass value must be lower
-than the low-pass value.
+Click **Apply filters** to save the displayed values to the selected scope.
+Click **Back to default** to clear the selected scope's filters.
+
+Validation rules:
+
+- each active cutoff must be below the recording's Nyquist frequency
+- when both cutoffs are active, the high-pass value must be lower than the
+  low-pass value
 
 Display filters are non-destructive: the original recording is never modified.
-In the main viewer, the reference is applied first, followed by the appropriate
-Macro or Micro display-filter profile. Only the visible time window and extra
-padding are read and filtered, then the padding is cropped before plotting.
+The active reference is applied first, followed by the appropriate Macro or
+Micro filter profile. For responsive browsing of large recordings, the viewer
+reads the visible interval with extra padding, filters it, and then crops the
+padding before plotting.
 
-The PSD applies the active Macro and Micro display-filter profiles to the
-selected PSD interval. Computation algorithms have their own preprocessing
-rules; the high-pass and low-pass display settings do not automatically become
-computation filters, while the selected notch setting is used where stated in
-the relevant computation section.
+The PSD panel applies the same Macro and Micro display-filter profiles to the
+selected PSD interval. Computation algorithms have separate preprocessing
+rules: display high-pass and low-pass values are not automatically reused,
+while the selected notch mode is reused only where stated in the relevant
+computation section.
 
 ### 5.4 Power Spectrum
 
-Use **Preprocessing > Power Spectrum** to inspect power spectral density over a chosen interval.
+Use **Preprocessing > Power Spectrum** to inspect power spectral density (PSD)
+over a chosen recording interval. Enter a start and stop time in the interval
+dialog. The interval must remain inside the recording, and the stop time must
+be later than the start time. The PSD opens as a tab beside the main viewer and
+is calculated from the currently active montage/reference. In Bipolar mode,
+the PSD therefore uses the actual `Channel 1 - Channel 2` signals.
 
-Before opening, the software asks for start and stop times. The interval must stay inside the recording and `stop` must be after `start`.
+#### Macro and Micro panels
 
-The PSD panel contains separate **Macro** and **Micro** panels. Each panel has:
+The PSD tab is divided into independent **Macro** and **Micro** panels. Channel
+membership comes from **Channels > Channel Groups...**. Channels are assigned
+to Macro by default, so the Micro panel remains empty until at least one channel
+is assigned to Micro. If channel-group assignments change while the PSD tab is
+open, the two panels are refreshed automatically.
 
-- excluded channels on the left
-- displayed channels on the right
-- a PSD plot for that channel group at the bottom
+In Bipolar montage, each displayed bipolar pair is placed in the same PSD group
+as its first source channel (Channel 1). This keeps the derived channel in one
+panel even if a manually edited pair crosses Macro and Micro groups.
 
-If no channels have been assigned to Micro, the Micro panel is empty.
+Each group has its own:
 
-PSD behavior:
+- **Excluded channels** list on the left
+- **Displayed channels** list on the right
+- PSD plot at the bottom
+- channel selection, inclusion/exclusion controls, and zoom state
 
-- all channels in each group are displayed by default, including bad channels in red
-- hidden channels are shown in the PSD panel
-- selected channels have highlighted PSD curves and list labels
-- `<<` moves selected channels to Excluded within that group
-- `>>` moves selected channels to Displayed within that group
-- **Exclude all** and **Include all** affect the corresponding group
-- double left-click inside either PSD plot resets that plot's zoom
-- **Mark selected as bad** and **Unmark selected as bad** update bad-channel state
+Macro and Micro channels are processed with their corresponding active display
+filter profiles before the PSD is calculated. The two panels can therefore show
+different filtered spectra for the same interval. PSD values are displayed in
+**dB/Hz** against frequency in **Hz**. The calculation uses Welch-style
+averaging with Hann windows, up to 2,048 samples per segment, and 50% overlap.
+
+#### Displaying and selecting PSD curves
+
+All channels in each group are included in its plot by default. This includes
+channels hidden from the main viewer and channels marked as bad. Excluding a
+channel from a PSD plot only changes the PSD tab; it does not hide the channel
+in the main viewer or change its Macro/Micro assignment.
+
+- Select one or more channels under **Displayed channels**, then click `<<` to
+  move them to **Excluded channels**.
+- Select channels under **Excluded channels**, then click `>>` to return them
+  to **Displayed channels**.
+- **Exclude all** and **Include all** operate only on the corresponding Macro
+  or Micro panel.
+- Click a displayed channel name or its curve to make it the active channel.
+  Its curve and list label are emphasized.
+- Each plot can be zoomed independently. Double left-click inside a plot to
+  restore that plot's full default range.
+
+Bad channels remain visible in red. Use **Mark selected as bad** or
+**Unmark selected as bad** on selected entries in either list to update the
+application-wide bad-channel state. The change is also reflected in the main
+viewer and relevant computations. A selected bad channel is shown with a
+thicker red curve.
 
 ---
 
@@ -457,11 +523,7 @@ uses the selected notch setting for computation.
 
 Sampling requirements depend on the selected HFO classifier route:
 
-- `pyhfo_pybrain` preserves the recording's native sampling and does not impose
-  a fixed 1000 Hz minimum. Its requested upper frequency can be as high as
-  500 Hz. When necessary, the backend reduces the effective upper cutoff to
-  remain just below the native Nyquist frequency. The run is rejected if the
-  selected low frequency is not below that effective cutoff.
+- `pyhfo_pybrain` preserves native EDF sampling, matching the pyBrain GUI route
 - `pyhfo_omni_legacy` rejects recordings below 1000 Hz and resamples higher-rate
   recordings internally to 1000 Hz
 - `eHFO` uses the Omni-compatible route: recordings below 1000 Hz are rejected,
@@ -503,15 +565,13 @@ Available band presets are:
 - **Fast ripples 250-500 Hz**
 - **Custom**
 
-All four presets appear in the selector. For **Custom**, edit the low and high
+All four presets are selectable. For **Custom**, edit the low and high
 frequencies in **Advanced parameters...**. The selected range must remain valid
-for the classifier route and sampling frequency. `pyhfo_pybrain` accepts a
-requested upper frequency of 500 Hz and records the effective native-sampling
-cutoff used by the backend. The Omni-compatible routes retain their 1000 Hz
-input requirement and 300 Hz effective detector ceiling, so the 250-500 Hz
-Fast ripples preset is not compatible with those routes. The validation results
-below describe each route's stated reference configuration; choosing another
-band does not make it an independently validated classifier configuration.
+for the route and sampling frequency; the Omni-compatible 1000 Hz processing
+path requires the high frequency to stay below its effective Nyquist limit. The
+validation results below describe each route's stated reference configuration;
+choosing another band does not make it an independently validated classifier
+configuration.
 
 Boundary handling:
 

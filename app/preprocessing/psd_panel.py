@@ -127,8 +127,8 @@ class PSDPanel(QWidget):
         self._mark_bad_callback = mark_bad_callback
         self._mark_good_callback = mark_good_callback
 
-        self._raw = None
-        self._picks = np.asarray([], dtype=int)
+        self._data = np.empty((0, 0), dtype=float)
+        self._sfreq = 0.0
         self._display_names: list[str] = []
         self._bad_names: set[str] = set()
         self._filter_profiles = FilterProfiles()
@@ -259,8 +259,8 @@ class PSDPanel(QWidget):
     def set_psd_context(
         self,
         *,
-        raw,
-        picks,
+        data,
+        sfreq: float,
         display_names,
         bad_names,
         start_s: float,
@@ -269,9 +269,17 @@ class PSDPanel(QWidget):
         micro_names=None,
         filter_profiles=None,
     ) -> None:
-        self._raw = raw
-        self._picks = np.asarray([] if picks is None else picks, dtype=int)
         self._display_names = list(display_names or [])
+        matrix = np.asarray(data, dtype=float)
+        if matrix.ndim != 2:
+            raise ValueError("PSD data must be a 2D channel x sample array.")
+        if matrix.shape[0] != len(self._display_names):
+            raise ValueError("PSD data rows must match the displayed channel names.")
+        if float(sfreq) <= 0.0:
+            raise ValueError("PSD sampling frequency must be positive.")
+
+        self._data = matrix
+        self._sfreq = float(sfreq)
         self._bad_names = set(bad_names or [])
         self._filter_profiles = filter_profiles or FilterProfiles()
         self._start_s = float(start_s)
@@ -471,17 +479,11 @@ class PSDPanel(QWidget):
     def _rebuild_psd_cache(self) -> None:
         self._psd_cache.clear()
 
-        if self._raw is None or self._picks.size == 0:
+        if self._data.ndim != 2 or self._data.shape[0] == 0:
             return
 
-        sfreq = float(self._raw.info["sfreq"])
-        start_idx = max(0, int(round(self._start_s * sfreq)))
-        stop_idx = min(int(self._raw.n_times), int(round(self._stop_s * sfreq)))
-
-        if stop_idx <= start_idx:
-            return
-
-        data = self._raw.get_data(picks=self._picks, start=start_idx, stop=stop_idx)
+        sfreq = float(self._sfreq)
+        data = np.asarray(self._data, dtype=float)
         data = self._apply_display_filters_to_psd_data(data, sfreq)
 
         for i, ch_name in enumerate(self._display_names):

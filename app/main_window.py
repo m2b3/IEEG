@@ -530,6 +530,7 @@ class MainWindow(QMainWindow):
         self.viewer.cursorMoved.connect(self._on_viewer_cursor_moved)
 
         self.viewer.annotationsChanged.connect(self._refresh_annotation_list)
+        self.viewer.annotationsChanged.connect(self._refresh_psd_panel_context)
         self.viewer.annotationsChanged.connect(self._mark_project_dirty)
         self.viewer.hiddenChannelsChanged.connect(self._mark_project_dirty)
         self.viewer.badChannelsChanged.connect(self._on_bad_channels_changed)
@@ -653,7 +654,7 @@ class MainWindow(QMainWindow):
         self._act_saveas.setEnabled(False)
         self._act_close.setEnabled(False)
 
-        self.btn_edit_bipolar.setEnabled(False)
+        self._sync_edit_bipolar_button()
         self.montage_label.setText("Montage: Monopolar")
         self._update_window_title()
 
@@ -741,6 +742,7 @@ class MainWindow(QMainWindow):
         self.btn_edit_bipolar = QToolButton()
         self.btn_edit_bipolar.setText("Edit Bipolar...")
         self.btn_edit_bipolar.setEnabled(False)
+        self.btn_edit_bipolar.setVisible(False)
         self.btn_edit_bipolar.clicked.connect(self.on_edit_bipolar_pairs)
         tb.addWidget(self.btn_edit_bipolar)
 
@@ -1453,10 +1455,10 @@ class MainWindow(QMainWindow):
             self._restore_reference_state(reference_state)
         elif self._saved_bipolar_montage is not None:
             self.viewer.set_bipolar_mode(self._saved_bipolar_montage)
-            self.btn_edit_bipolar.setEnabled(True)
+            self._sync_edit_bipolar_button()
         else:
             self.viewer.set_monopolar_mode()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
         self._refresh_display_name_dependent_ui()
         self._update_montage_label()
         self._restoring_project = True
@@ -1742,6 +1744,7 @@ class MainWindow(QMainWindow):
 
     def _enable_loaded_ui(self) -> None:
         self.tb.setEnabled(True)
+        self._sync_edit_bipolar_button()
         self.timeline.show()
         self.event_timeline.set_duration(self._current_recording_duration_s())
         self._refresh_event_timeline()
@@ -1862,6 +1865,16 @@ class MainWindow(QMainWindow):
     def _update_montage_label(self) -> None:
         self.montage_label.setText(f"Montage: {self._current_montage_for_ei()}")
 
+    def _sync_edit_bipolar_button(self) -> None:
+        is_bipolar = (
+            self.current_raw is not None
+            and self.viewer.reference_mode() == "bipolar"
+        )
+        montage = self.viewer.get_bipolar_montage() if is_bipolar else None
+        can_edit = bool(montage is not None and montage.pairs)
+        self.btn_edit_bipolar.setVisible(is_bipolar)
+        self.btn_edit_bipolar.setEnabled(can_edit)
+
     def _current_montage_for_ei(self) -> str:
         mode = self.viewer.reference_mode()
 
@@ -1900,7 +1913,7 @@ class MainWindow(QMainWindow):
         with busy_cursor(self, "Switching to bipolar reference..."):
             self.viewer.set_bipolar_mode(montage)
             self._refresh_display_name_dependent_ui()
-            self.btn_edit_bipolar.setEnabled(True)
+            self._sync_edit_bipolar_button()
             self._update_montage_label()
             self._mark_project_dirty()
             self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
@@ -1919,28 +1932,28 @@ class MainWindow(QMainWindow):
 
         if mode == "average":
             self.viewer.set_average_mode()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
         elif mode == "median":
             self.viewer.set_median_mode()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
         elif mode == "common":
             ref_name = ref_state.get("common_ref_name")
             if ref_name:
                 self.viewer.set_common_reference_mode(ref_name)
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
         elif mode == "bipolar":
             montage = ref_state.get("bipolar_montage")
             if isinstance(montage, dict):
                 montage = self._restore_bipolar_montage_from_dict(montage)
             if montage is not None:
                 self.viewer.set_bipolar_mode(montage)
-                self.btn_edit_bipolar.setEnabled(True)
+                self._sync_edit_bipolar_button()
             else:
                 self.viewer.set_monopolar_mode()
-                self.btn_edit_bipolar.setEnabled(False)
+                self._sync_edit_bipolar_button()
         else:
             self.viewer.set_monopolar_mode()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
 
         self._update_montage_label()
    
@@ -1952,13 +1965,17 @@ class MainWindow(QMainWindow):
         if not self._is_psd_tab_open():
             return
 
-        display_names = self.viewer.get_channel_names()
-        macro_names, micro_names = self._split_display_channels_for_psd(display_names)
-
         start_s, stop_s = self._psd_interval
+        try:
+            data, sfreq, display_names = self._get_psd_interval_data(start_s, stop_s)
+        except Exception as exc:
+            self.console.log(f"Could not refresh PSD data: {exc}")
+            return
+
+        macro_names, micro_names = self._split_display_channels_for_psd(display_names)
         self.psd_panel.set_psd_context(
-            raw=self.current_raw,
-            picks=self.current_picks,
+            data=data,
+            sfreq=sfreq,
             display_names=display_names,
             bad_names=self.viewer.get_bad_channels(),
             start_s=float(start_s),
@@ -2581,6 +2598,112 @@ class MainWindow(QMainWindow):
 
         return macro_names, micro_names
 
+    def _get_psd_interval_data(
+        self,
+        start_s: float,
+        stop_s: float,
+    ) -> tuple[np.ndarray, float, list[str]]:
+        """Return active-montage data in volts for the selected PSD interval."""
+        raw = self.source_raw if self.source_raw is not None else self.current_raw
+        if raw is None or self.current_picks is None:
+            raise RuntimeError("Load a dataset before opening the PSD panel.")
+
+        sfreq = float(raw.info["sfreq"])
+        t0 = float(min(start_s, stop_s))
+        t1 = float(max(start_s, stop_s))
+        if t1 <= t0:
+            raise RuntimeError("PSD end time must be after start time.")
+
+        start_sample = max(0, min(int(np.floor(t0 * sfreq)), int(raw.n_times) - 1))
+        stop_sample = max(
+            start_sample + 1,
+            min(int(np.ceil(t1 * sfreq)), int(raw.n_times)),
+        )
+        times = np.asarray(raw.times[start_sample:stop_sample], dtype=float)
+
+        picks = np.asarray(self.current_picks, dtype=int)
+        raw_channel_names = list(map(str, self.viewer.get_raw_channel_names()))
+        if len(raw_channel_names) != len(picks):
+            raise RuntimeError("PSD channel names do not match the loaded channel picks.")
+        row_by_name = {
+            channel_name: index
+            for index, channel_name in enumerate(raw_channel_names)
+        }
+        source_data = np.asarray(
+            raw.get_data(
+                picks=picks,
+                start=start_sample,
+                stop=stop_sample,
+            ),
+            dtype=float,
+        )
+
+        def read(channel_names: list[str]) -> np.ndarray:
+            try:
+                rows = [row_by_name[str(name)] for name in channel_names]
+            except KeyError as exc:
+                raise RuntimeError(f"PSD source channel is unavailable: {exc.args[0]}") from exc
+            return np.asarray(source_data[np.asarray(rows, dtype=int), :], dtype=float)
+
+        mode = str(self.viewer.reference_mode())
+        display_names = list(map(str, self.viewer.get_channel_names()))
+
+        if mode == "bipolar":
+            montage = self.viewer.get_bipolar_montage()
+            pair_by_name = {
+                str(pair.name): pair
+                for pair in getattr(montage, "pairs", [])
+            }
+            rows: list[np.ndarray] = []
+            names: list[str] = []
+            for display_name in display_names:
+                pair = pair_by_name.get(display_name)
+                if pair is None:
+                    raise RuntimeError(f"Bipolar PSD pair is unavailable: {display_name}")
+                pair_data = read([str(pair.ch1), str(pair.ch2)])
+                rows.append(np.asarray(pair_data[0] - pair_data[1], dtype=float))
+                names.append(display_name)
+            if not rows:
+                raise RuntimeError("No bipolar pairs are available for PSD calculation.")
+            return np.vstack(rows), sfreq, names
+
+        data = read(display_names)
+        reference: np.ndarray | None = None
+        bad_names = set(map(str, self.viewer.get_bad_channels()))
+
+        if mode in {"average", "median"}:
+            reference_positions = [
+                index
+                for index, channel_name in enumerate(raw_channel_names)
+                if channel_name not in bad_names
+            ]
+            if not reference_positions:
+                raise RuntimeError("No non-bad channels are available for PSD rereferencing.")
+            reference_names = [raw_channel_names[index] for index in reference_positions]
+            reference_data = read(reference_names)
+            bad_segment_mask = self.viewer._build_bad_segment_mask_for_abs(
+                reference_positions,
+                times,
+            )
+            if bad_segment_mask.shape == reference_data.shape:
+                reference_data = reference_data.copy()
+                reference_data[bad_segment_mask] = np.nan
+            reference = (
+                np.nanmean(reference_data, axis=0)
+                if mode == "average"
+                else np.nanmedian(reference_data, axis=0)
+            )
+            reference = np.where(np.isnan(reference), 0.0, reference)
+        elif mode == "common":
+            reference_name = self.viewer.common_reference_name()
+            if not reference_name:
+                raise RuntimeError("No common-reference channel is selected.")
+            reference = read([str(reference_name)])[0]
+
+        if reference is not None:
+            data = data - reference[np.newaxis, :]
+        return np.asarray(data, dtype=float), sfreq, display_names
+
     def _capture_viewer_state(self) -> dict:
         return {
             "t0": float(self.viewer.time_start()),
@@ -2956,7 +3079,7 @@ class MainWindow(QMainWindow):
             perf_start = time.perf_counter()
             self.viewer.set_monopolar_mode()
             self._refresh_display_name_dependent_ui()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
             self._update_montage_label()
             self.console.log("Reference mode: Monopolar")
             timed_mark(
@@ -2978,7 +3101,7 @@ class MainWindow(QMainWindow):
             perf_start = time.perf_counter()
             self.viewer.set_average_mode()
             self._refresh_display_name_dependent_ui()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
             self._mark_project_dirty()
             self._update_montage_label()
             self.console.log("Reference mode: Average")
@@ -3001,7 +3124,7 @@ class MainWindow(QMainWindow):
             perf_start = time.perf_counter()
             self.viewer.set_median_mode()
             self._refresh_display_name_dependent_ui()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
             self._mark_project_dirty()
             self._update_montage_label()
             self.console.log("Reference mode: Median")
@@ -3068,7 +3191,7 @@ class MainWindow(QMainWindow):
             if montage.pairs:
                 self.viewer.set_bipolar_mode(montage)
                 self._refresh_display_name_dependent_ui()
-                self.btn_edit_bipolar.setEnabled(True)
+                self._sync_edit_bipolar_button()
                 self._update_montage_label()
                 self.console.log(f"Reference mode: Bipolar ({len(montage.pairs)} pairs)")
                 timed_mark(
@@ -3549,7 +3672,7 @@ class MainWindow(QMainWindow):
 
             self.viewer.set_bipolar_mode(new_montage)
             self._refresh_display_name_dependent_ui()
-            self.btn_edit_bipolar.setEnabled(bool(new_montage.pairs))
+            self._sync_edit_bipolar_button()
             self._mark_project_dirty()
             self._update_montage_label()
             self.console.log("Bipolar pairs updated.")
@@ -3597,7 +3720,7 @@ class MainWindow(QMainWindow):
             perf_start = time.perf_counter()
             self.viewer.set_common_reference_mode(ref_name)
             self._refresh_display_name_dependent_ui()
-            self.btn_edit_bipolar.setEnabled(False)
+            self._sync_edit_bipolar_button()
             self._mark_project_dirty()
             self._update_montage_label()
             self.console.log(f"Reference mode: Common ({ref_name})")
@@ -3939,13 +4062,18 @@ class MainWindow(QMainWindow):
         start_s, stop_s = dlg.values()
         self._psd_interval = (float(start_s), float(stop_s))
 
-        display_names = list(self.viewer.get_channel_names())
         bad_names = list(getattr(self.viewer, "_bad_channels", set()))
+        try:
+            data, sfreq, display_names = self._get_psd_interval_data(start_s, stop_s)
+        except Exception as exc:
+            QMessageBox.warning(self, "PSD", str(exc))
+            return
+
         macro_names, micro_names = self._split_display_channels_for_psd(display_names)
 
         self.psd_panel.set_psd_context(
-            raw=self.current_raw,
-            picks=self.current_picks,
+            data=data,
+            sfreq=sfreq,
             display_names=display_names,
             bad_names=bad_names,
             start_s=float(start_s),
@@ -3975,7 +4103,7 @@ class MainWindow(QMainWindow):
 
         # Always keep PSD state in sync if the tab is open, even when it is not current.
         if self._is_psd_tab_open():
-            self.psd_panel.update_bad_names(self.viewer.get_bad_channels())
+            self._refresh_psd_panel_context()
 
         if self.current_raw is not None:
             self._sync_comp_panel_context()
