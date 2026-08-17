@@ -61,7 +61,6 @@ from app.computation.importers import ImportedComputationResult, import_computat
 from app.expert_event_grid import ExpertEvent, ExpertEventGrid
 from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
-from app.ui_busy import busy_cursor
 
 DEFAULT_HFO_BAND_PRESET = "Default"
 RIPPLE_HFO_BAND_PRESET = "Ripples"
@@ -291,6 +290,47 @@ class GammaReviewRow(TypedDict):
     error: str | None
 
 
+class _REICancelled(RuntimeError):
+    """Raised when the user cancels an active REI computation."""
+
+
+class _REIWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object, float)
+    failed = Signal(str, float)
+    cancelled = Signal(float)
+
+    def __init__(
+        self,
+        compute_callback: Callable[[Callable[[str], None]], EIComputationResult],
+    ) -> None:
+        super().__init__()
+        self._compute_callback = compute_callback
+        self._cancel_requested = False
+
+    @Slot()
+    def run(self) -> None:
+        perf_start = time.perf_counter()
+        try:
+            result = self._compute_callback(self._report_progress)
+        except _REICancelled:
+            self.cancelled.emit(time.perf_counter() - perf_start)
+        except Exception as exc:
+            self.failed.emit(str(exc), time.perf_counter() - perf_start)
+        else:
+            self.finished.emit(result, time.perf_counter() - perf_start)
+
+    def request_cancel(self) -> None:
+        self._cancel_requested = True
+
+    def _report_progress(self, message: str) -> None:
+        if self._cancel_requested:
+            raise _REICancelled()
+        self.progress.emit(str(message))
+        if self._cancel_requested:
+            raise _REICancelled()
+
+
 class _GammaSpikeWorker(QObject):
     progress = Signal(str)
     finished = Signal(object, float)
@@ -504,6 +544,10 @@ class ComputationPanel(QWidget):
         self._pending_hfo_event_selection: tuple[str, float] | None = None
         self._pending_gamma_review_selection: tuple[str, float] | None = None
         self._last_export_dir: Path | None = None
+        self._ei_thread: QThread | None = None
+        self._ei_worker: _REIWorker | None = None
+        self._ei_perf_start: float | None = None
+        self._ei_cancel_requested = False
         self._gamma_cancel_requested = False
         self._gamma_thread: QThread | None = None
         self._gamma_worker: _GammaSpikeWorker | None = None
@@ -982,6 +1026,11 @@ class ComputationPanel(QWidget):
         self.btn_run = QPushButton("Run REI")
         p_layout.addWidget(self.btn_run)
 
+        self.btn_cancel_ei = QPushButton("Cancel REI run")
+        self.btn_cancel_ei.setEnabled(False)
+        self.btn_cancel_ei.hide()
+        p_layout.addWidget(self.btn_cancel_ei)
+
         self.btn_cancel_gamma = QPushButton("Cancel gamma run")
         self.btn_cancel_gamma.setEnabled(False)
         self.btn_cancel_gamma.hide()
@@ -1085,6 +1134,7 @@ class ComputationPanel(QWidget):
         ):
             spin.valueChanged.connect(self._sync_ei_windows_from_ui)
         self.btn_run.clicked.connect(self._run_computation)
+        self.btn_cancel_ei.clicked.connect(self._cancel_ei_run)
         self.btn_cancel_gamma.clicked.connect(self._cancel_gamma_run)
         self.btn_cancel_hfo.clicked.connect(self._cancel_hfo_run)
         self.btn_import_results.clicked.connect(self._import_algorithm_results)
@@ -2493,6 +2543,7 @@ class ComputationPanel(QWidget):
         self.btn_open_hfo_summary.setVisible(is_hfo)
         self.btn_open_hfo_event_grid.setVisible(is_hfo)
         self.btn_export_hfo.setVisible(is_hfo)
+        self.btn_cancel_ei.setVisible(is_ei and self._ei_thread is not None)
         self.btn_cancel_gamma.setVisible(is_gamma and self._gamma_thread is not None)
         self.btn_cancel_hfo.setVisible(is_hfo and self._hfo_thread is not None)
         self.btn_open_ei_summary.setEnabled(self._last_ei_result is not None)
@@ -3024,6 +3075,13 @@ class ComputationPanel(QWidget):
             self._clear_status_message()
             self._gamma_completion_status_active = False
         if self.state.algorithm == "ei":
+            if self._ei_thread is not None:
+                QMessageBox.information(
+                    self,
+                    "REI computation",
+                    "An REI computation is already in progress.",
+                )
+                return
             ok, message = self._validate_ei_inputs()
             if not ok:
                 QMessageBox.warning(self, "REI computation", message)
@@ -3032,54 +3090,14 @@ class ComputationPanel(QWidget):
                 return
             if not self._confirm_ei_notch_before_run():
                 return
-            error_message: str | None = None
-            with busy_cursor(self, "Running REI computation..."):
-                perf_start = time.perf_counter()
-                try:
-                    result = self._compute_ei_result()
-                except Exception as exc:
-                    timed_mark("after_REI", perf_start, raw=self._raw, notes=f"error: {exc}")
-                    error_message = str(exc)
-                else:
-                    self._show_ei_result(result)
-                    self.ei_result_metadata = result.metadata
-                    metadata = result.metadata if isinstance(result.metadata, dict) else {}
-                    baseline_window = metadata.get("baseline_window_s", "")
-                    ictal_window = metadata.get("ictal_window_s", "")
-                    channel_results = (
-                        list(result.channels)
-                        if result.channels is not None
-                        else []
-                    )
-                    visible_window_s = None
-                    if isinstance(ictal_window, list) and len(ictal_window) >= 2:
-                        visible_window_s = float(ictal_window[1]) - float(ictal_window[0])
-                    timed_mark(
-                        "after_REI",
-                        perf_start,
-                        raw=self._raw,
-                        visible_window_s=visible_window_s,
-                        notes=(
-                            f"channels={len(channel_results)}; "
-                            f"baseline={baseline_window}; ictal={ictal_window}"
-                        ),
-                    )
-                    elapsed_s = max(0.0, time.perf_counter() - perf_start)
-                    top_channel = self._top_rei_channel(result)
-                    top_text = (
-                        f" Top channel: {top_channel.channel} "
-                        f"(REI {float(top_channel.ei):.3f})."
-                        if top_channel is not None
-                        else ""
-                    )
-                    self._show_status_message(
-                        "REI analysis finished. "
-                        f"Channels: {len(channel_results)}.{top_text} "
-                        f"Runtime: {self._format_duration(elapsed_s)}.",
-                        timeout_ms=0,
-                    )
-            if error_message is not None:
-                QMessageBox.warning(self, "REI computation", error_message)
+            perf_start = time.perf_counter()
+            try:
+                compute_callback = self._build_ei_compute_callback()
+            except Exception as exc:
+                timed_mark("after_REI", perf_start, raw=self._raw, notes=f"setup error: {exc}")
+                QMessageBox.warning(self, "REI computation", str(exc))
+                return
+            self._start_ei_worker(compute_callback, perf_start)
             return
 
         if self.state.algorithm == "gamma_spike":
@@ -3181,7 +3199,12 @@ class ComputationPanel(QWidget):
         )
 
     def _compute_ei_result(self) -> EIComputationResult:
-        if self._ei_data_callback is None:
+        return self._build_ei_compute_callback()(lambda _message: None)
+
+    def _build_ei_compute_callback(
+        self,
+    ) -> Callable[[Callable[[str], None]], EIComputationResult]:
+        if self._ei_data_callback is None and self._ei_data_snapshot_callback is None:
             raise RuntimeError("REI data extraction is not available.")
 
         (
@@ -3196,46 +3219,76 @@ class ComputationPanel(QWidget):
 
         data_start_s = min(baseline_start, ictal_start)
         data_stop_s = max(baseline_end, ictal_end)
-        data, fs, channel_names = self._ei_data_callback(
-            list(self.state.selected_abs),
-            data_start_s,
-            data_stop_s,
-        )
-
-        bad_channels = {
-            str(name)
-            for name in self._bad_channel_names()
-            if str(name) in set(map(str, channel_names))
-        }
-        notch_modes_by_channel = self._ei_notch_modes_for_channels(channel_names)
-
-        result = compute_ei_for_gui(
-            data=data,
-            fs=float(fs),
-            channel_names=list(channel_names),
-            data_start_s=data_start_s,
+        selected_abs = list(self.state.selected_abs)
+        selected_names = [
+            str(self._ch_names_displayed[int(idx)])
+            for idx in selected_abs
+            if 0 <= int(idx) < len(self._ch_names_displayed)
+        ]
+        channel_groups = dict(self._channel_groups)
+        bad_channel_names = set(self._bad_channel_names())
+        notch_modes_by_selected_channel = self._ei_notch_modes_for_channels(selected_names)
+        low_freq = float(self.ei_params["low_freq"])
+        high_freq = float(self.ei_params["high_freq"])
+        source_file_path = self._source_file_path
+        metadata = self._build_ei_metadata(
+            self._current_montage_name(),
             seizure_onset_s=seizure_onset,
             seizure_offset_s=seizure_offset,
             baseline_window_s=(baseline_start, baseline_end),
             ictal_window_s=(ictal_start, ictal_end),
-            channel_groups=self._channel_groups,
-            bad_channels=bad_channels,
-            notch_modes_by_channel=notch_modes_by_channel,
-            low_freq=float(self.ei_params["low_freq"]),
-            high_freq=float(self.ei_params["high_freq"]),
-            metadata=self._build_ei_metadata(
-                self._current_montage_name(),
+            notch_modes_by_channel=notch_modes_by_selected_channel,
+        )
+
+        if self._ei_data_snapshot_callback is not None:
+            data_callback = self._ei_data_snapshot_callback()
+        elif self._ei_data_callback is not None:
+            data_callback = self._ei_data_callback
+        else:
+            raise RuntimeError("REI data extraction is not available.")
+
+        def compute(progress_callback: Callable[[str], None]) -> EIComputationResult:
+            progress_callback("Loading REI data...")
+            data, fs, channel_names = data_callback(
+                selected_abs,
+                data_start_s,
+                data_stop_s,
+            )
+            progress_callback("Preparing REI channels...")
+            channel_names = list(channel_names)
+            channel_name_set = set(map(str, channel_names))
+            bad_channels = {
+                str(name)
+                for name in bad_channel_names
+                if str(name) in channel_name_set
+            }
+            notch_modes_by_channel = {
+                str(name): str(notch_modes_by_selected_channel.get(str(name), NOTCH_OFF))
+                for name in channel_names
+            }
+            result = compute_ei_for_gui(
+                data=data,
+                fs=float(fs),
+                channel_names=channel_names,
+                data_start_s=data_start_s,
                 seizure_onset_s=seizure_onset,
                 seizure_offset_s=seizure_offset,
                 baseline_window_s=(baseline_start, baseline_end),
                 ictal_window_s=(ictal_start, ictal_end),
+                channel_groups=channel_groups,
+                bad_channels=bad_channels,
                 notch_modes_by_channel=notch_modes_by_channel,
-            ),
-        )
-        if self._source_file_path is not None:
-            result.metadata["source_file_name"] = self._source_file_path.name
-            result.metadata["source_file_path"] = str(self._source_file_path)
-        return result
+                low_freq=low_freq,
+                high_freq=high_freq,
+                metadata=dict(metadata),
+                progress_callback=progress_callback,
+            )
+            if source_file_path is not None:
+                result.metadata["source_file_name"] = source_file_path.name
+                result.metadata["source_file_path"] = str(source_file_path)
+            return result
+
+        return compute
 
     def _compute_hfo_result(self) -> HFOComputationResult:
         start_s, stop_s = self._read_hfo_window_from_ui()
@@ -3497,6 +3550,138 @@ class ComputationPanel(QWidget):
         stop_s: float,
     ) -> GammaSpikeComputationResult:
         return self._build_gamma_spike_compute_callback(start_s, stop_s)(lambda _msg: None)
+
+    def _start_ei_worker(
+        self,
+        compute_callback: Callable[[Callable[[str], None]], EIComputationResult],
+        perf_start: float,
+    ) -> None:
+        thread = QThread(self)
+        worker = _REIWorker(compute_callback)
+        worker.moveToThread(thread)
+
+        self._ei_thread = thread
+        self._ei_worker = worker
+        self._ei_perf_start = perf_start
+        self._ei_cancel_requested = False
+
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_ei_worker_progress)
+        worker.finished.connect(self._on_ei_worker_finished)
+        worker.failed.connect(self._on_ei_worker_failed)
+        worker.cancelled.connect(self._on_ei_worker_cancelled)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        worker.cancelled.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_ei_worker_refs)
+
+        self.btn_run.setEnabled(False)
+        self.btn_cancel_ei.setVisible(True)
+        self.btn_cancel_ei.setEnabled(True)
+        self._show_status_message("REI analysis started...", timeout_ms=0)
+        thread.start()
+
+    def _cancel_ei_run(self) -> None:
+        self._ei_cancel_requested = True
+        if self._ei_worker is not None:
+            self._ei_worker.request_cancel()
+        self.btn_cancel_ei.setEnabled(False)
+        self._show_status_message(
+            "Cancelling REI analysis... The current processing step may need to finish first.",
+            timeout_ms=0,
+        )
+
+    @Slot(str)
+    def _on_ei_worker_progress(self, message: str) -> None:
+        start = self._ei_perf_start if self._ei_perf_start is not None else time.perf_counter()
+        elapsed_s = max(0.0, time.perf_counter() - start)
+        self._show_status_message(
+            f"REI analysis processing. {message} "
+            f"(time so far: {self._format_duration(elapsed_s)})",
+            timeout_ms=0,
+        )
+
+    @Slot(object, float)
+    def _on_ei_worker_finished(self, result: object, elapsed_s: float) -> None:
+        if not isinstance(result, EIComputationResult):
+            self._on_ei_worker_failed(
+                "REI computation returned an unexpected result.",
+                elapsed_s,
+            )
+            return
+
+        self._show_ei_result(result)
+        self.ei_result_metadata = result.metadata
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        baseline_window = metadata.get("baseline_window_s", "")
+        ictal_window = metadata.get("ictal_window_s", "")
+        channel_results = list(result.channels) if result.channels is not None else []
+        visible_window_s = None
+        if isinstance(ictal_window, list) and len(ictal_window) >= 2:
+            visible_window_s = float(ictal_window[1]) - float(ictal_window[0])
+        perf_start = self._ei_perf_start if self._ei_perf_start is not None else time.perf_counter()
+        timed_mark(
+            "after_REI",
+            perf_start,
+            raw=self._raw,
+            visible_window_s=visible_window_s,
+            notes=(
+                f"channels={len(channel_results)}; "
+                f"baseline={baseline_window}; ictal={ictal_window}"
+            ),
+        )
+        top_channel = self._top_rei_channel(result)
+        top_text = (
+            f" Top channel: {top_channel.channel} "
+            f"(REI {float(top_channel.ei):.3f})."
+            if top_channel is not None
+            else ""
+        )
+        self._show_status_message(
+            "REI analysis finished. "
+            f"Channels: {len(channel_results)}.{top_text} "
+            f"Runtime: {self._format_duration(elapsed_s)}.",
+            timeout_ms=0,
+        )
+        self._finish_ei_worker_ui()
+
+    @Slot(str, float)
+    def _on_ei_worker_failed(self, error_message: str, elapsed_s: float) -> None:
+        perf_start = self._ei_perf_start if self._ei_perf_start is not None else time.perf_counter()
+        timed_mark("after_REI", perf_start, raw=self._raw, notes=f"error: {error_message}")
+        self._show_status_message(
+            f"REI analysis failed after {self._format_duration(elapsed_s)}.",
+            timeout_ms=0,
+        )
+        self._finish_ei_worker_ui()
+        QMessageBox.warning(self, "REI computation", str(error_message))
+
+    @Slot(float)
+    def _on_ei_worker_cancelled(self, elapsed_s: float) -> None:
+        perf_start = self._ei_perf_start if self._ei_perf_start is not None else time.perf_counter()
+        timed_mark("after_REI", perf_start, raw=self._raw, notes="cancelled")
+        self._show_status_message(
+            f"REI analysis cancelled after {self._format_duration(elapsed_s)}.",
+            timeout_ms=0,
+        )
+        self._finish_ei_worker_ui()
+
+    def _finish_ei_worker_ui(self) -> None:
+        self.btn_run.setEnabled(True)
+        self.btn_cancel_ei.setEnabled(False)
+        self.btn_cancel_ei.hide()
+        self._ei_cancel_requested = False
+
+    @Slot()
+    def _clear_ei_worker_refs(self) -> None:
+        self._ei_thread = None
+        self._ei_worker = None
+        self._ei_perf_start = None
+        self._ei_cancel_requested = False
 
     def _start_gamma_worker(
         self,

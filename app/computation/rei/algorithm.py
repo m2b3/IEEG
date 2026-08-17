@@ -44,7 +44,7 @@ import argparse
 import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 import numpy as np
 from numpy.typing import NDArray
 from scipy.signal import convolve2d
@@ -334,8 +334,6 @@ def validate_gui_ei_timing(
 
     if seizure_offset_s <= seizure_onset_s:
         raise ValueError("Seizure offset must be after seizure onset.")
-    if seizure_offset_s - seizure_onset_s <= 20.0:
-        raise ValueError("Seizure duration must be more than 20 seconds for REI.")
     if baseline_end_s <= baseline_start_s:
         raise ValueError("Baseline end must be after baseline start.")
     if ictal_end_s <= ictal_start_s:
@@ -374,6 +372,7 @@ def compute_ei_for_gui(
     low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
     high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
     metadata: dict | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> EIComputationResult:
     """
     GUI-facing REI computation.
@@ -395,6 +394,11 @@ def compute_ei_for_gui(
     baseline_window_s / ictal_window_s
         Absolute recording-time windows in seconds.
     """
+    def report_progress(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(str(message))
+
+    report_progress("Validating REI inputs...")
     data = np.asarray(data, dtype=float)
     if data.ndim != 2:
         raise ValueError("REI data must be a 2D channels x time array.")
@@ -438,8 +442,10 @@ def compute_ei_for_gui(
         str(notch_modes_by_channel.get(name, NOTCH_OFF))
         for name in kept_names
     ]
+    report_progress("Applying REI notch filtering...")
     kept_data = apply_notch_by_channel(kept_data, float(fs), kept_notch_modes)
 
+    report_progress("Computing REI high-frequency energy...")
     ei, channel_onset_samples, target_hfer = compute_ei_from_windows(
         data=kept_data,
         fs=float(fs),
@@ -449,6 +455,7 @@ def compute_ei_for_gui(
         high_freq=float(high_freq),
     )
 
+    report_progress("Preparing REI results...")
     ranks = np.asarray(np.asarray(ei).argsort()[::-1].argsort() + 1, dtype=int)
     groups = channel_groups or {}
     onset_time_shift_s = float(ictal_start_s) - float(seizure_onset_s)
@@ -500,13 +507,15 @@ def compute_ei_for_gui(
     result_metadata.setdefault("energy_window_sec", 0.5)
     result_metadata.setdefault("hfer_window_sec", 0.25)
 
-    return EIComputationResult(
+    result = EIComputationResult(
         channels=rows,
         heatmap=np.asarray(target_hfer, dtype=float),
         heatmap_times=heatmap_times,
         heatmap_channels=kept_names,
         metadata=result_metadata,
     )
+    report_progress("Finalizing REI results...")
+    return result
 
 
 # -------------------------

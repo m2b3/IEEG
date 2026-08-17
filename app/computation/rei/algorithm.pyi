@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -88,4 +88,5 @@ def compute_ei_for_gui(
     low_freq: float = DEFAULT_REI_LOW_FREQ_HZ,
     high_freq: float = DEFAULT_REI_HIGH_FREQ_HZ,
     metadata: dict[str, Any] | None = None,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> EIComputationResult: ...

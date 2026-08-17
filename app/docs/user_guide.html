@@ -216,7 +216,10 @@
 <li><strong>Common Reference...</strong>: subtracts one chosen physical channel from each displayed channel</li>
 </ul>
 <p>Average and Median exclude bad channels from the reference pool and mask samples annotated as <strong>Bad segment</strong> while calculating the shared reference. Hidden channels remain in the reference pool.</p>
-<p>The automatic bipolar montage skips bad, unrecognized, and non-consecutive contacts. If the imported channel labels already look bipolar, the application asks for confirmation before applying another bipolar derivation.</p>
+<h4 id="automatic-bipolar-montage">Automatic Bipolar Montage</h4>
+<p>When <strong>Bipolar</strong> is selected, the application immediately builds and applies an automatic bipolar montage. It extracts the electrode prefix and contact number from each channel label, groups contacts by electrode, sorts them by number, and pairs only consecutive contacts within the same electrode. For example, <code>A1</code>, <code>A2</code>, and <code>A3</code> produce <code>A1-A2</code> and <code>A2-A3</code>.</p>
+<p>Labels that cannot be parsed and contacts without a consecutive neighbor are skipped. Channels already marked as bad are also excluded when the automatic montage is generated. If no valid pairs can be created, the application shows a warning. If only some channels are skipped, it displays a message listing them. If the imported labels already look bipolar, the application asks for confirmation before applying another bipolar derivation.</p>
+<p>Bipolar mode performs true re-referencing rather than changing labels only. Each displayed bipolar trace is calculated as <strong>Channel 1 minus Channel 2</strong>. Hiding a displayed bipolar channel removes that derived trace from the viewer. Bad channels remain visible unless they are hidden; use <strong>Hide all Bad</strong> to remove them from view. Hiding a source channel does not exclude it when a new automatic montage is generated.</p>
 <h3 id="5-2-edit-bipolar-montage">5.2 Edit Bipolar Montage</h3>
 <p>The toolbar <strong>Edit Bipolar...</strong> button is visible and enabled only while a valid Bipolar montage is active.</p>
 <p>The editor lets you:</p>
@@ -227,13 +230,9 @@
 <li>restore the automatic montage with <strong>Back to default</strong></li>
 <li>apply edits with <strong>OK</strong> or discard them with <strong>Cancel</strong></li>
 </ul>
-<p>Rules checked by the editor:</p>
-<ul>
-<li>Channel 1 and Channel 2 cannot be the same</li>
-<li>duplicate bipolar names are not allowed</li>
-<li>cross-electrode pairs trigger a warning, but can be kept intentionally</li>
-<li>bad channels are unavailable when choosing channels for edited pairs</li>
-</ul>
+<h4 id="validation-and-warnings">Validation and Warnings</h4>
+<p>The editor validates all pairs before applying the montage. <strong>Channel 2 must be different from Channel 1</strong>, and every bipolar channel name must be unique. If either check fails, the montage is not changed. Channels marked as bad are not available when choosing channels for edited pairs.</p>
+<p>If Channel 1 and Channel 2 have recognizable labels but belong to different electrode groups, the editor displays a <strong>Cross-electrode bipolar pairs</strong> warning. Choose <strong>Cancel</strong> to leave the current montage unchanged or <strong>Keep edit</strong> to apply the cross-electrode pair intentionally. This warning preserves editing flexibility while flagging an unusual configuration.</p>
 <h3 id="5-3-display-filters">5.3 Display Filters</h3>
 <p>Use <strong>Preprocessing &gt; Display Filters...</strong> to show or hide the display-filter controls above the signal viewer.</p>
 <p>Use <strong>Scope</strong> to choose which filter profile to edit:</p>
@@ -288,284 +287,123 @@
 <p>restore that plot's full default range.</p>
 </ul>
 <p>Bad channels remain visible in red. Use <strong>Mark selected as bad</strong> or <strong>Unmark selected as bad</strong> on selected entries in either list to update the application-wide bad-channel state. The change is also reflected in the main viewer and relevant computations. A selected bad channel is shown with a thicker red curve.</p>
+<h4 id="plot-interaction">Plot Interaction</h4>
+<p>The Macro and Micro PSD plots support PyQtGraph mouse controls for zooming and panning. Each plot keeps an independent view, and double left-clicking inside a plot restores its full default range. These actions change visualization only; they do not recalculate the PSD or modify computation results.</p>
+<p>The PyQtGraph context menu is disabled in the current PSD panels, so its built-in auto-range and export options are not available.</p>
 <hr>
-<h2 id="6-compute-menu">6. Compute Menu</h2>
-<h3 id="6-1-open-computation-panel">6.1 Open Computation Panel</h3>
-<p>Use <strong>Compute &gt; Open Computation Panel</strong> to open the computation panel.</p>
-<p>You can also right-click selected channels in the viewer and choose <strong>Open Computation Panel</strong>.</p>
-<p>The panel uses the current dataset, selected channels, and current montage. It can be resized, docked, floated, or moved to another dock area.</p>
-<p>Quick selection buttons:</p>
+<h2 id="6-compute">6. Compute</h2>
+<h3 id="6-1-open-and-use-the-computation-panel">6.1 Open and Use the Computation Panel</h3>
+<p>Open the panel with <strong>Compute &gt; Open Computation Panel</strong>. You can also select channels in the viewer, right-click the selection, and choose <strong>Open Computation Panel</strong>. The panel can be docked, floated, moved, or resized.</p>
+<p>The panel analyzes the recording currently open in the application; it does not open a separate data file.</p>
+<h4 id="panel-structure">Panel Structure</h4>
+<p>The panel has four main sections:</p>
 <ul>
-<li><strong>All</strong>: select all displayed channels</li>
-<li><strong>Macro</strong>: select all displayed macro channels</li>
-<li><strong>Micro</strong>: select all displayed micro channels</li>
+<li><strong>Algorithm</strong>: select <strong>REI</strong>, <strong>Gamma spikes</strong>, or <strong>HFO</strong>.</li>
+<li><strong>Channels</strong>: choose the channels to analyze.</li>
+<li><strong>Time</strong>: define the analysis interval and algorithm-specific parameters.</li>
+<li><strong>Output</strong>: run or cancel an analysis, import results, open result views, and</li>
+<p>export results.</p>
 </ul>
-<p>The <strong>Output</strong> section changes with the selected algorithm. Result review and export buttons become available after a successful run or import.</p>
-<h4 id="8-1-1-import-previously-exported-results">8.1.1 Import Previously Exported Results</h4>
-<p>Use <strong>Import results...</strong> in the computation panel to restore a result folder previously exported by the application. The importer detects the algorithm from the files in the selected folder:</p>
+<p>The <strong>Time</strong> and <strong>Output</strong> controls change with the selected algorithm.</p>
+<h4 id="channel-selection">Channel Selection</h4>
+<p>The <strong>Channels</strong> list defines the analysis input. Confirm it before every run, especially after changing the montage or reference. Use:</p>
 <ul>
-<li>REI: <code>rei_summary.csv</code> and <code>rei_metadata.json</code></li>
-<li>Gamma spike: <code>gamma_spike_events.csv</code> and <code>gamma_metadata.json</code></li>
-<li>HFO: <code>hfo_events.csv</code> and <code>hfo_metadata.json</code></li>
+<li><strong>All</strong> to replace the list with all non-bad channels</li>
+<li><strong>Macro</strong> or <strong>Micro</strong> to replace it with the non-bad channels in that group</li>
+<li><strong>Add...</strong> to search for and add channels</li>
+<li><strong>Remove selected</strong> or <strong>Clear</strong> to remove channels</li>
 </ul>
-<p>The application switches to the detected algorithm and restores its summaries, review grid, metadata, and viewer markers where available. The import is rejected if required files are missing, channels do not match the current recording/montage, or the metadata identifies a different source recording.</p>
-<p>Load the matching recording and select the matching montage before importing.</p>
-<h4 id="8-1-2-event-filters-and-global-timeline">8.1.2 Event Filters and Global Timeline</h4>
-<p>After gamma-spike or HFO results are opened, the main window shows event-class filters beside the montage label and a compact global event timeline below the viewer.</p>
-<p>Gamma filters:</p>
+<p>When a run starts, the selected channels are extracted using the montage or reference active at that moment. Confirmed bad channels are not available for selection. Display high-pass and low-pass filters are not applied unless an algorithm explicitly defines them as part of its own preprocessing.</p>
+<h4 id="shared-output-import-and-export-controls">Shared Output, Import, and Export Controls</h4>
+<p>The <strong>Output</strong> section always contains the run control and <strong>Import results...</strong>. Each algorithm shows its own cancel button while processing. Review and export buttons become available after a successful run or import.</p>
+<p>To restore results, first load the matching recording and montage. Click <strong>Import results...</strong> and select a folder previously exported by the application. The algorithm is detected automatically. Available summaries, review data, metadata, and viewer markers are restored. Import is rejected when required files are missing or the recording, channels, or montage are incompatible.</p>
+<p>Use the export button shown for the selected algorithm. The application asks before replacing existing result files.</p>
+<h4 id="shared-result-navigation">Shared Result Navigation</h4>
+<p>Gamma-spike and HFO results add event-visibility checkboxes beside the montage label and a result timeline below the viewer. These controls only show or hide results; they do not filter the EEG signal or change saved results.</p>
+<p>The timeline covers the full recording and highlights the current viewer window. Click a timeline event to jump to its channel and time. Click an event marker in the viewer to open the corresponding review window.</p>
+<h3 id="6-2-recruitment-energy-index-rei">6.2 Recruitment Energy Index (REI)</h3>
+<h4 id="definition-origin-and-validation">Definition, Origin, and Validation</h4>
+<p>The Recruitment Energy Index (REI) estimates how early and strongly each channel becomes involved during seizure onset. It compares ictal high-frequency energy with baseline activity, combines this energy change with the estimated recruitment time, and assigns each channel a normalized score and rank. A higher score indicates earlier and stronger recruitment relative to the other analyzed channels. REI is a review aid and should be interpreted together with the EEG/iEEG traces and clinical context.</p>
+<p>This implementation was adapted from Lucas A.'s <a href="https://github.com/allucas/IEEG_EI">IEEG_EI project</a>, a Python interface for calculating EI from iEEG.org recordings. It draws on the EI method introduced by <a href="https://doi.org/10.1093/brain/awn111">Bartolomei et al. (2008)</a>, which combines high-frequency activity at seizure onset with the relative timing of each channel's involvement.</p>
+<p>No numerical parity with the source implementation or clinical-validation results are currently documented for this GUI implementation.</p>
+<h4 id="time-input">Time Input</h4>
+<p>Enter <strong>Seizure onset</strong> and <strong>Seizure offset</strong>, then check the baseline and ictal windows. Click <strong>Use default windows</strong> to set:</p>
 <ul>
-<li><strong>non-gamma</strong></li>
-<li><strong>gamma</strong></li>
+<li>baseline: 70 to 10 seconds before seizure onset</li>
+<li>ictal: 5 seconds before to 20 seconds after seizure onset</li>
 </ul>
-<p>HFO filters:</p>
+<p>All windows must be non-empty and remain inside the recording. Seizure offset must be after seizure onset, and the ictal window must end no later than the seizure offset. REI does not impose a minimum seizure duration.</p>
+<h4 id="advanced-parameters-and-preprocessing">Advanced Parameters and Preprocessing</h4>
+<p>Bipolar montage is recommended. If another montage is active, the application lets you switch to Bipolar, continue with the current montage, or cancel.</p>
+<p>REI excludes confirmed bad channels and ignores the display high-pass and low-pass filters. It applies a zero-phase fourth-order Butterworth bandpass; the default range is 60-140 Hz. Use <strong>Advanced parameters...</strong> to change this range. The active notch setting is used when enabled. The algorithm does not add a common-average reference.</p>
+<h4 id="run-and-outputs">Run and Outputs</h4>
+<p>Click <strong>Run REI</strong>. The analysis runs in the background while the status area shows its current processing step and elapsed time. Click <strong>Cancel REI run</strong> to stop it. Cancellation is checked between processing steps, so the current filtering step may need to finish first. A cancelled run does not replace the last completed REI result.</p>
+<p>When the analysis finishes, the main viewer displays the REI rank beside each analyzed channel. Channel labels are color-coded by normalized REI score, from orange for lower scores to green for higher scores. An orange tick on each trace marks the estimated recruitment time when it falls inside the visible time window. Channels excluded from the analysis do not receive an REI rank, score color, or recruitment marker.</p>
+<p>Use:</p>
 <ul>
-<li><strong>artifact</strong></li>
-<li><strong>HFO</strong></li>
-<li><strong>spkHFO</strong></li>
-<li><strong>eHFO</strong></li>
-<li><strong>spk-eHFO</strong></li>
-<li><strong>unclassified</strong></li>
+<li><strong>Open REI summary</strong> for channel scores, ranks, peak high-frequency energy,</li>
+<p>and recruitment delays</p>
+<li><strong>Open REI heatmap</strong> for high-frequency energy around seizure onset, sorting,</li>
+<p>and top-channel controls</p>
+<li><strong>Export REI results</strong> to save <code>rei_summary.csv</code>, <code>rei_heatmap.csv</code>,</li>
+<p><code>rei_heatmap.png</code>, <code>rei_metadata.json</code>, and <code>README.txt</code></p>
 </ul>
-<p>Clearing a checkbox hides that class from both the signal viewer and the global timeline. The timeline spans the full recording, marks the currently visible time window, and uses the same class colors as the viewer. Click a timeline event to jump the viewer to its channel and time. Click an event marker directly in the signal viewer to open the corresponding gamma or HFO review grid.</p>
-<p>Event markers follow the currently displayed channel names when the montage or reference display changes.</p>
-<h3 id="8-2-rei-mode">8.2 REI Mode</h3>
-<p>REI mode is designed for manual seizure-window entry and delayed execution.</p>
-<p>The REI time section contains:</p>
+<h3 id="6-3-gamma-spikes">6.3 Gamma Spikes</h3>
+<h4 id="definition-origin-and-validation">Definition, Origin, and Validation</h4>
+<p>Gamma-spike analysis detects interictal spikes and measures associated gamma activity. Events are classified as gamma or non-gamma spikes for channel-level and event-level review.</p>
+<p>The implementation is a Python translation of the project's original MATLAB spike-gamma workflow and uses the Janca Hilbert-envelope method for candidate spike detection. The translated core was checked against the original MATLAB/Python 2 behavior, and Brainstorm was used as an external comparison during validation. The segmented long-recording pipeline was then checked for consistency with that reference workflow. These are implementation checks, not clinical sensitivity or specificity studies.</p>
+<h4 id="time-input">Time Input</h4>
+<p>Enter the analysis start and end times. The full recording is selected by default.</p>
+<h4 id="run-and-outputs">Run and Outputs</h4>
+<p>Click <strong>Run Gamma Spike Detector</strong>. The detector processes the interval in 10-minute chunks with 10 seconds of context, merges detections once, and then calculates spike boundaries and gamma measurements channel by channel. This limits memory use on long recordings.</p>
+<p>The analysis uses the active montage and notch setting but not the display high-pass or low-pass filters. Progress and estimated remaining time appear in the status area. Click <strong>Cancel gamma run</strong> to stop an active run.</p>
+<p>When the analysis finishes, use:</p>
 <ul>
-<li>seizure onset and offset</li>
-<li>baseline start and end</li>
-<li>ictal start and end</li>
+<li><strong>Open channel-level summary</strong> for spike counts, gamma-spike rate, and mean</li>
+<p>gamma measurements</p>
+<li><strong>Open spike grid</strong> for raw traces, spike boundaries, gamma windows,</li>
+<p>time-frequency views, and manual event classification</p>
+<li>the <strong>non-gamma</strong> and <strong>gamma</strong> visibility controls to show or hide event</li>
+<p>markers and timeline entries</p>
+<li><strong>Export gamma results</strong> to save <code>gamma_channel_summary.csv</code>,</li>
+<p><code>gamma_spike_events.csv</code>, <code>gamma_metadata.json</code>, and <code>README.txt</code></p>
 </ul>
-<p>Default windows are derived from seizure onset:</p>
+<p>Per-spike heatmaps are not exported because they can create very large folders.</p>
+<h3 id="6-4-high-frequency-oscillations-hfos">6.4 High-Frequency Oscillations (HFOs)</h3>
+<h4 id="definition-models-and-validation">Definition, Models, and Validation</h4>
+<p>HFO analysis detects candidate high-frequency events and classifies them for manual review. The three models mainly differ in their source implementation, validated frequency range, sampling requirements, and classifier.</p>
+<p>The model sources are the <a href="https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain">pyHFO pyBrain branch</a> and <a href="https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg">Omni-iEEG</a>.</p>
 <ul>
-<li>baseline start = seizure onset - 70 s</li>
-<li>baseline end = seizure onset - 10 s</li>
-<li>ictal start = seizure onset - 5 s</li>
-<li>ictal end = seizure onset + 20 s</li>
+<li><strong>pyhfo_pybrain-80-500 Hz</strong> is the default. It preserves the native sampling</li>
+<p>rate and uses the original pyHFO Model A and Model S classifiers. Validation matched 53/53 Zurich15 and 500/500 HUP134 candidate-pool labels. In the full Zurich15 route, events and labels matched for STE (1/1), MNI (36/36), and Hilbert (43/43).</p>
+<li><strong>pyhfo_omni_legacy-80-300 Hz</strong> reproduces Omni's legacy pyHFO route. It</li>
+<p>requires a sampling rate of at least 1000 Hz and processes at 1000 Hz. On the Zurich10 candidate pool, 611/611 labels matched and the maximum recorded score difference was 0.0.</p>
+<li><strong>eHFO-80-300 Hz</strong> reproduces Omni's three-model artifact, spike, and eHFO</li>
+<p>classifier using the official checkpoints. It has the same sampling requirement as the Omni legacy route. On Zurich10, 611/611 labels matched, with exact feature and score agreement.</p>
 </ul>
-<p>REI runs only if all timing inputs are coherent and inside the recording when recording duration is available.</p>
-<p>The current REI preprocessing uses:</p>
+<p>These are technical parity tests against each model's source implementation, not clinical performance studies. They apply only to the stated validated configuration; changing the band or detector settings creates an unvalidated configuration.</p>
+<h4 id="time-input">Time Input</h4>
+<p>Enter the analysis start and end times. The full recording is selected by default. This input behaves the same for all three models.</p>
+<h4 id="advanced-parameters-and-preprocessing">Advanced Parameters and Preprocessing</h4>
+<p>Select a model and compatible band preset. The default band is 80-500 Hz for <code>pyhfo_pybrain</code> and 80-300 Hz for both Omni models. <strong>Ripples 80-250 Hz</strong> and <strong>Custom</strong> are available for all models; <strong>Fast ripples 250-500 Hz</strong> is available only for <code>pyhfo_pybrain</code>.</p>
+<p>All models use the same <strong>Advanced parameters...</strong> interface. Select one or more candidate detectors—STE, MNI, or Hilbert—and edit their parameters if needed. At least one detector must remain selected. Click <strong>Save</strong> to apply advanced changes. The high frequency must remain below the effective Nyquist limit.</p>
+<p>The analysis uses the active montage and notch setting, not the display high-pass or low-pass filters. Candidates that exceed the maximum duration or fall inside the analysis-edge padding are excluded before classification and counted in the metadata.</p>
+<h4 id="run-and-outputs">Run and Outputs</h4>
+<p>Click <strong>Run HFO Detector</strong>. All models use the same background-processing, progress, estimated-time, and cancellation interface.</p>
+<p>When the analysis finishes, use:</p>
 <ul>
-<li>input data from the current montage</li>
-<li>confirmed bad channels excluded</li>
-<li>display filter ignored</li>
-<li>internal zero-phase 4th-order Butterworth bandpass</li>
-<li>default analysis frequency range: 60-140 Hz</li>
-<li>analysis frequency range editable from <strong>Advanced parameters...</strong></li>
-<li>active notch setting used when enabled</li>
-<li>no automatic common-average reference</li>
+<li><strong>Open HFO summary</strong> for channel-level candidate and class counts</li>
+<li><strong>Open HFO event grid</strong> for raw and filtered traces, spectrograms, detector</li>
+<p>information, classifier propositions, and manual review</p>
+<li>the class visibility controls to show or hide <strong>artifact</strong>, <strong>HFO</strong>,</li>
+<p><strong>spkHFO</strong>, <strong>eHFO</strong>, <strong>spk-eHFO</strong>, and <strong>unclassified</strong> events</p>
+<li><strong>Export HFO events</strong> to save <code>hfo_channel_summary.csv</code>, <code>hfo_events.csv</code>,</li>
+<p><code>hfo_metadata.json</code>, and <code>README.txt</code></p>
 </ul>
-<p>REI shows a bipolar montage recommendation before running. You can switch to Bipolar, run anyway, or cancel.</p>
-<p>If no notch filter is selected before running, the software warns you so you can confirm whether to continue.</p>
-<p>REI outputs:</p>
-<ul>
-<li>summary table with channel, REI score, rank, peak HFER activity, and recruitment delay</li>
-<li>heatmap with HFER activity around seizure onset, REI score side bars, sorting controls, and top-N display control</li>
-<li>export files with metadata, CSV outputs, saved heatmap figures, and <code>README.txt</code></li>
-</ul>
-<h3 id="8-3-gamma-spike-mode">8.3 Gamma Spike Mode</h3>
-<p>Gamma spike mode is designed for spike detection and gamma-activity review on selected channels.</p>
-<p>The gamma spike time section contains:</p>
-<ul>
-<li>analysis start</li>
-<li>analysis end</li>
-</ul>
-<p>By default, the gamma analysis window is set to the full recording.</p>
-<p>Gamma spike detection uses a memory-conscious segmented pipeline:</p>
-<ul>
-<li>detector runs in 10-minute chunks with 10 seconds of context</li>
-<li>detector settings are <code>-bl 10 -bh 60 -h 60 -k1 3.65 -dec 200</code></li>
-<li>detections from chunks are merged and postprocessed once globally</li>
-<li>input data comes from the selected channels and current montage</li>
-<li>spike boundary and gamma details are computed one channel at a time from full-channel filtered signals</li>
-<li>boundary/gamma filtering keeps the selected software notch behavior, including 60 Hz harmonics when selected</li>
-</ul>
-<p>If no notch filter is selected before running, the software warns you so you can confirm whether to continue.</p>
-<p>During the run, the bottom-left status area shows the current processing step, time so far, and estimated time remaining when possible. A <strong>Cancel gamma run</strong> button is shown during processing.</p>
-<p>When detection finishes, the status area keeps this summary until another computation starts or the computation panel is closed:</p>
-<ul>
-<li>gamma spike detection completed</li>
-<li>total spikes</li>
-<li>gamma-positive spikes</li>
-<li>total duration of the run</li>
-</ul>
-<p>Gamma spike outputs inside the app:</p>
-<ul>
-<li>channel-level summary</li>
-<li>spike grid with raw trace, spike timing, boundary points, gamma window, and time-frequency view</li>
-<li>gamma spike heatmaps for review</li>
-<li>main-viewer markers and a global timeline with separate <strong>non-gamma</strong> and</li>
-<p><strong>gamma</strong> visibility controls</p>
-</ul>
-<p>Gamma spike export creates:</p>
-<ul>
-<li><code>gamma_channel_summary.csv</code></li>
-<li><code>gamma_spike_events.csv</code></li>
-<li><code>gamma_metadata.json</code></li>
-<li><code>README.txt</code></li>
-</ul>
-<p>Gamma spike heatmaps are not saved during export because saving one heatmap per spike can create very large output folders.</p>
-<p>Existing output files are not silently overwritten. If the target folder already contains gamma output files, the software asks for confirmation first.</p>
-<h3 id="8-4-hfo-mode">8.4 HFO Mode</h3>
-<p>HFO mode is designed for high-frequency oscillation candidate detection, classification, review, and export on the selected channels.</p>
-<p>The HFO time section contains:</p>
-<ul>
-<li>analysis start</li>
-<li>analysis end</li>
-</ul>
-<p>By default, the HFO analysis window is set to the full recording.</p>
-<p>The HFO input boundary is:</p>
-<p><code>GUI/file layer -&gt; prepared microvolt signal array -&gt; HFO backend</code></p>
-<p>The GUI and file layer handle:</p>
-<ul>
-<li>file loading</li>
-<li>channel selection</li>
-<li>user-defined interval selection</li>
-<li>montage and reference selection, including bipolar derivations</li>
-<li>conversion to microvolts</li>
-</ul>
-<p>The HFO backend then handles:</p>
-<ul>
-<li>bad-channel exclusion</li>
-<li>the notch mode selected in the GUI</li>
-<li>route-specific preprocessing and sampling handling</li>
-<li>candidate detection</li>
-<li>waveform extraction</li>
-<li>classification</li>
-</ul>
-<p>The notch filter is applied once by the HFO backend using the mode selected in the GUI. The GUI display filter controls the visible traces; the HFO backend uses the selected notch setting for computation.</p>
-<p>Sampling requirements depend on the selected HFO classifier route:</p>
-<ul>
-<li><code>pyhfo_pybrain</code> preserves native EDF sampling, matching the pyBrain GUI route</li>
-<li><code>pyhfo_omni_legacy</code> rejects recordings below 1000 Hz and resamples higher-rate</li>
-<p>recordings internally to 1000 Hz</p>
-<li><code>eHFO</code> uses the Omni-compatible route: recordings below 1000 Hz are rejected,</li>
-<p>and higher-rate recordings are resampled internally to 1000 Hz</p>
-</ul>
-<p>The default validated user-facing HFO classifier is <strong>pyhfo_pybrain-80-500 Hz</strong>. It uses:</p>
-<ul>
-<li>candidate detectors: STE, MNI, and Hilbert</li>
-<li>pyBrain-compatible default band: 80-500 Hz</li>
-<li>2-second waveform extraction around each candidate</li>
-<li>original pyHFO/pyBrain Model A for real-HFO acceptance</li>
-<li>original pyHFO/pyBrain Model S for spike-HFO classification after Model A accepts</li>
-<p>the event</p>
-</ul>
-<p>The HFO advanced-parameter dialog lets you:</p>
-<ul>
-<li>enable or disable candidate detectors</li>
-<li>edit detector parameters</li>
-<li>restore default detector parameters</li>
-<li>save the edited defaults for later GUI sessions</li>
-</ul>
-<p>At least one candidate detector must remain selected. Detector-specific parameter fields are disabled when their detector is disabled. Advanced changes are applied only after clicking <strong>Save</strong> in the dialog.</p>
-<p>Classifier options show their route-specific default band in the label:</p>
-<ul>
-<li><strong>pyhfo_pybrain-80-500 Hz</strong></li>
-<li><strong>pyhfo_omni_legacy-80-300 Hz</strong></li>
-<li><strong>eHFO-80-300 Hz</strong></li>
-</ul>
-<p>Available band presets are:</p>
-<ul>
-<li><strong>Default</strong>: 80-500 Hz for <code>pyhfo_pybrain</code>, or 80-300 Hz for the two</li>
-<p>Omni-compatible routes</p>
-<li><strong>Ripples 80-250 Hz</strong></li>
-<li><strong>Fast ripples 250-500 Hz</strong></li>
-<li><strong>Custom</strong></li>
-</ul>
-<p>All four presets are selectable. For <strong>Custom</strong>, edit the low and high frequencies in <strong>Advanced parameters...</strong>. The selected range must remain valid for the route and sampling frequency; the Omni-compatible 1000 Hz processing path requires the high frequency to stay below its effective Nyquist limit. The validation results below describe each route's stated reference configuration; choosing another band does not make it an independently validated classifier configuration.</p>
-<p>Boundary handling:</p>
-<ul>
-<li>candidates longer than the maximum duration are excluded before classification</li>
-<li>candidates inside the configured boundary padding from the analysis-window</li>
-<p>start or end are excluded before classification</p>
-<li>boundary and exclusion counts are stored in metadata</li>
-</ul>
-<p>During the run, HFO analysis runs in the background. The bottom-left status area shows the current step, elapsed time, and remaining time when possible. A cancel button is available during processing. When the run finishes, the status area keeps a summary with the total events and run duration until another computation starts or the computation panel is closed.</p>
-<p>HFO outputs inside the app:</p>
-<ul>
-<li>channel summary window</li>
-<li>event grid with card review</li>
-<li>event filters by channel, class, and order</li>
-<li>main-viewer HFO markers</li>
-<li>global event timeline with class-colored markers and recording time labels</li>
-<li>main-window visibility controls for <strong>artifact</strong>, <strong>HFO</strong>, <strong>spkHFO</strong>,</li>
-<p><strong>eHFO</strong>, <strong>spk-eHFO</strong>, and <strong>unclassified</strong> events</p>
-<li>zoom review with raw trace, detector-band filtered trace, spectrogram, event</li>
-<p>metadata, classifier proposition, and manual class selector</p>
-</ul>
-<p>HFO classes are handled as separate fields:</p>
-<ul>
-<li><code>final_model_class</code>: immutable classifier proposition</li>
-<li><code>manual_class</code>: user-reviewed class, if changed</li>
-<li><code>official_class</code>: active class used for display, summaries, and active counts</li>
-<li><code>manual_review_status</code>: <code>unreviewed</code>, <code>reviewed</code>, or <code>deleted</code></li>
-</ul>
-<p>If the user manually changes an event class, the classifier proposition remains visible and unchanged. The manual class becomes the official class. If the user deletes an event, it is excluded from active counts but kept in the exported event table.</p>
-<p>The implemented HFO algorithms are derived from these source repositories:</p>
-<ul>
-<li>Omni-iEEG: https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg</li>
-<li>pyHFO pyBrain branch: https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain</li>
-<li>pyHFO repository: https://github.com/roychowdhuryresearch/pyHFO</li>
-</ul>
-<p>Three HFO classifier routes are available. The default user-facing option is <strong>pyhfo_pybrain-80-500 Hz</strong>; its internal route name is <code>pyhfo_pybrain</code>.</p>
-<h4 id="pyhfo-pybrain-80-500-hz"><code>pyhfo_pybrain-80-500 Hz</code></h4>
-<ul>
-<li><strong>Internal implementation</strong>: pyBrain-compatible candidate-pool inference</li>
-<li><strong>Preprocessing</strong>: native EDF sampling; default detector/filter band is</li>
-<p>80-500 Hz; classifier features commonly use 10-500 Hz before checkpoint crop</p>
-<li><strong>Reference target</strong>: original pyHFO/pyBrain GUI classifier from</li>
-<p>https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain</p>
-<li><strong>Validation</strong>: Zurich15 classifier pool, 53/53 labels matched; HUP134</li>
-<p>classifier pool, 500/500 labels matched; Zurich15 full pipeline, STE 1/1, MNI 36/36, and Hilbert 43/43 events and labels matched</p>
-<li><strong>Status</strong>: default user-facing option; internal name <code>pyhfo_pybrain</code></li>
-</ul>
-<h4 id="pyhfo-omni-legacy-80-300-hz"><code>pyhfo_omni_legacy-80-300 Hz</code></h4>
-<ul>
-<li><strong>Internal implementation</strong>: Omni-style batch waveform inference</li>
-<li><strong>Preprocessing</strong>: internal 1000 Hz processing, validated 80-300 Hz detector</li>
-<p>band, and 10-500 Hz classifier feature range</p>
-<li><strong>Reference target</strong>: original Omni legacy pyHFO inference code from</li>
-<p>https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg</p>
-<li><strong>Validation</strong>: Zurich10, 611/611 labels matched; maximum differences for</li>
-<p>keep, artifact, spike, and HFO scores were 0.0</p>
-<li><strong>Status</strong>: separate Omni-compatible route; internal name</li>
-<p><code>pyhfo_omni_legacy</code></p>
-</ul>
-<h4 id="ehfo-80-300-hz"><code>eHFO-80-300 Hz</code></h4>
-<ul>
-<li><strong>Internal implementation</strong>: Omni eHFO three-model inference</li>
-<li><strong>Preprocessing</strong>: internal 1000 Hz processing, validated 80-300 Hz detector</li>
-<p>band, and 2-second waveform features for artifact, spike, and eHFO neural networks</p>
-<li><strong>Reference target</strong>: original Omni eHFO event-model code from</li>
-<p>https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg</p>
-<li><strong>Validation</strong>: Zurich10 candidate pool, 611/611 labels matched; maximum</li>
-<p>feature, artifact-score, spike-score, and eHFO-score differences were 0.0</p>
-<li><strong>Status</strong>: selectable Omni eHFO option; internal name <code>eHFO</code>; not the default</li>
-</ul>
-<p>Each route therefore reached 100% agreement with its own direct reference implementation in the tested candidate pools. They should not be described as a single identical classifier path, because they reproduce different upstream execution flows.</p>
-<p>Implementation note: the codebase separates preprocessing modules under <code>app/computation/hfo/preprocessing/</code>. The <code>pyhfo_pybrain</code> pipeline uses <code>preprocessing/pybrain.py</code>, preserves native sampling, applies the pyBrain Chebyshev-II HFO bandpass before candidate detection, and sends the native non-bandpassed signal plus candidate coordinates to the pyBrain-style classifier. The <code>pyhfo_omni_legacy</code> and <code>eHFO</code> pipelines use <code>preprocessing/omni.py</code> and resample to 1000 Hz.</p>
-<p>HFO export creates:</p>
-<ul>
-<li><code>hfo_channel_summary.csv</code></li>
-<li><code>hfo_events.csv</code></li>
-<li><code>hfo_metadata.json</code></li>
-<li><code>README.txt</code></li>
-</ul>
-<p><code>hfo_channel_summary.csv</code> contains per-channel candidate counts, accepted HFO counts, HFO counts, spike-HFO counts, eHFO counts, spike-eHFO counts, artifact counts, rates per minute, deleted event counts, and boundary event counts.</p>
-<p><code>hfo_events.csv</code> contains one row per retained event with channel, timing, candidate detector, boundary warning, probabilities, classifier proposition, manual class, official class, review status, selected band, and sampling details.</p>
-<p><code>hfo_metadata.json</code> records the analyzed file, analysis window, selected channels, bad-channel exclusion, montage/reference information, notch setting, candidate detectors, detector parameters, sampling rates, processing order, classifier status, output counts, selected algorithm route, algorithm origin, classifier origin, checkpoint family, class mapping, and source GitHub repositories.</p>
-<p>HFO import restores exported HFO result folders produced by the application. The import validates that the result belongs to the same recording file, then restores events, manual review fields, classifier proposition, probabilities, metadata, filters where possible, and main-viewer markers. Imported historical class aliases are normalized to the current HFO class names, and a reviewed or deleted event can recover its official class when an older export has no separate <code>manual_class</code> value.</p>
-<p>The <code>eHFO</code> route uses the Omni eHFO deep-learning classifier implementation with official checkpoints:</p>
-<ul>
-<li><code>artifacts.pth</code></li>
-<li><code>spikes.pth</code></li>
-<li><code>eHFOs.pth</code></li>
-</ul>
-<p>This classifier-only path has been validated against the official Omni source on the Zurich10 candidate pool with exact feature, score, and label agreement. It is selectable from the HFO classifier menu, but it is not the default user-facing HFO classifier option.</p>
+<p>Manual classification does not overwrite the model's original proposition. A deleted event is removed from active counts but retained in exported data for traceability.</p>
 <hr>
-<h2 id="9-review-menu">9. Review Menu</h2>
-<h3 id="9-1-annotate">9.1 Annotate</h3>
+<h2 id="7-review-menu">7. Review Menu</h2>
+<h3 id="7-1-annotate">7.1 Annotate</h3>
 <p>Use <strong>Review &gt; Annotate</strong> to add annotations to the signal display.</p>
 <ol>
 <li>Choose annotation type</li>
@@ -584,8 +422,8 @@
 <p>To modify an annotation from the viewer, right-click the annotation region and choose <strong>Edit annotation...</strong> or <strong>Delete annotation</strong>.</p>
 <p>When annotations exist, the Annotations dock appears. From the list, you can click an annotation to jump to it or delete it from the plot context menu.</p>
 <hr>
-<h2 id="3-file-menu">3. File Menu</h2>
-<h3 id="3-1-save">3.1 Save</h3>
+<h2 id="8-file-menu">8. File Menu</h2>
+<h3 id="8-1-save">8.1 Save</h3>
 <p>Use <strong>File &gt; Save</strong> to save the current project.</p>
 <p>The <code>.ieeg</code> project file saves:</p>
 <ul>
@@ -613,23 +451,23 @@
 <li>gamma/HFO event-filter checkbox selections</li>
 </ul>
 <p>Complete computation results are stored in exported result folders rather than inside the <code>.ieeg</code> project file. To recover those results and their viewer markers, use <strong>Import results...</strong> with the matching exported folder.</p>
-<h3 id="4-2-save-as">4.2 Save As</h3>
+<h3 id="8-2-save-as">8.2 Save As</h3>
 <p>Use <strong>File &gt; Save As...</strong> if the project does not yet have a save path or if you want to save it as another file.</p>
 <p><strong>Save As...</strong> stores the same elements as <strong>Save</strong>, but in a new <code>.ieeg</code> project file.</p>
-<h3 id="4-3-close-project">4.3 Close Project</h3>
+<h3 id="8-3-close-project">8.3 Close Project</h3>
 <p>Use <strong>File &gt; Close Project</strong> to close the current project while keeping the application open.</p>
 <p>If there are unsaved changes, the application asks whether to save, continue without saving, or cancel.</p>
-<h3 id="4-4-exit">4.4 Exit</h3>
+<h3 id="8-4-exit">8.4 Exit</h3>
 <p>Use <strong>File &gt; Exit</strong> to quit the application.</p>
 <p>If there are unsaved changes, the application asks what to do before closing.</p>
 <hr>
-<h2 id="10-help-menu">10. Help Menu</h2>
-<h3 id="10-1-user-guide">10.1 User Guide</h3>
+<h2 id="9-help-menu">9. Help Menu</h2>
+<h3 id="9-1-user-guide">9.1 User Guide</h3>
 <p>Use <strong>Help &gt; User Guide</strong> to open this guide from inside the application.</p>
-<h3 id="10-2-shortcuts">10.2 Shortcuts</h3>
+<h3 id="9-2-shortcuts">9.2 Shortcuts</h3>
 <p>Use <strong>Help &gt; Shortcuts</strong> to open the keyboard and mouse shortcut list.</p>
 <hr>
-<h2 id="11-practical-review-workflow">11. Practical Review Workflow</h2>
+<h2 id="10-practical-review-workflow">10. Practical Review Workflow</h2>
 <p>A common workflow is:</p>
 <ol>
 <li>Create or open a project</li>
