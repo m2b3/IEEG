@@ -578,7 +578,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self._draw_seizure_markers(t_ds)
         self._draw_analysis_window_markers(t_ds)
         self._draw_recruitment_markers(t_ds, visible_abs)
-        self._draw_gamma_spike_markers(t_ds, visible_abs)
+        self._draw_gamma_spike_markers(t_ds, visible_abs, seg_ds_uv)
         self._draw_hfo_markers(t_ds, visible_abs, seg_ds_uv)
         self._draw_cursor(t_ds)
         self._draw_minmax(seg_ds_uv, t_ds, n_vis)
@@ -1224,6 +1224,7 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         self,
         t_ds: np.ndarray,
         visible_abs: list[int],
+        seg_ds_uv: np.ndarray,
     ) -> None:
         if not self._gamma_spike_marker_events:
             return
@@ -1231,17 +1232,21 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         t_arr = np.asarray(t_ds, dtype=float).reshape(-1)
         if t_arr.size < 2:
             return
+        data_arr = np.asarray(seg_ds_uv, dtype=float)
+        if data_arr.ndim != 2 or data_arr.shape[1] != t_arr.size:
+            return
 
         t0 = float(t_arr[0])
         t1 = float(t_arr[-1])
         display_names = self.get_channel_names()
         regular_color = (64, 145, 255, 235)
         gamma_color = (255, 151, 67, 235)
-        regular_pen = pg.mkPen(regular_color, width=3)
-        gamma_pen = pg.mkPen(gamma_color, width=3)
+        regular_overlay_pen = pg.mkPen(regular_color, width=2.6)
+        gamma_overlay_pen = pg.mkPen(gamma_color, width=2.6)
         regular_rail_pen = pg.mkPen(regular_color, width=4.0)
         gamma_rail_pen = pg.mkPen(gamma_color, width=4.0)
-        tick_half_height = 0.16 * float(self._spacing)
+        centered_data = self._center_traces_for_display(data_arr)
+        gain_factor = self._display_gain_factor()
         min_visible_width_s = max(0.002, 2.0 * float(np.nanmedian(np.diff(t_arr))))
         _y_min, y_max = self._sig_vb.viewRange()[1]
         view_height = max(1e-9, float(y_max) - float(_y_min))
@@ -1257,17 +1262,13 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 continue
 
             y_center = (len(visible_abs) - 1 - visible_row) * float(self._spacing)
-            y0 = y_center - tick_half_height
-            y1 = y_center + tick_half_height
             for event in events:
                 try:
                     marker_time = float(event.get("time_s", np.nan))
                 except (TypeError, ValueError):
                     continue
-                if not (t0 <= marker_time <= t1):
-                    continue
                 kind = str(event.get("kind", "regular"))
-                pen = gamma_pen if kind == "gamma" else regular_pen
+                overlay_pen = gamma_overlay_pen if kind == "gamma" else regular_overlay_pen
                 rail_pen = gamma_rail_pen if kind == "gamma" else regular_rail_pen
                 try:
                     start_time = float(event.get("start_time_s", marker_time))
@@ -1280,22 +1281,36 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
                 if end_time <= start_time:
                     start_time = marker_time - 0.5 * min_visible_width_s
                     end_time = marker_time + 0.5 * min_visible_width_s
+                if end_time < t0 or start_time > t1:
+                    continue
                 visible_start = max(float(start_time), t0)
                 visible_end = min(float(end_time), t1)
-                tick = pg.PlotDataItem(
-                    [marker_time, marker_time],
-                    [y0, y1],
-                    pen=pen,
+                if visible_row >= centered_data.shape[0]:
+                    continue
+                sample_mask = (t_arr >= visible_start) & (t_arr <= visible_end)
+                sample_idx = np.flatnonzero(sample_mask)
+                if sample_idx.size < 2:
+                    nearest = int(np.argmin(np.abs(t_arr - float(marker_time))))
+                    lo = max(0, nearest - 1)
+                    hi = min(t_arr.size, nearest + 2)
+                    sample_idx = np.arange(lo, hi, dtype=int)
+                x_segment = t_arr[sample_idx]
+                y_segment = centered_data[visible_row, sample_idx] * gain_factor + y_center
+
+                overlay = pg.PlotDataItem(
+                    x_segment,
+                    y_segment,
+                    pen=overlay_pen,
                 )
-                tick.setCurveClickable(True, width=8)
-                tick.sigClicked.connect(
+                overlay.setCurveClickable(True, width=8)
+                overlay.sigClicked.connect(
                     lambda _item, _event, channel=channel_name, t=marker_time: (
                         self.gammaSpikeMarkerClicked.emit(str(channel), float(t))
                     )
                 )
-                tick.setZValue(23)
-                self.signal_plot.addItem(tick)
-                self._gamma_spike_marker_items.append(tick)
+                overlay.setZValue(23)
+                self.signal_plot.addItem(overlay)
+                self._gamma_spike_marker_items.append(overlay)
 
                 rail = pg.PlotDataItem(
                     [visible_start, visible_end],

@@ -110,7 +110,7 @@ HFO_BAND_PRESET_DISPLAY_NAMES: dict[str, str] = {
     DEFAULT_HFO_BAND_PRESET: "Default",
     RIPPLE_HFO_BAND_PRESET: "Ripples 80-250 Hz",
     FAST_RIPPLE_HFO_BAND_PRESET: "Fast ripples 250-500 Hz",
-    CUSTOM_HFO_BAND_PRESET: "Custom",
+    CUSTOM_HFO_BAND_PRESET: "Custom (experimental)",
 }
 DISABLED_HFO_CLASSIFIER_OPTIONS: set[str] = set()
 HFO_CLASSIFIER_DISPLAY_LABELS: dict[str, str] = {
@@ -1971,7 +1971,7 @@ class ComputationPanel(QWidget):
         self.edit_hfo_low_freq.setEnabled(custom)
         self.edit_hfo_high_freq.setEnabled(custom)
         tooltip = (
-            f"Custom frequency range for this classifier. Maximum high cutoff is {max_high:g} Hz."
+            f"Experimental custom frequency range for this classifier. Maximum high cutoff is {max_high:g} Hz."
             if custom
             else "Fixed by the selected HFO band preset."
         )

@@ -1,26 +1,24 @@
-# User Guide
+# I-EEG User Guide
 
-## 1. Getting started
+This guide covers project setup, signal review, preprocessing, computations, annotations, and result export.
 
-### 1.1 Create a New Project
+## 1. Getting Started
 
-To start a new project, select File > New Project....
+### 1.1 Create a Project
 
-1. Select the raw EEG/iEEG recording
-2. Choose where to save the `.ieeg` project file
-3. Click Confirm
+Choose **File > New Project...**, then:
 
-The project is linked to the selected raw recording.
+1. Select an EEG/iEEG recording.
+2. Choose a location for the `.ieeg` project file.
+3. Click **Confirm**.
 
-Supported recording formats: `.edf` ; `.bdf` ; `.fif` ; `.vhdr` ; `.set` ; `.cnt`
+Supported formats: `.edf`, `.bdf`, `.fif`, `.vhdr`, `.set`, and `.cnt`.
 
-### 1.2 Open an Existing Project
+The project links to the original recording; it does not copy the raw data.
 
-To reopen a previously saved project, select File > Open Project... and choose an existing .ieeg project file.
+### 1.2 Open a Project
 
-The application restores the saved project state (see Section – Save).
-
----
+Choose **File > Open Project...** and select an `.ieeg` file. The application restores the project state described in Section 8.1.
 
 ## 2. Main Window
 
@@ -28,640 +26,529 @@ The application restores the saved project state (see Section – Save).
 
 ![Main window with a loaded recording](images/main-viewer.png)
 
-1 - Window title and recording summary (file path, selected/total channels, duration and sampling rates)
-
-2 - Menu bar (see Section 2.2)
-
-3 - Toolbar (see Section 2.3)
-
-4 - Current montage/reference indicator
-
-5 - Signal viewer displaying EEG/iEEG traces (see Section 3)
-
-6 - Channel labels
-
-7 - Amplitude axis (µV)
-
-8 - Time navigation bar 
+1. Window title and recording summary: path, channel count, duration, and sampling rate
+2. Menu bar
+3. Display toolbar
+4. Active montage/reference
+5. EEG/iEEG signal viewer
+6. Channel labels
+7. Amplitude axis in µV
+8. Time-navigation bar
 
 ### 2.2 Menu Bar
 
-The menu bar provides access to the application's main functions.
+- **File**: create, open, save, or close a project; exit the application
+- **View**: zoom, reset the view, or use Scalogram mode
+- **Channels**: assign Macro or Micro groups
+- **Preprocessing**: select a montage/reference, configure display filters, or open the PSD
+- **Compute**: run REI, Gamma Spike, or HFO analysis
+- **Review**: add annotations
+- **Help**: open this guide or the shortcut list
 
-- **File**: **Create**, **open**, **save** and **close** projects, or **exit** the application.
-- **View**: Explore the recording more in depth using tools such as **zoom** and **scalogram mode**.
-- **Channels**: Manually organize channel groups (e.g., micro vs. macro). By default the interface labels every channels as macro.
-- **Preprocessing**: Configure the signal representation by selecting the montage/reference, applying display filters, and inspecting the power spectrum. 
-- **Compute**: Run analysis algorithms from the computation panel ( Recruitment Energy Index-REI, gamma spikes, hfos; see Section 6)
-- **Review**: Inspect and manage manual annotations 
-- **Help**: Open the user guide and the keyboard shortcut summary.
+### 2.3 Display Toolbar
 
+- **Time Range (s)**: seconds shown
+- **Channels**: traces shown at once
+- **Amplitude (µV)**: visual scale; it does not change data or results
+- **Theme**: Light or Dark interface
+- **Hidden...**: restore hidden channels
+- **Bad...**: review or clear bad-channel marks
+- **Hide all Bad**: hide every bad channel
+- **Edit Bipolar...**: edit the montage; visible only in Bipolar mode
 
-### 2.3 Toolbar 
+Enter a value or use the available choices for time range, channel count, and amplitude.
 
-The toolbar provides quick access to the main display settings.
+## 3. Explore the Recording
 
-- **Time Range (s)**: number of seconds displayed in the viewer
-- **Channels**: number of channels displayed simultaneously
-- **Amplitude (µV)**: vertical scaling of the dispayed signal. This affects only the visualization and does not modify the raw data or computation results.
-
-For these three settings, you can either enter a value directly or choose one from the drop-down menu.
-
-Additional controls include:
-
-- **Theme**: switch between Light and Dark interface themes
-- **Hidden...**: review and restore hidden channels
-- **Bad...**: review and unmark bad channels
-- **Hide all Bad**: hide all channel currently marked as bad
-- **Edit Bipolar...**: edit the bipolar montage when bipolar mode is active (See section 5)
-
-
-## 3. Exploring the Recording
 ### 3.1 Navigation
-#### 3.1.1 Channel Navigation
 
-Move vertically through the channel list by:
+#### 3.1.1 Channels
 
-- Scrolling the mouse wheel over the signal viewer.
-- Pressing **Up Arrow** or **Down Arrow**.
-- Holding **Shift** while pressing the arrow keys to move faster.
-- Holding **Ctrl** while pressing the arrow keys to move much faster.
+Scroll over the viewer or use:
 
+- **Up/Down Arrow**: move through channels
+- **Shift + Up/Down Arrow**: move faster
+- **Ctrl + Up/Down Arrow**: move much faster
 
-#### 3.1.2 Time navigation
+#### 3.1.2 Time
 
-Use the navigation bar below the signal viewer to move through the recording.
+Drag the bar below the viewer or use:
 
-Keyboard shortcuts:
-
-- **Left Arrow** and **Right Arrow** to move backward or forward
-- **Shift + Left Arrow** and **Shift + Right Arrow** to move faster
-- **Ctrl + Left Arrow** and **Ctrl + Right Arrow** to move much faster
+- **Left/Right Arrow**: move through time
+- **Shift + Left/Right Arrow**: move faster
+- **Ctrl + Left/Right Arrow**: move much faster
 
 ### 3.2 View Menu
+
 #### 3.2.1 Zoom Selection
 
-Use **View > Zoom Selection** to zoom directly into a time and channel region.
+Choose **View > Zoom Selection**, then drag a rectangle over the required time and channels. Press **Escape** before releasing to cancel.
 
-1. Press and hold the **left mouse button**
-2. Drag a rectangle over the region you want to inspect
-3. Release the mouse button
-
-The viewer zooms into the selected time range and channel range. Press **Escape** to cancel before applying the zoom.
-
-Double left-click in the viewer to go back one zoom step.
-
-Use **View > Reset Zoom** to return to the view that was active before the zoom sequence started.
+Double-click the viewer to return one zoom step. Choose **View > Reset Zoom** to restore the view that preceded the zoom sequence.
 
 #### 3.2.2 Scalogram Mode
 
-Use **View > Scalogram Mode** to open a time-frequency view from one channel and one selected time interval.
+Choose **View > Scalogram Mode**, then drag horizontally across one channel. The new window shows the channel context, raw signal, time-frequency map, frequency slider, and hover values. Very short selections are ignored.
 
-1. Click **View > Scalogram Mode**
-2. Drag horizontally on the channel you want to inspect
-3. Release the mouse button
+Press **Escape** before releasing to cancel.
 
-The scalogram window shows the selected channel context, raw signal, scalogram image, frequency-range slider, and hover readout. Very short selections are ignored.
+## 4. Manage Channels
 
-Press **Escape** to cancel scalogram mode before opening a window.
+### 4.1 Macro and Micro Groups
 
+All channels are Macro by default. Choose **Channels > Channel Groups...**, select rows, click **Set selected to Micro** or **Set selected to Macro**, then click **OK**.
 
-## 4. Managing Channels
+Groups control channel styling, filter profiles, and the Macro/Micro PSD panels.
 
-### 4.1 Micro/Macro Groups
+### 4.2 Select Channels
 
-By default the interface categorises every channels as Macro. The user must manually change the label of the micro channels. 
+Click a trace or label to select it. For multiple channels:
 
-Use **Channels > Channel Groups...** to set channels as macro or micro.
-
-1. Select one or more channel rows
-2. Click **Set selected to Micro** or **Set selected to Macro**
-3. Click **OK**
-
-Channel groups control macro/micro styling and group-aware review tools.
-
-### 4.2 Selecting Channels
-
-To select one channel, left-click the trace or its label.
-To select several channels:
-
-- **Ctrl + click** adds or removes one channel
-- **Shift + click** selects a range
-- **Ctrl + Shift + click** adds a range to the current selection
-
-Selected channels are highlighted in the viewer.
+- **Ctrl + click**: add or remove one channel
+- **Shift + click**: select a range
+- **Ctrl + Shift + click**: add a range
 
 ### 4.3 Hidden Channels
 
-To hide one or more channels, right-click a selected trace and choose **Hide**.
-
-To restore hidden channels, click **Hidden...** on the toolbar.
-
-Hidden channels disappear from the visible display but are not deleted from the recording.
+Right-click selected traces and choose **Hide**. Use **Hidden...** to restore them. Hiding affects visibility only; it does not delete data.
 
 ### 4.4 Bad Channels
 
-To mark one or more channels as bad, right-click a selected trace and choose **Mark as bad**.
+Right-click selected traces and choose **Mark as bad**. If all are already bad, choose **Unmark as bad**. Use **Bad...** to review marks or clear them all.
 
-If all selected channels are already marked as bad, the context menu instead offers **Unmark as bad**.
+Bad status is application-wide: changes in the viewer or PSD appear in both. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.
 
-To review or unmark bad channels, click **Bad...** on the toolbar. From the dialog, you can unmark individual channels or clear all bad-channel markings.
+Hidden and bad are separate states: restoring a hidden bad channel does not clear its bad mark, and unmarking a channel as bad does not make a hidden channel visible.
 
-Bad channels are excluded from review-related computations and from automatic montage generation.
-
----
-
-## 5. Preprocessing 
+## 5. Preprocessing
 
 ### 5.1 Montage / Reference
 
-Use **Preprocessing > Montage / Reference** to switch reference mode.
+Choose **Preprocessing > Montage / Reference**, then select:
 
-Available options:
+- **Monopolar**: display each imported channel
+- **Bipolar**: display automatic `Channel 1 - Channel 2` derivations
+- **Average**: subtract the shared channel average
+- **Median**: subtract the shared channel median
+- **Common Reference...**: subtract one selected physical channel
 
-- **Monopolar**: shows each channel as imported
-- **Bipolar**: builds an automatic bipolar montage and displays `Channel 1 - Channel 2`
-- **Average**: subtracts the shared average from each channel
-- **Median**: subtracts the shared median from each channel
-- **Common Reference...**: subtracts one chosen physical channel from each displayed channel
-
-Average and Median exclude bad channels from the reference pool and “Bad segment” samples are masked while calculating the shared reference. Hidden channels remain in the pool
+Average and Median exclude bad channels from the reference pool. Samples covered by a **Bad segment** annotation are masked during reference calculation. Hidden channels remain in the pool.
 
 #### Automatic Bipolar Montage
 
-When **Bipolar** is selected, the application immediately builds and applies
-an automatic bipolar montage. It extracts the electrode prefix and contact
-number from each channel label, groups contacts by electrode, sorts them by
-number, and pairs only consecutive contacts within the same electrode. For
-example, `A1`, `A2`, and `A3` produce `A1-A2` and `A2-A3`.
+Bipolar mode extracts each label's electrode prefix and contact number, groups and sorts contacts by electrode, and pairs consecutive contacts. For example, `A1`, `A2`, and `A3` produce `A1-A2` and `A2-A3`.
 
-Labels that cannot be parsed and contacts without a consecutive neighbor are
-skipped. Channels already marked as bad are also excluded when the automatic
-montage is generated. If no valid pairs can be created, the application shows
-a warning. If only some channels are skipped, it displays a message listing
-them. If the imported labels already look bipolar, the application asks for
-confirmation before applying another bipolar derivation.
+Unrecognized labels, non-consecutive contacts, and bad channels are skipped. The application reports skipped channels and warns if no pair is possible. If labels already appear bipolar, it asks before deriving them again.
 
-Bipolar mode performs true re-referencing rather than changing labels only.
-Each displayed bipolar trace is calculated as **Channel 1 minus Channel 2**.
-Hiding a displayed bipolar channel removes that derived trace from the viewer.
-Bad channels remain visible unless they are hidden; use **Hide all Bad** to
-remove them from view. Hiding a source channel does not exclude it when a new
-automatic montage is generated.
+Each trace contains the actual difference **Channel 1 minus Channel 2**, not only a new label. Hiding a derived trace removes it from view. Hiding a source channel does not exclude it from later automatic generation.
+
+Bad derived channels remain visible unless hidden; use **Hide all Bad** to remove them from view. Automatic generation uses the bad-channel state that exists when Bipolar mode is selected.
 
 ### 5.2 Edit Bipolar Montage
 
-The toolbar **Edit Bipolar...** button becomes visible when bipolar mode is active.
-
-The editor lets you:
-
-- change Channel 2 in automatic pairs
-- add manual pairs
-- restore the default automatic montage
-- apply edits with **OK** or discard them with **Cancel**
+The **Edit Bipolar...** button is available only in Bipolar mode. Use it to change Channel 2, add pairs, restore automatic pairs, apply with **OK**, or discard with **Cancel**.
 
 #### Validation and Warnings
 
-The editor validates all pairs before applying the montage. **Channel 2 must be
-different from Channel 1**, and every bipolar channel name must be unique. If
-either check fails, the montage is not changed. Channels marked as bad are not
-available when choosing channels for edited pairs.
+Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied. Bad channels cannot be selected.
 
-If Channel 1 and Channel 2 have recognizable labels but belong to different
-electrode groups, the editor displays a **Cross-electrode bipolar pairs**
-warning. Choose **Cancel** to leave the current montage unchanged or **Keep
-edit** to apply the cross-electrode pair intentionally. This warning preserves
-editing flexibility while flagging an unusual configuration.
+A pair spanning two recognized electrode groups triggers a **Cross-electrode bipolar pairs** warning. Choose **Cancel** or **Keep edit**.
+
+**Cancel** leaves the current montage unchanged. **Keep edit** allows an intentional cross-electrode pair; the warning is not an error.
 
 ### 5.3 Display Filters
 
-Use **Preprocessing > Display Filters...** to show or hide the display-filter
-controls above the signal viewer.
+Choose **Preprocessing > Display Filters...** to show or hide filter controls above the viewer.
 
-Use **Scope** to choose which filter profile to edit:
+Use **Scope** to edit:
 
-- **All** applies the same settings to Macro and Micro channels.
-- **Macro** changes only the Macro profile.
-- **Micro** changes only the Micro profile.
+- **All**: Macro and Micro profiles
+- **Macro**: Macro channels only
+- **Micro**: Micro channels only
 
-Each profile contains **High Pass (Hz)**, **Low Pass (Hz)**, and a **Notch**
-choice: **Off**, **50 Hz + harmonics**, or **60 Hz + harmonics**. The high-pass
-and low-pass controls are numeric and cannot be empty. Enter `0` to disable the
-corresponding cutoff.
+Each profile has numeric **High Pass (Hz)** and **Low Pass (Hz)** controls and **Notch** choices: **Off**, **50 Hz + harmonics**, or **60 Hz + harmonics**. Enter `0` to disable a cutoff; numeric fields cannot be empty.
 
-Click **Apply filters** to save the displayed values to the selected scope.
-Click **Back to default** to clear the selected scope's filters.
+Click **Apply filters** to apply the profile or **Back to default** to clear it. Active cutoffs must be below Nyquist, and high pass must be lower than low pass.
 
-Each active cutoff must be below the recording's Nyquist frequency. When both
-cutoffs are active, the high-pass value must be lower than the low-pass value.
+Filters are non-destructive. The montage/reference is applied first, then the relevant Macro or Micro profile. A padded interval is filtered before the requested window is displayed to reduce edge artifacts.
 
-Display filters are non-destructive: the original recording is never modified.
-The active reference is applied first, followed by the appropriate Macro or
-Micro filter profile. For responsive browsing of large recordings, the viewer
-reads the visible interval with extra padding, applies the filters, and then
-crops the padding before plotting.
-
-The PSD panel applies the same Macro and Micro display-filter profiles to the
-selected PSD interval. Computation algorithms have separate preprocessing
-rules: display high-pass and low-pass values are not automatically reused, and
-the selected notch mode is reused only where stated in the relevant computation
-section.
+The PSD uses these profiles. Computations use separate bandpass rules; only algorithms that explicitly say so reuse the notch choice.
 
 ### 5.4 Power Spectrum
 
-Use **Preprocessing > Power Spectrum** to inspect power spectral density (PSD)
-over a chosen recording interval. Enter a start and stop time in the interval
-dialog. The interval must remain inside the recording, and the stop time must
-be later than the start time. The PSD opens as a tab beside the main viewer.
+Choose **Preprocessing > Power Spectrum**, enter start and stop times, and confirm. Stop must follow start, and both values must be inside the recording. The PSD opens beside the main viewer.
 
-#### Macro and Micro panels
+#### Macro and Micro Panels
 
-The PSD tab is divided into independent **Macro** and **Micro** panels. Channel
-membership comes from **Channels > Channel Groups...**. Channels are assigned
-to Macro by default, so the Micro panel remains empty until at least one channel
-is assigned to Micro. If channel-group assignments change while the PSD tab is
-open, the two panels are refreshed automatically.
+The tab contains independent **Macro** and **Micro** panels based on Section 4.1. Group changes refresh an open PSD. In Bipolar mode, a pair follows Channel 1's group.
 
-In Bipolar montage, each displayed bipolar pair is placed in the same PSD group
-as its first source channel (Channel 1). This keeps the derived channel in one
-panel even if a manually edited pair crosses Macro and Micro groups.
+Each panel has its own channel lists, selection, plot, and zoom state. Channels use their group's display-filter profile. Power is shown in **dB/Hz** against **Hz**.
 
-Each group has its own:
+The **Excluded channels** list is on the left and **Displayed channels** on the right. If group assignments change while the tab is open, both panels update automatically. A Micro panel remains empty until at least one channel is assigned to Micro.
 
-- **Excluded channels** list on the left
-- **Displayed channels** list on the right
-- PSD plot at the bottom
-- channel selection, inclusion/exclusion controls, and zoom state
+#### Curves and Channel Status
 
-Macro and Micro channels are processed with their corresponding active display
-filter profiles before the PSD is calculated. The two panels can therefore show
-different filtered spectra for the same interval. PSD values are displayed in
-**dB/Hz** against frequency in **Hz**.
+All group channels initially appear, including hidden and bad channels.
 
-#### Displaying and selecting PSD curves
+- Select displayed channels and click `<<` to exclude them from that PSD plot.
+- Select excluded channels and click `>>` to restore them.
+- **Exclude all** and **Include all** affect only the current panel.
+- Click a name or curve to emphasize it.
+- Double-click a plot to restore its default range.
 
-All channels in each group are included in its plot by default. This includes
-channels hidden from the main viewer and channels marked as bad. Excluding a
-channel from a PSD plot only changes the PSD tab; it does not hide the channel
-in the main viewer or change its Macro/Micro assignment.
+PSD exclusion does not hide a trace or change its group. Bad channels appear in red. **Mark selected as bad** and **Unmark selected as bad** update the same state used by the main viewer.
 
-- Select one or more channels under **Displayed channels**, then click `<<` to
-  move them to **Excluded channels**.
-- Select channels under **Excluded channels**, then click `>>` to return them
-  to **Displayed channels**.
-- **Exclude all** and **Include all** operate only on the corresponding Macro
-  or Micro panel.
-- Click a displayed channel name or its curve to make it the active channel.
-  Its curve and list label are emphasized.
-- Each plot can be zoomed independently. Double left-click inside a plot to
-  restore that plot's full default range.
+Clicking a curve or displayed-channel name makes it active. Its label and curve are emphasized; a selected bad channel has a thicker red curve. Macro and Micro plots keep independent zoom states.
 
-Bad channels remain visible in red. Use **Mark selected as bad** or
-**Unmark selected as bad** on selected entries in either list to update the
-application-wide bad-channel state. A selected bad channel is shown with a
-thicker red curve.
-
-#### Plot Interaction
-
-The Macro and Micro PSD plots support PyQtGraph mouse controls for zooming and
-panning. Each plot keeps an independent view, and double left-clicking inside a
-plot restores its full default range. These actions change visualization only;
-they do not recalculate the PSD or modify computation results.
-
-The PyQtGraph context menu is disabled in the current PSD panels, so its
-built-in auto-range and export options are not available.
-
----
+PyQtGraph mouse controls provide zoom and pan. They affect visualization only. The context menu is disabled, so built-in auto-range and export actions are unavailable.
 
 ## 6. Compute
 
-### 6.1 Open and Use the Computation Panel
+### 6.1 Computation Panel
 
-Open the panel with **Compute > Open Computation Panel**. You can also select
-channels in the viewer, right-click the selection, and choose
-**Open Computation Panel**. The panel can be docked, floated, moved, or resized.
+Choose **Compute > Open Computation Panel**, or right-click selected channels and choose **Open Computation Panel**. The dock can be moved, resized, or floated. It analyzes the open recording.
 
-The panel analyzes the recording currently open in the application; it does not open a separate data file.
+#### Shared Controls
 
-#### Panel Structure
+- **Algorithm**: REI, Gamma Spikes, or HFO
+- **Channels**: analysis inputs
+- **Time**: interval and method settings
+- **Output**: run, cancel, import, review, and export
 
-The panel has four main sections:
+Time and Output controls change with the algorithm.
 
-- **Algorithm**: select **REI**, **Gamma spikes**, or **HFO**.
-- **Channels**: choose the channels to analyze.
-- **Time**: define the analysis interval and algorithm-specific parameters.
-- **Output**: run or cancel an analysis, import results, open result views, and
-  export results.
+Use **All**, **Macro**, or **Micro** to replace the list with non-bad channels from that scope. Use **Add...**, **Remove selected**, or **Clear** to edit it. Verify the list after changing montage/reference. The signal is extracted using the montage/reference active when the run starts.
 
-The **Time** and **Output** controls change with the selected algorithm.
+Confirmed bad channels are unavailable for selection. Display high-pass and low-pass filters are not reused unless an algorithm explicitly includes them in its preprocessing.
 
-#### Channel Selection
+#### Import Results
 
-The **Channels** list defines the analysis input. Confirm it before every run,
-especially after changing the montage or reference. Use:
+Click **Import results...** and select a folder exported by the application. The algorithm is detected automatically. First load the matching recording and montage. Import fails if files are missing, the recording differs, or an imported channel is unavailable in the current montage.
 
-- **All** to replace the list with all non-bad channels
-- **Macro** or **Micro** to replace it with the non-bad channels in that group
-- **Add...** to search for and add channels
-- **Remove selected** or **Clear** to remove channels
+A valid import restores the available summaries, event-review data, metadata, and main-viewer overlays. Importing replaces the current result for the detected algorithm; export unsaved manual reviews first.
 
-When a run starts, the selected channels are extracted using the montage or reference active at that moment. Confirmed bad channels are not available for selection. Display high-pass and low-pass filters are not applied unless an algorithm explicitly defines them as part of its own preprocessing.
+#### Export Results
 
-#### Shared Output, Import, and Export Controls
+Each algorithm has its own export button. Export folders contain tables, metadata, and a README; REI also includes a numeric and image heatmap. The application asks before replacing files.
 
-The **Output** section always contains the run control and **Import results...**.
-Each algorithm shows its own cancel button while processing. Review and export buttons become available after a successful run or import.
-
-To restore results, first load the matching recording and montage. Click
-**Import results...** and select a folder previously exported by the
-application. The algorithm is detected automatically. Available summaries,
-review data, metadata, and viewer markers are restored. Import is rejected when
-required files are missing or the recording, channels, or montage are
-incompatible.
-
-Use the export button shown for the selected algorithm. The application asks before replacing existing result files.
-
+Run and import controls are always available when their prerequisites are met. Review and export buttons become available after a successful run or import. During processing, the selected algorithm shows its own cancel button.
 
 ### 6.2 Recruitment Energy Index (REI)
 
 #### Definition, Origin, and Validation
 
-The Recruitment Energy Index (REI) estimates how early and strongly each channel becomes involved during seizure onset. It compares ictal
-high-frequency energy with baseline activity, combines this energy change with the estimated recruitment time, and assigns each channel a normalized score and rank. A higher score indicates earlier and stronger recruitment relative to the other analyzed channels. REI is a review aid and should be interpreted together with the EEG/iEEG traces and clinical context.
+REI estimates how early and strongly each channel is recruited at seizure onset. It combines baseline-normalized high-frequency energy with recruitment time, then assigns a score and rank. Higher scores indicate earlier, stronger recruitment relative to the analyzed channels.
 
-This implementation was adapted from Lucas A.'s
-[IEEG_EI project](https://github.com/allucas/IEEG_EI), a Python interface for calculating EI from iEEG.org recordings. It draws on the EI method introduced by [Bartolomei et al. (2008)](https://doi.org/10.1093/brain/awn111), which combines high-frequency activity at seizure onset with the relative timing of each channel's involvement.
+This implementation adapts Lucas A.'s [IEEG_EI project](https://github.com/allucas/IEEG_EI) and the Epileptogenicity Index method of [Bartolomei et al. (2008)](https://doi.org/10.1093/brain/awn111). Numerical parity and clinical validation are not documented for this GUI implementation. REI is a review aid, not a clinical conclusion.
 
-No numerical parity with the source implementation or clinical-validation results are currently documented for this GUI implementation.
+#### Time
 
-#### Time Input
+Enter **Seizure onset** and **Seizure offset**. Onset sets these defaults:
 
-Enter **Seizure onset** and **Seizure offset**, then check the baseline and ictal windows. Click **Use default windows** to set:
+- **Baseline**: 70 to 10 seconds before onset
+- **Ictal**: 5 seconds before to 20 seconds after onset
 
-- baseline: 70 to 10 seconds before seizure onset
-- ictal: 5 seconds before to 20 seconds after seizure onset
+Click **Use default windows** to restore them. REI has no minimum seizure duration. Offset must follow onset. Both windows must be non-empty and inside the recording. Baseline must end at or before onset; ictal must start at or before onset and end no later than seizure offset. Shorten invalid default windows.
 
-All windows must be non-empty and remain inside the recording. Seizure offset must be after seizure onset, and the ictal window must end no later than the seizure offset. REI does not impose a minimum seizure duration.
+For example, if a seizure ends less than 20 seconds after onset, shorten the default ictal window so it ends no later than the entered offset. If onset occurs early in the recording, move or shorten the baseline so it remains within the available data.
 
-#### Advanced Parameters and Preprocessing
+#### Preprocessing and Advanced Parameters
 
-Bipolar montage is recommended. If another montage is active, the application lets you switch to Bipolar, continue with the current montage, or cancel.
+Bipolar is recommended. With another montage, choose **Switch to Bipolar**, **Run Anyway**, or **Cancel**. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.
 
-REI excludes confirmed bad channels and ignores the display high-pass and low-pass filters. It applies a zero-phase fourth-order Butterworth bandpass; the default range is 60-140 Hz. Use **Advanced parameters...** to change this range.
-The active notch setting is used when enabled. 
+REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default **60–140 Hz**. In **Advanced parameters...**, the lower limit must be positive and below the upper limit; the upper limit must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are fixed.
 
-#### Run and Outputs
+REI reuses each channel's Macro/Micro notch choice. If notch is off for all selected channels, the application warns about possible line-noise effects.
 
-Click **Run REI**. When the analysis finishes, the main viewer displays the REI rank beside each analyzed channel. Channel labels are color-coded by normalized
-REI score, from orange for lower scores to green for higher scores. An orange
-tick on each trace marks the estimated recruitment time when it falls inside
-the visible time window. Channels excluded from the analysis do not receive an
-REI rank, score color, or recruitment marker.
+Confirmed bad channels are excluded. With mixed Macro and Micro selections, each channel uses the notch profile assigned to its own group.
 
-Use:
+#### Run and Results
 
-- **Open REI summary** for channel scores, ranks, peak high-frequency energy, and recruitment delays
-- **Open REI heatmap** for high-frequency energy around seizure onset, sorting, and top-channel controls
-- **Export REI results** to save `rei_summary.csv`, `rei_heatmap.csv`,
-  `rei_heatmap.png`, `rei_metadata.json`, and `README.txt`
+Click **Run REI**. Status and elapsed time update in the background. **Cancel REI run** requests cancellation; the current filtering step may finish first. Cancellation preserves the last completed result.
+
+##### Main Viewer
+
+The viewer adds each analyzed channel's rank and colors its label from orange (lower score) to green (higher score). An orange tick marks visible recruitment time. Excluded channels receive no overlay.
+
+The marker is placed at the estimated recruitment time, not at the entered seizure onset. It appears only when that time lies inside the visible window.
+
+##### Channel-Level Summary
+
+**Open REI summary** shows one sortable row per channel. Selecting a row selects that channel in the viewer.
+
+- **Channel**: analyzed channel or bipolar derivation
+- **REI score**: normalized score from 0 to 1 within this analysis
+- **Rank**: descending score order; rank 1 is highest
+- **Peak HFER activity**: maximum baseline-normalized ictal high-frequency energy
+- **Recruitment delay (s)**: time relative to seizure onset; negative is before onset
+
+Scores and ranks are normalized within the current channel set. Changing channels, time windows, montage, or frequency limits can change them; compare separate runs cautiously.
+
+##### Heatmap
+
+**Open REI heatmap** shows log10 HFER over the ictal window and a score bar plot. Sort by score, delay, peak/mean HFER, original order, or name. **Show top N channels** limits rows. These controls affect visualization only.
+
+Heatmap time is expressed relative to seizure onset. Sorting or limiting rows does not change scores or exported values.
+
+##### Export
+
+**Export REI results** creates:
+
+- **`rei_summary.csv`**: channel group, score, rank, delay, and peak HFER
+- **`rei_heatmap.csv`**: HFER values by channel and time
+- **`rei_heatmap.png`**: heatmap image
+- **`rei_metadata.json`**: source, montage, seizure timing, baseline/ictal windows, sampling rate, channel counts, filters, and parameters
+- **`README.txt`**: file, value, and unit definitions
 
 ### 6.3 Gamma Spikes
 
 #### Definition, Origin, and Validation
 
-Gamma-spike analysis detects interictal spikes and measures associated gamma
-activity. Events are classified as gamma or non-gamma spikes for channel-level
-and event-level review.
+Gamma Spike analysis detects interictal spikes, measures associated **30–100 Hz** activity, and classifies events as **gamma** or **non-gamma**.
 
-The implementation is a Python translation of the project's original MATLAB
-spike-gamma workflow and uses the Janca Hilbert-envelope method for candidate
-spike detection. The translated core was checked against the original
-MATLAB/Python 2 behavior, and Brainstorm was used as an external comparison
-during validation. The segmented long-recording pipeline was then checked for
-consistency with that reference workflow. These are implementation checks, not
-clinical sensitivity or specificity studies.
+It is a Python translation of the [Lab-Frauscher Spike-Gamma](https://github.com/Lab-Frauscher/Spike-Gamma) MATLAB workflow. Candidate detection uses the Janca Hilbert-envelope detector; artifact/spindle rejection, boundary estimation, and preceding-gamma measurement follow the source workflow.
 
-#### Time Input
+The translation was compared with the MATLAB workflow, Brainstorm served as an external validation comparison, and segmented processing was checked for consistency. These checks do not establish clinical sensitivity or specificity.
 
-Enter the analysis start and end times. The full recording is selected by
-default.
+The validation concerned implementation behavior and agreement with the reference workflows; it did not validate the detector for diagnosis or replace expert EEG/iEEG review.
 
-#### Run and Outputs
+#### Time
 
-Click **Run Gamma Spike Detector**. The detector processes the interval in
-10-minute chunks with 10 seconds of context, merges detections once, and then
-calculates spike boundaries and gamma measurements channel by channel. This
-limits memory use on long recordings.
+Enter a non-empty interval inside the recording. The full recording is selected by default.
 
-The analysis uses the active montage and notch setting but not the display
-high-pass or low-pass filters. Progress and estimated remaining time appear in
-the status area. Click **Cancel gamma run** to stop an active run.
+#### Preprocessing
 
-When the analysis finishes, use:
+Gamma Spike uses the active montage and ignores display high/low-pass values. It reuses each channel's Macro/Micro notch choice and warns if notch is off for all selected channels.
 
-- **Open channel-level summary** for spike counts, gamma-spike rate, and mean
-  gamma measurements
-- **Open spike grid** for raw traces, spike boundaries, gamma windows,
-  time-frequency views, and manual event classification
-- the **non-gamma** and **gamma** visibility controls to show or hide event
-  markers and timeline entries
-- **Export gamma results** to save `gamma_channel_summary.csv`,
-  `gamma_spike_events.csv`, `gamma_metadata.json`, and `README.txt`
+Detection and boundary estimation use an internal **10–60 Hz** band; gamma measurement uses **30–100 Hz**. Boundary and gamma signals use zero-phase, fourth-order Butterworth filters.
 
-Per-spike heatmaps are not exported because they can create very large folders.
+#### Run and Results
+
+Click **Run Gamma Spike Detector**. The interval is processed in 10-minute chunks with 10 seconds of context, then merged before boundary and gamma calculations. This limits memory use. Progress and estimated time are shown. **Cancel gamma run** stops an active run.
+
+Context reduces filtering artifacts at chunk boundaries and is removed before results are merged, preventing duplicate boundary events. Cancellation preserves the last completed Gamma Spike result.
+
+##### Main Viewer
+
+Each P1–N2 interval is highlighted on its waveform and as a bar above the viewer: **blue** for non-gamma and **orange** for gamma. Events also appear on the full-recording timeline. **P1** is spike onset, **N1** the main peak, and **N2** spike end.
+
+The **non-gamma** and **gamma** checkboxes change visibility only. Click a highlight or top bar to open the event in the spike grid. Click a timeline event to jump to it.
+
+The timeline also marks the current viewer window. Hiding a class does not delete events, alter classifications, or change exported results.
+
+##### Channel-Level Summary
+
+**Open channel-level summary** provides sortable rows and **All spikes**, **Gamma only**, and **Non-gamma only** filters.
+
+**Gamma only** keeps channels with at least one officially gamma-classified spike. **Non-gamma only** keeps channels with no officially gamma-classified spike. These controls filter rows; they do not reclassify events.
+
+- **Channel**: analyzed channel or bipolar derivation
+- **Total spikes**: retained events after post-processing
+- **Gamma-spikes**: events whose official class is gamma
+- **Spike-gamma rate**: `Gamma-spikes / Total spikes × 100`; 0% if none
+- **Mean gamma power**: mean finite 30–100 Hz amplitude for official gamma events, in native units
+- **Mean gamma duration**: mean selected gamma-episode duration in ms
+
+Mean values are blank when no finite measurement exists.
+
+##### Spike Grid and Manual Review
+
+**Open spike grid** shows cards filterable by class, channel, and minimum gamma power. Select one to view raw and 30–100 Hz signals, time-frequency content, P1/N1/N2, gamma measurements, and the gamma window. Review plots do not alter measurements.
+
+Page and layout controls support large result sets. The 30–100 Hz review trace is a visualization and is separate from the saved measurements.
+
+Set **Official class** to **gamma**, **non-gamma**, or **unclassified**. Changes are immediate, mark the event reviewed, and update viewer overlays. There is no separate Save button or bulk classification.
+
+The official class replaces the algorithmic class in summaries and viewer filters; the original algorithmic class remains stored for traceability. Events are reviewed one at a time.
+
+Manual changes exist only in the current result; project saving does not preserve them. Finish review before export and export again after later changes. Closing, importing, or running a replacement result can discard unexported changes.
+
+##### Export
+
+**Export gamma results** creates:
+
+- **`gamma_channel_summary.csv`**: per-channel counts, rate, mean power, and mean duration using official classes
+- **`gamma_spike_events.csv`**: channel, event number, timing, 1-based samples, algorithmic/official/manual classes, P1/N1/N2 in samples and seconds, gamma measurements, review status, and errors
+- **`gamma_metadata.json`**: source, analysis interval, sampling rate, chunk/context settings, notch configuration, channel/event counts, completed measurements, and timings
+- **`README.txt`**: file, unit, indexing, context, and filter definitions
+
+Per-event heatmaps are not exported; they remain available in the spike grid.
+
+Summary counts use the official classes present at export, including manual corrections. Export again if a class changes afterward.
 
 ### 6.4 High-Frequency Oscillations (HFOs)
 
 #### Definition, Models, and Validation
 
-HFO analysis detects candidate high-frequency events and classifies them for
-manual review. The three models mainly differ in their source implementation,
-validated frequency range, sampling requirements, and classifier.
+HFO analysis detects candidate high-frequency events, classifies them, and presents them for review. Every route uses selected channels, the active montage and notch settings, one or more candidate detectors (**STE**, **MNI**, or **Hilbert**), shared duration/edge rules, and the same review/export interface.
 
-The model sources are the
-[pyHFO pyBrain branch](https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain)
-and [Omni-iEEG](https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg).
+The candidate detector locates possible events; the selected model classifies them. Choosing the same detector across routes does not make their preprocessing or classifications equivalent.
 
-- **pyhfo_pybrain-80-500 Hz** is the default. It preserves the native sampling
-  rate and uses the original pyHFO Model A and Model S classifiers. Validation
-  matched 53/53 Zurich15 and 500/500 HUP134 candidate-pool labels. In the full
-  Zurich15 route, events and labels matched for STE (1/1), MNI (36/36), and
-  Hilbert (43/43).
-- **pyhfo_omni_legacy-80-300 Hz** reproduces Omni's legacy pyHFO route. It
-  requires a sampling rate of at least 1000 Hz and processes at 1000 Hz. On the
-  Zurich10 candidate pool, 611/611 labels matched and the maximum recorded score
-  difference was 0.0.
-- **eHFO-80-300 Hz** reproduces Omni's three-model artifact, spike, and eHFO
-  classifier using the official checkpoints. It has the same sampling
-  requirement as the Omni legacy route. On Zurich10, 611/611 labels matched,
-  with exact feature and score agreement.
+Routes differ in preprocessing, supported band, sampling behavior, classifier, checkpoints, and classes. Results are not interchangeable. Sources: [pyHFO pyBrain](https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain) and [Omni-iEEG](https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg).
 
-These are technical parity tests against each model's source implementation,
-not clinical performance studies. They apply only to the stated validated
-configuration; changing the band or detector settings creates an unvalidated
-configuration.
+- **pyhfo_pybrain — 80–500 Hz**: default; native sampling; original pyHFO Model A and Model S. Lower rates work only when Nyquist supports the band; above 1000 Hz is required for the complete 80–500 Hz band.
+- **pyhfo_omni_legacy — 80–300 Hz**: Omni legacy pyHFO route; requires at least 1000 Hz and processes at 1000 Hz.
+- **eHFO — 80–300 Hz**: Omni artifact, spike, and eHFO three-model route with official checkpoints; requires at least 1000 Hz and processes at 1000 Hz.
 
-#### Time Input
+These implementations reproduce their stated software routes; this is not independent clinical validation. Below 1000 Hz, prefer a compatible pyhfo_pybrain band and interpret comparisons cautiously.
 
-Enter the analysis start and end times. The full recording is selected by
-default. This input behaves the same for all three models.
+The 1000 Hz threshold is enforced for both Omni routes. For pyhfo_pybrain, the selected upper frequency—not the model name alone—determines Nyquist compatibility.
 
-#### Advanced Parameters and Preprocessing
+#### Time
 
-Select a model and compatible band preset. The default band is 80-500 Hz for
-`pyhfo_pybrain` and 80-300 Hz for both Omni models. **Ripples 80-250 Hz** and
-**Custom** are available for all models; **Fast ripples 250-500 Hz** is available
-only for `pyhfo_pybrain`.
+Enter a non-empty interval inside the recording. The full recording is selected by default; all models use the same controls.
 
-All models use the same **Advanced parameters...** interface. Select one or more
-candidate detectors—STE, MNI, or Hilbert—and edit their parameters if needed.
-At least one detector must remain selected. Click **Save** to apply advanced
-changes. The high frequency must remain below the effective Nyquist limit.
+#### Preprocessing and Advanced Parameters
 
-The analysis uses the active montage and notch setting, not the display
-high-pass or low-pass filters. Candidates that exceed the maximum duration or
-fall inside the analysis-edge padding are excluded before classification and
-counted in the metadata.
+Choose a model and band. Defaults are **80–500 Hz** for pyhfo_pybrain and **80–300 Hz** for Omni models. **Ripples 80–250 Hz** and **Custom (experimental)** are available for all routes; **Fast ripples 250–500 Hz** is pyhfo_pybrain-only.
 
-#### Run and Outputs
+For a custom band, select **Custom (experimental)** and edit **Low frequency** and **High frequency** under **Advanced parameters...**. Click **Save** for the next run. Custom bands are outside documented parity validation, may reset after restart, and appear only under **All ranges** in result filters.
 
-Click **Run HFO Detector**. All models use the same background-processing,
-progress, estimated-time, and cancellation interface.
+In **Advanced parameters...**, enable one or more STE, MNI, or Hilbert detectors and edit their parameters. At least one must remain enabled. The application validates band limits, event duration, merge gap, minimum cycles, and detector settings.
 
-When the analysis finishes, use:
+Disabling a detector preserves its parameter values but excludes it from the next run. Detector selection changes candidate generation for every model and can therefore change both event counts and classifications.
 
-- **Open HFO summary** for channel-level candidate and class counts
-- **Open HFO event grid** for raw and filtered traces, spectrograms, detector
-  information, classifier propositions, and manual review
-- the class visibility controls to show or hide **artifact**, **HFO**,
-  **spkHFO**, **eHFO**, **spk-eHFO**, and **unclassified** events
-- **Export HFO events** to save `hfo_channel_summary.csv`, `hfo_events.csv`,
-  `hfo_metadata.json`, and `README.txt`
+HFO analysis uses the active montage and each channel's Macro/Micro notch choice. It excludes bad channels and ignores display high/low-pass values. Events exceeding maximum duration or lying in analysis-edge padding are excluded before classification and counted in metadata.
 
-Manual classification does not overwrite the model's original proposition. A
-deleted event is removed from active counts but retained in exported data for
-traceability.
+The padding rule prevents incomplete events at the selected interval boundaries from entering classification. Boundary exclusions are reported separately from active candidates.
 
+#### Run and Results
 
-#### Shared Result Navigation
+Click **Run HFO Detector**. All models show progress and estimated time. **Cancel HFO run** requests cancellation between steps; the active detector or classifier may finish first. Cancellation preserves the last completed result.
 
-Gamma-spike and HFO results add event-visibility checkboxes beside the montage
-label and a result timeline below the viewer. These controls only show or hide
-results; they do not filter the EEG signal or change saved results.
+##### Main Viewer
 
-The timeline covers the full recording and highlights the current viewer
-window. Click a timeline event to jump to its channel and time. Click an event
-marker in the viewer to open the corresponding review window.
+Each event is highlighted on its waveform, above the viewer, and on the full-recording timeline. Official-class colors are:
 
----
+- **Artifact**: red
+- **HFO / non-spike HFO**: blue
+- **spkHFO / spike-HFO**: green
+- **eHFO**: teal
+- **spk-eHFO / spike-eHFO**: violet
+- **Unclassified**: gray
 
-## 9. Review Menu
+Deleted events are hidden. Class checkboxes and **Range** change visibility only. Click a highlight or top bar to open the event grid; click a timeline event to jump to it.
 
-### 9.1 Annotate
+The timeline marks the current viewer window. Visibility filters do not change official classes, summary counts, or exports.
 
-Use **Review > Annotate** to add annotations to the signal display.
+##### Channel-Level Summary
 
-1. Choose annotation type
-2. Choose annotation scope
-3. Add an optional note
-4. Click **OK**
-5. Drag on the signal display where you want to place the annotation
+**Open HFO summary** shows sortable rows. Filter by **All channels**, **At least one HFO**, or **At least one spkHFO**. Selecting a row selects its viewer channel.
 
-Annotation scopes:
+**At least one HFO** keeps channels with an accepted event. **At least one spkHFO** keeps channels with an accepted spike-associated event. Filters use official classes and exclude deleted events.
 
-- clicked channel
-- selected channels
-- all channels
+- **Channel**: analyzed channel or bipolar derivation
+- **Candidates**: active candidates; deleted events excluded
+- **Accepted HFO**: official HFO, non-spike HFO, spike-HFO, eHFO, or spike-eHFO events
+- **non-spkHFO**: accepted events without spike association
+- **spkHFO**: accepted events with spike association
+- **Artifact**: official artifact events
+- **HFO/min** and **spkHFO/min**: count divided by analysis duration in minutes
+- **Artifact %**: `Artifact / Candidates × 100`; 0% if none
 
-Press **Escape** to cancel annotation mode before placing an annotation.
+The footer reports totals and boundary exclusions. Counts use current official classes.
 
-To modify an annotation from the viewer, right-click the annotation region and choose **Edit annotation...** or **Delete annotation**.
+Rates use the selected analysis duration, not the summed duration of detected events. Artifact percentage uses active candidates as its denominator, so deleting or reclassifying an event can update both the numerator and denominator shown in the summary.
 
-When annotations exist, the Annotations dock appears. From the list, you can click an annotation to jump to it or delete it from the plot context menu.
+##### Event Grid and Manual Review
 
----
+**Open HFO event grid** shows cards filterable by channel, class, frequency range, and channel/time order. Select one to inspect signals, spectrogram or FFT, timing, band, detector, classifier proposition, available probabilities, class, and review status. Display controls do not recalculate events.
 
+When available, probabilities include accepted-HFO, artifact, and spike association. The filtered-band, context-window, spectrogram, and FFT controls affect review visualization only and do not alter stored event boundaries or measurements.
 
-## 3. File Menu
+Set **Official class** to **artifact**, **HFO**, **non-spike HFO**, **spike-HFO**, **eHFO**, **spike-eHFO**, **unclassified**, or **deleted**. Changes apply immediately; the original proposition remains stored. **Delete / exclude event** removes an event from overlays and summaries but keeps it in the exported event table.
 
-### 3.1 Save
+Manual changes update the main-viewer highlight and timeline immediately. Deleted events remain exportable so the original candidate and the review decision can be audited.
 
-Use **File > Save** to save the current project.
+There is no separate Save button. Project saving does not preserve HFO results or reviews. Finish review before export and export again after later changes.
 
-The `.ieeg` project file saves:
+Running another HFO analysis or importing a different HFO result replaces the current in-memory result. Export reviewed results before either action.
 
-- the linked raw file
-- annotations
-- hidden channels
-- bad channels
-- macro/micro channel groups
-- an edited bipolar montage, ready for reuse after Bipolar is selected
-- macro and micro display-filter settings
-- display time range, visible-channel count, and amplitude scale
-- the selected computation algorithm and channels
-- REI seizure timing, baseline/ictal windows, and frequency settings
-- gamma-spike and HFO analysis intervals
-- HFO classifier, band, detector, and advanced-parameter settings
-- the last REI result metadata, when available
+##### Export
 
-The project file does not save:
+**Export HFO events** creates:
 
-- the active reference mode; a project reopens in Monopolar
-- complete REI, gamma-spike, or HFO results
-- the Light/Dark theme
-- the main-viewer time position
+- **`hfo_channel_summary.csv`**: per-channel candidate, accepted, non-spike, spike-associated, eHFO, artifact, deleted, and boundary counts; rates and artifact percentage
+- **`hfo_events.csv`**: identity, timing, sample indices, duration, detector, band, input/detection sampling rates, probabilities, propositions, official/manual classes, review status, boundary flags, and errors; deleted events remain included
+- **`hfo_metadata.json`**: source, interval, sampling rates, model, detectors, parameters, notch settings, montage/reference, exclusions, classifier origin/status, and review totals
+- **`README.txt`**: file, column, class, sampling, preprocessing, and unit definitions
+
+## 7. Review Menu
+
+### 7.1 Annotate
+
+Choose **Review > Annotate**, then:
+
+1. Select the annotation type and scope.
+2. Add an optional note.
+3. Click **OK**.
+4. Drag over the required interval.
+
+Scope can be the clicked channel, selected channels, or all channels. Press **Escape** before placement to cancel.
+
+Right-click an annotation to edit or delete it. The Annotations dock lists existing annotations; select one to jump to it.
+
+Viewer context actions apply to the annotation region under the pointer. Deleting an annotation removes it from both the viewer and the dock.
+
+## 8. File Menu
+
+### 8.1 Save
+
+Choose **File > Save**. The `.ieeg` project stores:
+
+- raw-file link; annotations; hidden/bad channels; Macro/Micro groups
+- edited bipolar pairs for later Bipolar use
+- Macro/Micro display filters; time range; visible-channel count; amplitude scale
+- selected computation algorithm and channels
+- REI seizure timing, baseline/ictal windows, and frequency limits
+- Gamma Spike and HFO analysis intervals
+- HFO model, band, detector selection, and advanced parameters
+- latest REI result metadata, when available
+
+It does not store:
+
+- active reference mode; projects reopen in Monopolar
+- complete REI, Gamma Spike, or HFO results
+- Gamma Spike or HFO manual event reviews
+- Light/Dark theme or main-viewer time position
 - open docks, review grids, PSD/scalogram windows, or other secondary windows
-- gamma/HFO event-filter checkbox selections
+- Gamma Spike/HFO class and range visibility filters
 
-Complete computation results are stored in exported result folders rather than
-inside the `.ieeg` project file. To recover those results and their viewer
-markers, use **Import results...** with the matching exported folder.
+Restore results and viewer overlays with **Import results...** and a matching export folder.
 
-### 4.2 Save As
+Save the `.ieeg` project for review configuration and annotations; export each computation for complete scientific results. These operations are complementary.
 
-Use **File > Save As...** if the project does not yet have a save path or if you want to save it as another file.
+### 8.2 Save As
 
-**Save As...** stores the same elements as **Save**, but in a new `.ieeg` project file.
+Choose **File > Save As...** to save the same state to a new `.ieeg` file.
 
-### 4.3 Close Project
+Use **Save As...** when the project has no path or when creating a separate project copy. It does not copy the linked raw recording.
 
-Use **File > Close Project** to close the current project while keeping the application open.
+### 8.3 Close Project
 
-If there are unsaved changes, the application asks whether to save, continue without saving, or cancel.
+Choose **File > Close Project** to keep the application open without a project. If changes are unsaved, choose to save, discard, or cancel.
 
-### 4.4 Exit
+### 8.4 Exit
 
-Use **File > Exit** to quit the application.
+Choose **File > Exit** to quit. Unsaved changes trigger the same confirmation.
 
-If there are unsaved changes, the application asks what to do before closing.
+## 9. Help Menu
 
----
+### 9.1 User Guide
 
+Choose **Help > User Guide** to open this page in the default browser.
 
-## 10. Help Menu
+### 9.2 Shortcuts
 
-### 10.1 User Guide
+Choose **Help > Shortcuts** to open the keyboard and mouse shortcut list.
 
-Use **Help > User Guide** to open this guide from inside the application.
+## 10. Practical Review Workflow
 
-### 10.2 Shortcuts
-
-Use **Help > Shortcuts** to open the keyboard and mouse shortcut list.
-
----
-
-## 11. Practical Review Workflow
-
-A common workflow is:
-
-1. Create or open a project
-2. Inspect the recording in **Monopolar**
-3. Mark noisy or unusable channels as **bad**
-4. Hide channels if needed for visual clarity
-5. Switch reference mode if useful
-6. Add annotations
-7. Open the computation panel or PSD panel if needed
-8. Run a computation or import a matching exported result folder
-9. Review event classes and use the global timeline to navigate results
-10. Export results when needed
-11. Save the project regularly
+1. Create or open a project.
+2. Inspect the recording in Monopolar mode.
+3. Mark unusable channels as bad; hide traces if needed.
+4. Assign Macro/Micro groups and choose a montage/reference.
+5. Add annotations or inspect PSD and scalograms as needed.
+6. Run a computation or import matching results.
+7. Review events and correct official classes before export.
+8. Export results, then save the project.

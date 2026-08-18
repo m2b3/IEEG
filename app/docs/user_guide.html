@@ -7,41 +7,209 @@
   <style>
     :root {
       color-scheme: light;
-      --ink: #172033;
-      --muted: #5d6b82;
-      --line: #d8dee9;
-      --panel: #f7f9fc;
-      --accent: #2563eb;
+      --ink: #172036;
+      --muted: #60708a;
+      --line: #dce4ef;
+      --panel: #f4f7fb;
+      --accent: #176b87;
+      --accent-dark: #0e4f68;
+      --accent-soft: #e8f4f7;
+      --paper: #ffffff;
+      --shadow: 0 16px 45px rgba(28, 52, 78, 0.09);
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      font-family: "Segoe UI", Arial, sans-serif;
-      line-height: 1.58;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.62;
       color: var(--ink);
-      background: #ffffff;
+      background:
+        radial-gradient(circle at 90% 0%, rgba(90, 178, 192, 0.14), transparent 28rem),
+        #f4f7fa;
     }
-    main {
-      max-width: 980px;
+    .site-header {
+      color: white;
+      background: linear-gradient(125deg, #123b52 0%, #176b87 58%, #328b92 100%);
+      box-shadow: 0 4px 18px rgba(15, 52, 72, 0.18);
+    }
+    .header-inner {
+      max-width: 1240px;
       margin: 0 auto;
-      padding: 40px 32px 80px;
+      padding: 30px 32px 34px;
+    }
+    .eyebrow {
+      margin: 0 0 5px;
+      font-size: 0.76rem;
+      font-weight: 750;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      opacity: 0.78;
+    }
+    .site-header h1 {
+      margin: 0;
+      color: white;
+      border: 0;
+      padding: 0;
+      font-size: clamp(2rem, 5vw, 3rem);
+      letter-spacing: -0.035em;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      gap: 30px;
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 30px 32px 80px;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 22px;
+      max-height: calc(100vh - 44px);
+      overflow: auto;
+      padding: 18px 12px 18px 18px;
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 26px rgba(28, 52, 78, 0.06);
+      backdrop-filter: blur(10px);
+    }
+    .toc-title {
+      margin: 0 0 10px 8px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    .toc a {
+      display: block;
+      padding: 5px 8px;
+      border-radius: 6px;
+      color: #33455f;
+      font-size: 0.88rem;
+      line-height: 1.35;
+      text-decoration: none;
+    }
+    .toc a:hover { color: var(--accent-dark); background: var(--accent-soft); }
+    .toc-level-2 { margin-top: 4px; font-weight: 720; }
+    .toc-level-3 { padding-left: 18px !important; color: var(--muted) !important; }
+    .toc-level-4 { padding-left: 28px !important; color: var(--muted) !important; font-size: 0.82rem !important; }
+    .toc-level-5 { padding-left: 38px !important; color: var(--muted) !important; font-size: 0.79rem !important; }
+    article {
+      min-width: 0;
+      padding: 12px clamp(24px, 5vw, 64px) 64px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
     }
     h1, h2, h3, h4 {
-      line-height: 1.22;
-      margin: 1.6em 0 0.55em;
-      color: #0f172a;
+      scroll-margin-top: 22px;
+      line-height: 1.25;
+      margin: 1.7em 0 0.55em;
+      color: #102238;
+      letter-spacing: -0.018em;
     }
-    h1 { margin-top: 0; font-size: 2.1rem; border-bottom: 1px solid var(--line); padding-bottom: 0.45em; }
-    h2 { font-size: 1.55rem; }
-    h3 { font-size: 1.18rem; }
-    p, li { font-size: 1rem; }
-    a { color: var(--accent); }
+    article > h1 { display: none; }
+    h2 {
+      margin-top: 2.25em;
+      padding-top: 0.85em;
+      border-top: 1px solid var(--line);
+      color: var(--accent-dark);
+      font-size: 1.65rem;
+    }
+    article > h1 + p + h2 { margin-top: 1.25em; border-top: 0; }
+    h3 { font-size: 1.2rem; }
+    h4 { color: #29435c; font-size: 1.05rem; }
+    h5 {
+      margin: 1.45em 0 0.4em;
+      color: #3f536b;
+      font-size: 0.96rem;
+      letter-spacing: 0.01em;
+    }
+    .guide-controls {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin: 18px 0 14px;
+    }
+    .guide-controls button {
+      padding: 7px 12px;
+      color: var(--accent-dark);
+      background: var(--accent-soft);
+      border: 1px solid #c9e2e8;
+      border-radius: 8px;
+      font: inherit;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .guide-controls button:hover { background: #d9eef2; border-color: #acd3dc; }
+    .guide-section { margin: 0.5rem 0; }
+    .guide-section > summary {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 11px;
+      border-radius: 9px;
+      cursor: pointer;
+      list-style: none;
+      transition: background 140ms ease, color 140ms ease;
+    }
+    .guide-section > summary::-webkit-details-marker { display: none; }
+    .guide-section > summary::before {
+      content: "›";
+      flex: 0 0 auto;
+      width: 1rem;
+      color: var(--accent);
+      font-size: 1.35rem;
+      font-weight: 800;
+      line-height: 1;
+      text-align: center;
+      transform-origin: center;
+      transition: transform 140ms ease;
+    }
+    .guide-section[open] > summary::before { transform: rotate(90deg); }
+    .guide-section > summary:hover { background: var(--accent-soft); }
+    .guide-section > summary h2,
+    .guide-section > summary h3,
+    .guide-section > summary h4,
+    .guide-section > summary h5 {
+      flex: 1;
+      margin: 0;
+      padding: 0;
+      border: 0;
+    }
+    .guide-section.level-2 {
+      margin: 12px 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    .guide-section.level-2 > summary { padding: 14px 16px; background: #f7fafc; }
+    .guide-section.level-2[open] > summary { background: var(--accent-soft); }
+    .guide-section.level-3 > summary { border-bottom: 1px solid transparent; }
+    .guide-section.level-3[open] > summary { border-bottom-color: var(--line); }
+    .guide-section.level-4 > summary,
+    .guide-section.level-5 > summary { padding-top: 7px; padding-bottom: 7px; }
+    .guide-section > .section-content { padding: 4px 12px 10px 32px; }
+    .guide-section.level-2 > .section-content { padding: 8px 18px 18px; }
+    p, li { font-size: 0.98rem; }
+    p { margin: 0.55em 0 1em; }
+    ul, ol { padding-left: 1.35em; margin: 0.55em 0 1.1em; }
+    li { margin: 0.3em 0; padding-left: 0.15em; }
+    li::marker { color: var(--accent); font-weight: 700; }
+    strong { color: #203d57; }
+    a { color: var(--accent); text-underline-offset: 0.15em; }
+    a:hover { color: var(--accent-dark); }
     code {
-      font-family: Consolas, "Cascadia Mono", monospace;
+      font-family: "SFMono-Regular", Consolas, "Cascadia Mono", monospace;
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 4px;
-      padding: 0.08em 0.28em;
+      border-radius: 5px;
+      padding: 0.08em 0.32em;
+      font-size: 0.9em;
     }
     pre {
       overflow: auto;
@@ -55,436 +223,753 @@
       max-width: 100%;
       display: block;
       border: 1px solid var(--line);
-      border-radius: 6px;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(28, 52, 78, 0.12);
     }
-    figure { margin: 24px 0; }
+    figure { margin: 28px 0; }
     figcaption { margin-top: 8px; color: var(--muted); font-size: 0.9rem; }
-    hr { border: 0; border-top: 1px solid var(--line); margin: 28px 0; }
-    .preview-note {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      margin: -40px -32px 28px;
-      padding: 10px 32px;
-      color: var(--muted);
-      background: rgba(247, 249, 252, 0.96);
-      border-bottom: 1px solid var(--line);
-      font-size: 0.88rem;
+    hr { border: 0; border-top: 1px solid var(--line); margin: 30px 0; }
+    @media (max-width: 860px) {
+      .header-inner { padding: 24px 20px 27px; }
+      .layout { display: block; padding: 18px 14px 50px; }
+      .toc { position: static; max-height: 260px; margin-bottom: 18px; }
+      article { padding: 10px 20px 46px; border-radius: 14px; }
+      h2 { font-size: 1.45rem; }
+      .guide-section.level-2 > .section-content { padding: 6px 10px 14px; }
+      .guide-section > .section-content { padding-left: 18px; padding-right: 4px; }
+    }
+    @media print {
+      body { background: white; }
+      .site-header { color: var(--ink); background: white; box-shadow: none; }
+      .site-header h1 { color: var(--ink); }
+      .toc { display: none; }
+      .guide-controls { display: none; }
+      .layout { display: block; max-width: none; padding: 0; }
+      article { border: 0; box-shadow: none; padding: 0; }
+      .guide-section { border: 0 !important; }
+      .guide-section > summary { padding-left: 0 !important; background: white !important; }
+      .guide-section > summary::before { display: none; }
+      .guide-section > .section-content { display: block !important; padding-left: 0; }
     }
   </style>
 </head>
 <body>
-  <main>
-    <div class="preview-note">Live preview reloads after you save the Markdown.</div>
-<h1 id="user-guide">User Guide</h1>
-<h2 id="1-getting-started">1. Getting Started</h2>
-<h3 id="1-1-create-a-new-project">1.1 Create a New Project</h3>
-<p>Select <strong>File &gt; New Project...</strong> to create a project.</p>
+  <header class="site-header">
+    <div class="header-inner">
+      <p class="eyebrow">Documentation</p>
+      <h1>I-EEG User Guide</h1>
+    </div>
+  </header>
+  <div class="layout">
+    <nav class="toc" aria-label="Table of contents">
+      <p class="toc-title">On this page</p>
+<a class="toc-level-2" href="#1-getting-started">1. Getting Started</a>
+<a class="toc-level-3" href="#1-1-create-a-project">1.1 Create a Project</a>
+<a class="toc-level-3" href="#1-2-open-a-project">1.2 Open a Project</a>
+<a class="toc-level-2" href="#2-main-window">2. Main Window</a>
+<a class="toc-level-3" href="#2-1-overview">2.1 Overview</a>
+<a class="toc-level-3" href="#2-2-menu-bar">2.2 Menu Bar</a>
+<a class="toc-level-3" href="#2-3-display-toolbar">2.3 Display Toolbar</a>
+<a class="toc-level-2" href="#3-explore-the-recording">3. Explore the Recording</a>
+<a class="toc-level-3" href="#3-1-navigation">3.1 Navigation</a>
+<a class="toc-level-4" href="#3-1-1-channels">3.1.1 Channels</a>
+<a class="toc-level-4" href="#3-1-2-time">3.1.2 Time</a>
+<a class="toc-level-3" href="#3-2-view-menu">3.2 View Menu</a>
+<a class="toc-level-4" href="#3-2-1-zoom-selection">3.2.1 Zoom Selection</a>
+<a class="toc-level-4" href="#3-2-2-scalogram-mode">3.2.2 Scalogram Mode</a>
+<a class="toc-level-2" href="#4-manage-channels">4. Manage Channels</a>
+<a class="toc-level-3" href="#4-1-macro-and-micro-groups">4.1 Macro and Micro Groups</a>
+<a class="toc-level-3" href="#4-2-select-channels">4.2 Select Channels</a>
+<a class="toc-level-3" href="#4-3-hidden-channels">4.3 Hidden Channels</a>
+<a class="toc-level-3" href="#4-4-bad-channels">4.4 Bad Channels</a>
+<a class="toc-level-2" href="#5-preprocessing">5. Preprocessing</a>
+<a class="toc-level-3" href="#5-1-montage-reference">5.1 Montage / Reference</a>
+<a class="toc-level-4" href="#automatic-bipolar-montage">Automatic Bipolar Montage</a>
+<a class="toc-level-3" href="#5-2-edit-bipolar-montage">5.2 Edit Bipolar Montage</a>
+<a class="toc-level-4" href="#validation-and-warnings">Validation and Warnings</a>
+<a class="toc-level-3" href="#5-3-display-filters">5.3 Display Filters</a>
+<a class="toc-level-3" href="#5-4-power-spectrum">5.4 Power Spectrum</a>
+<a class="toc-level-4" href="#macro-and-micro-panels">Macro and Micro Panels</a>
+<a class="toc-level-4" href="#curves-and-channel-status">Curves and Channel Status</a>
+<a class="toc-level-2" href="#6-compute">6. Compute</a>
+<a class="toc-level-3" href="#6-1-computation-panel">6.1 Computation Panel</a>
+<a class="toc-level-4" href="#shared-controls">Shared Controls</a>
+<a class="toc-level-4" href="#import-results">Import Results</a>
+<a class="toc-level-4" href="#export-results">Export Results</a>
+<a class="toc-level-3" href="#6-2-recruitment-energy-index-rei">6.2 Recruitment Energy Index (REI)</a>
+<a class="toc-level-4" href="#definition-origin-and-validation">Definition, Origin, and Validation</a>
+<a class="toc-level-4" href="#time">Time</a>
+<a class="toc-level-4" href="#preprocessing-and-advanced-parameters">Preprocessing and Advanced Parameters</a>
+<a class="toc-level-4" href="#run-and-results">Run and Results</a>
+<a class="toc-level-5" href="#main-viewer">Main Viewer</a>
+<a class="toc-level-5" href="#channel-level-summary">Channel-Level Summary</a>
+<a class="toc-level-5" href="#heatmap">Heatmap</a>
+<a class="toc-level-5" href="#export">Export</a>
+<a class="toc-level-3" href="#6-3-gamma-spikes">6.3 Gamma Spikes</a>
+<a class="toc-level-4" href="#definition-origin-and-validation-2">Definition, Origin, and Validation</a>
+<a class="toc-level-4" href="#time-2">Time</a>
+<a class="toc-level-4" href="#preprocessing">Preprocessing</a>
+<a class="toc-level-4" href="#run-and-results-2">Run and Results</a>
+<a class="toc-level-5" href="#main-viewer-2">Main Viewer</a>
+<a class="toc-level-5" href="#channel-level-summary-2">Channel-Level Summary</a>
+<a class="toc-level-5" href="#spike-grid-and-manual-review">Spike Grid and Manual Review</a>
+<a class="toc-level-5" href="#export-2">Export</a>
+<a class="toc-level-3" href="#6-4-high-frequency-oscillations-hfos">6.4 High-Frequency Oscillations (HFOs)</a>
+<a class="toc-level-4" href="#definition-models-and-validation">Definition, Models, and Validation</a>
+<a class="toc-level-4" href="#time-3">Time</a>
+<a class="toc-level-4" href="#preprocessing-and-advanced-parameters-2">Preprocessing and Advanced Parameters</a>
+<a class="toc-level-4" href="#run-and-results-3">Run and Results</a>
+<a class="toc-level-5" href="#main-viewer-3">Main Viewer</a>
+<a class="toc-level-5" href="#channel-level-summary-3">Channel-Level Summary</a>
+<a class="toc-level-5" href="#event-grid-and-manual-review">Event Grid and Manual Review</a>
+<a class="toc-level-5" href="#export-3">Export</a>
+<a class="toc-level-2" href="#7-review-menu">7. Review Menu</a>
+<a class="toc-level-3" href="#7-1-annotate">7.1 Annotate</a>
+<a class="toc-level-2" href="#8-file-menu">8. File Menu</a>
+<a class="toc-level-3" href="#8-1-save">8.1 Save</a>
+<a class="toc-level-3" href="#8-2-save-as">8.2 Save As</a>
+<a class="toc-level-3" href="#8-3-close-project">8.3 Close Project</a>
+<a class="toc-level-3" href="#8-4-exit">8.4 Exit</a>
+<a class="toc-level-2" href="#9-help-menu">9. Help Menu</a>
+<a class="toc-level-3" href="#9-1-user-guide">9.1 User Guide</a>
+<a class="toc-level-3" href="#9-2-shortcuts">9.2 Shortcuts</a>
+<a class="toc-level-2" href="#10-practical-review-workflow">10. Practical Review Workflow</a>
+    </nav>
+    <article>
+      <div class="guide-controls" aria-label="Section controls">
+        <button type="button" id="expand-all">Expand all</button>
+        <button type="button" id="collapse-all">Collapse all</button>
+      </div>
+<h1 id="i-eeg-user-guide">I-EEG User Guide</h1>
+<p>This guide covers project setup, signal review, preprocessing, computations, annotations, and result export.</p>
+<details class="guide-section level-2">
+<summary><h2 id="1-getting-started">1. Getting Started</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="1-1-create-a-project">1.1 Create a Project</h3></summary>
+<div class="section-content">
+<p>Choose <strong>File &gt; New Project...</strong>, then:</p>
 <ol>
-<li>Select the raw EEG/iEEG recording.</li>
-<li>Choose the name and location of the <code>.ieeg</code> project file.</li>
-<li>Confirm the file-selection dialogs.</li>
+<li>Select an EEG/iEEG recording.</li>
+<li>Choose a location for the <code>.ieeg</code> project file.</li>
+<li>Click <strong>Confirm</strong>.</li>
 </ol>
-<p>The application opens the recording, links it to the project, and creates the initial project file.</p>
-<p>Supported recording formats are <code>.edf</code>, <code>.bdf</code>, <code>.fif</code>, <code>.vhdr</code>, <code>.set</code>, and <code>.cnt</code>.</p>
-<h3 id="1-2-open-an-existing-project">1.2 Open an Existing Project</h3>
-<p>Select <strong>File &gt; Open Project...</strong> and choose an existing <code>.ieeg</code> project file.</p>
-<p>The application restores the state stored in the project. If the linked raw recording has moved, it asks you to locate the recording before continuing.</p>
-<hr>
-<h2 id="2-main-window">2. Main Window</h2>
-<h3 id="2-1-overview">2.1 Overview</h3>
+<p>Supported formats: <code>.edf</code>, <code>.bdf</code>, <code>.fif</code>, <code>.vhdr</code>, <code>.set</code>, and <code>.cnt</code>.</p>
+<p>The project links to the original recording; it does not copy the raw data.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="1-2-open-a-project">1.2 Open a Project</h3></summary>
+<div class="section-content">
+<p>Choose <strong>File &gt; Open Project...</strong> and select an <code>.ieeg</code> file. The application restores the project state described in Section 8.1.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="2-main-window">2. Main Window</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="2-1-overview">2.1 Overview</h3></summary>
+<div class="section-content">
 <figure><img src="images/main-viewer.png" alt="Main window with a loaded recording"><figcaption>Main window with a loaded recording</figcaption></figure>
 <ol>
-<li>Window title and recording summary: file path, selected/total channels,</li>
-<p>duration, and sampling frequencies</p>
-<li>Menu bar (Section 2.2)</li>
-<li>Toolbar (Section 2.3)</li>
-<li>Current montage/reference indicator</li>
-<li>Signal viewer displaying EEG/iEEG traces (Section 3)</li>
+<li>Window title and recording summary: path, channel count, duration, and sampling rate</li>
+<li>Menu bar</li>
+<li>Display toolbar</li>
+<li>Active montage/reference</li>
+<li>EEG/iEEG signal viewer</li>
 <li>Channel labels</li>
-<li>Amplitude axis (µV)</li>
-<li>Time navigation bar</li>
+<li>Amplitude axis in µV</li>
+<li>Time-navigation bar</li>
 </ol>
-<h3 id="2-2-menu-bar">2.2 Menu Bar</h3>
-<p>The menu bar provides access to the application's main functions.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="2-2-menu-bar">2.2 Menu Bar</h3></summary>
+<div class="section-content">
 <ul>
-<li><strong>File</strong>: Create, open, save, and close projects, or exit the application.</li>
-<li><strong>View</strong>: Use Zoom Selection, Reset Zoom, and Scalogram Mode.</li>
-<li><strong>Channels</strong>: Assign channels to the Macro or Micro group. All channels are</li>
-<p>assigned to Macro by default.</p>
-<li><strong>Preprocessing</strong>: Select a montage/reference, configure display filters, and</li>
-<p>inspect power spectra.</p>
-<li><strong>Compute</strong>: Run Recruitment Energy Index (REI), gamma-spike, and</li>
-<p>high-frequency oscillation (HFO) analyses from the computation panel.</p>
-<li><strong>Review</strong>: Create and manage manual annotations.</li>
-<li><strong>Help</strong>: Open the HTML user guide or the keyboard and mouse shortcut summary.</li>
+<li><strong>File</strong>: create, open, save, or close a project; exit the application</li>
+<li><strong>View</strong>: zoom, reset the view, or use Scalogram mode</li>
+<li><strong>Channels</strong>: assign Macro or Micro groups</li>
+<li><strong>Preprocessing</strong>: select a montage/reference, configure display filters, or open the PSD</li>
+<li><strong>Compute</strong>: run REI, Gamma Spike, or HFO analysis</li>
+<li><strong>Review</strong>: add annotations</li>
+<li><strong>Help</strong>: open this guide or the shortcut list</li>
 </ul>
-<h3 id="2-3-toolbar">2.3 Toolbar</h3>
-<p>The toolbar provides quick access to the main display settings.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="2-3-display-toolbar">2.3 Display Toolbar</h3></summary>
+<div class="section-content">
 <ul>
-<li><strong>Time Range (s)</strong>: number of seconds displayed in the viewer</li>
-<li><strong>Channels</strong>: number of channels displayed simultaneously</li>
-<li><strong>Amplitude (µV)</strong>: vertical scale of the displayed signal; this affects only</li>
-<p>visualization and does not modify the raw data or computation results</p>
+<li><strong>Time Range (s)</strong>: seconds shown</li>
+<li><strong>Channels</strong>: traces shown at once</li>
+<li><strong>Amplitude (µV)</strong>: visual scale; it does not change data or results</li>
+<li><strong>Theme</strong>: Light or Dark interface</li>
+<li><strong>Hidden...</strong>: restore hidden channels</li>
+<li><strong>Bad...</strong>: review or clear bad-channel marks</li>
+<li><strong>Hide all Bad</strong>: hide every bad channel</li>
+<li><strong>Edit Bipolar...</strong>: edit the montage; visible only in Bipolar mode</li>
 </ul>
-<p>For these three settings, you can either enter a value directly or choose one from the drop-down menu.</p>
-<p>Additional controls include:</p>
+<p>Enter a value or use the available choices for time range, channel count, and amplitude.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="3-explore-the-recording">3. Explore the Recording</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="3-1-navigation">3.1 Navigation</h3></summary>
+<div class="section-content">
+<details class="guide-section level-4">
+<summary><h4 id="3-1-1-channels">3.1.1 Channels</h4></summary>
+<div class="section-content">
+<p>Scroll over the viewer or use:</p>
 <ul>
-<li><strong>Theme</strong>: switch between Light and Dark interface themes</li>
-<li><strong>Hidden...</strong>: review and restore hidden channels</li>
-<li><strong>Bad...</strong>: review and unmark bad channels</li>
-<li><strong>Hide all Bad</strong>: hide all channels currently marked as bad</li>
-<li><strong>Edit Bipolar...</strong>: edit the active bipolar montage; this button is visible</li>
-<p>only in Bipolar mode (Section 5.2)</p>
+<li><strong>Up/Down Arrow</strong>: move through channels</li>
+<li><strong>Shift + Up/Down Arrow</strong>: move faster</li>
+<li><strong>Ctrl + Up/Down Arrow</strong>: move much faster</li>
 </ul>
-<h2 id="3-exploring-the-recording">3. Exploring the Recording</h2>
-<h3 id="3-1-navigation">3.1 Navigation</h3>
-<h4 id="3-1-1-channel-navigation">3.1.1 Channel Navigation</h4>
-<p>Move vertically through the channel list by:</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="3-1-2-time">3.1.2 Time</h4></summary>
+<div class="section-content">
+<p>Drag the bar below the viewer or use:</p>
 <ul>
-<li>scrolling the mouse wheel over the signal viewer or channel labels</li>
-<li>pressing <strong>Up Arrow</strong> or <strong>Down Arrow</strong></li>
-<li>holding <strong>Shift</strong> while pressing an arrow key to move faster</li>
-<li>holding <strong>Ctrl</strong> while pressing an arrow key to move much faster</li>
+<li><strong>Left/Right Arrow</strong>: move through time</li>
+<li><strong>Shift + Left/Right Arrow</strong>: move faster</li>
+<li><strong>Ctrl + Left/Right Arrow</strong>: move much faster</li>
 </ul>
-<h4 id="3-1-2-time-navigation">3.1.2 Time Navigation</h4>
-<p>Use the navigation bar below the signal viewer to move through the recording.</p>
-<p>Keyboard shortcuts:</p>
+</div></details>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="3-2-view-menu">3.2 View Menu</h3></summary>
+<div class="section-content">
+<details class="guide-section level-4">
+<summary><h4 id="3-2-1-zoom-selection">3.2.1 Zoom Selection</h4></summary>
+<div class="section-content">
+<p>Choose <strong>View &gt; Zoom Selection</strong>, then drag a rectangle over the required time and channels. Press <strong>Escape</strong> before releasing to cancel.</p>
+<p>Double-click the viewer to return one zoom step. Choose <strong>View &gt; Reset Zoom</strong> to restore the view that preceded the zoom sequence.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="3-2-2-scalogram-mode">3.2.2 Scalogram Mode</h4></summary>
+<div class="section-content">
+<p>Choose <strong>View &gt; Scalogram Mode</strong>, then drag horizontally across one channel. The new window shows the channel context, raw signal, time-frequency map, frequency slider, and hover values. Very short selections are ignored.</p>
+<p>Press <strong>Escape</strong> before releasing to cancel.</p>
+</div></details>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="4-manage-channels">4. Manage Channels</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="4-1-macro-and-micro-groups">4.1 Macro and Micro Groups</h3></summary>
+<div class="section-content">
+<p>All channels are Macro by default. Choose <strong>Channels &gt; Channel Groups...</strong>, select rows, click <strong>Set selected to Micro</strong> or <strong>Set selected to Macro</strong>, then click <strong>OK</strong>.</p>
+<p>Groups control channel styling, filter profiles, and the Macro/Micro PSD panels.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="4-2-select-channels">4.2 Select Channels</h3></summary>
+<div class="section-content">
+<p>Click a trace or label to select it. For multiple channels:</p>
 <ul>
-<li><strong>Left Arrow</strong> and <strong>Right Arrow</strong> to move backward or forward</li>
-<li><strong>Shift + Left Arrow</strong> and <strong>Shift + Right Arrow</strong> to move faster</li>
-<li><strong>Ctrl + Left Arrow</strong> and <strong>Ctrl + Right Arrow</strong> to move much faster</li>
+<li><strong>Ctrl + click</strong>: add or remove one channel</li>
+<li><strong>Shift + click</strong>: select a range</li>
+<li><strong>Ctrl + Shift + click</strong>: add a range</li>
 </ul>
-<h3 id="3-2-view-menu">3.2 View Menu</h3>
-<h4 id="3-2-1-zoom-selection">3.2.1 Zoom Selection</h4>
-<p>Use <strong>View &gt; Zoom Selection</strong> to zoom directly into a time and channel region.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="4-3-hidden-channels">4.3 Hidden Channels</h3></summary>
+<div class="section-content">
+<p>Right-click selected traces and choose <strong>Hide</strong>. Use <strong>Hidden...</strong> to restore them. Hiding affects visibility only; it does not delete data.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="4-4-bad-channels">4.4 Bad Channels</h3></summary>
+<div class="section-content">
+<p>Right-click selected traces and choose <strong>Mark as bad</strong>. If all are already bad, choose <strong>Unmark as bad</strong>. Use <strong>Bad...</strong> to review marks or clear them all.</p>
+<p>Bad status is application-wide: changes in the viewer or PSD appear in both. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.</p>
+<p>Hidden and bad are separate states: restoring a hidden bad channel does not clear its bad mark, and unmarking a channel as bad does not make a hidden channel visible.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="5-preprocessing">5. Preprocessing</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="5-1-montage-reference">5.1 Montage / Reference</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Preprocessing &gt; Montage / Reference</strong>, then select:</p>
+<ul>
+<li><strong>Monopolar</strong>: display each imported channel</li>
+<li><strong>Bipolar</strong>: display automatic <code>Channel 1 - Channel 2</code> derivations</li>
+<li><strong>Average</strong>: subtract the shared channel average</li>
+<li><strong>Median</strong>: subtract the shared channel median</li>
+<li><strong>Common Reference...</strong>: subtract one selected physical channel</li>
+</ul>
+<p>Average and Median exclude bad channels from the reference pool. Samples covered by a <strong>Bad segment</strong> annotation are masked during reference calculation. Hidden channels remain in the pool.</p>
+<details class="guide-section level-4">
+<summary><h4 id="automatic-bipolar-montage">Automatic Bipolar Montage</h4></summary>
+<div class="section-content">
+<p>Bipolar mode extracts each label's electrode prefix and contact number, groups and sorts contacts by electrode, and pairs consecutive contacts. For example, <code>A1</code>, <code>A2</code>, and <code>A3</code> produce <code>A1-A2</code> and <code>A2-A3</code>.</p>
+<p>Unrecognized labels, non-consecutive contacts, and bad channels are skipped. The application reports skipped channels and warns if no pair is possible. If labels already appear bipolar, it asks before deriving them again.</p>
+<p>Each trace contains the actual difference <strong>Channel 1 minus Channel 2</strong>, not only a new label. Hiding a derived trace removes it from view. Hiding a source channel does not exclude it from later automatic generation.</p>
+<p>Bad derived channels remain visible unless hidden; use <strong>Hide all Bad</strong> to remove them from view. Automatic generation uses the bad-channel state that exists when Bipolar mode is selected.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="5-2-edit-bipolar-montage">5.2 Edit Bipolar Montage</h3></summary>
+<div class="section-content">
+<p>The <strong>Edit Bipolar...</strong> button is available only in Bipolar mode. Use it to change Channel 2, add pairs, restore automatic pairs, apply with <strong>OK</strong>, or discard with <strong>Cancel</strong>.</p>
+<details class="guide-section level-4">
+<summary><h4 id="validation-and-warnings">Validation and Warnings</h4></summary>
+<div class="section-content">
+<p>Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied. Bad channels cannot be selected.</p>
+<p>A pair spanning two recognized electrode groups triggers a <strong>Cross-electrode bipolar pairs</strong> warning. Choose <strong>Cancel</strong> or <strong>Keep edit</strong>.</p>
+<p><strong>Cancel</strong> leaves the current montage unchanged. <strong>Keep edit</strong> allows an intentional cross-electrode pair; the warning is not an error.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="5-3-display-filters">5.3 Display Filters</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Preprocessing &gt; Display Filters...</strong> to show or hide filter controls above the viewer.</p>
+<p>Use <strong>Scope</strong> to edit:</p>
+<ul>
+<li><strong>All</strong>: Macro and Micro profiles</li>
+<li><strong>Macro</strong>: Macro channels only</li>
+<li><strong>Micro</strong>: Micro channels only</li>
+</ul>
+<p>Each profile has numeric <strong>High Pass (Hz)</strong> and <strong>Low Pass (Hz)</strong> controls and <strong>Notch</strong> choices: <strong>Off</strong>, <strong>50 Hz + harmonics</strong>, or <strong>60 Hz + harmonics</strong>. Enter <code>0</code> to disable a cutoff; numeric fields cannot be empty.</p>
+<p>Click <strong>Apply filters</strong> to apply the profile or <strong>Back to default</strong> to clear it. Active cutoffs must be below Nyquist, and high pass must be lower than low pass.</p>
+<p>Filters are non-destructive. The montage/reference is applied first, then the relevant Macro or Micro profile. A padded interval is filtered before the requested window is displayed to reduce edge artifacts.</p>
+<p>The PSD uses these profiles. Computations use separate bandpass rules; only algorithms that explicitly say so reuse the notch choice.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="5-4-power-spectrum">5.4 Power Spectrum</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Preprocessing &gt; Power Spectrum</strong>, enter start and stop times, and confirm. Stop must follow start, and both values must be inside the recording. The PSD opens beside the main viewer.</p>
+<details class="guide-section level-4">
+<summary><h4 id="macro-and-micro-panels">Macro and Micro Panels</h4></summary>
+<div class="section-content">
+<p>The tab contains independent <strong>Macro</strong> and <strong>Micro</strong> panels based on Section 4.1. Group changes refresh an open PSD. In Bipolar mode, a pair follows Channel 1's group.</p>
+<p>Each panel has its own channel lists, selection, plot, and zoom state. Channels use their group's display-filter profile. Power is shown in <strong>dB/Hz</strong> against <strong>Hz</strong>.</p>
+<p>The <strong>Excluded channels</strong> list is on the left and <strong>Displayed channels</strong> on the right. If group assignments change while the tab is open, both panels update automatically. A Micro panel remains empty until at least one channel is assigned to Micro.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="curves-and-channel-status">Curves and Channel Status</h4></summary>
+<div class="section-content">
+<p>All group channels initially appear, including hidden and bad channels.</p>
+<ul>
+<li>Select displayed channels and click <code>&lt;&lt;</code> to exclude them from that PSD plot.</li>
+<li>Select excluded channels and click <code>&gt;&gt;</code> to restore them.</li>
+<li><strong>Exclude all</strong> and <strong>Include all</strong> affect only the current panel.</li>
+<li>Click a name or curve to emphasize it.</li>
+<li>Double-click a plot to restore its default range.</li>
+</ul>
+<p>PSD exclusion does not hide a trace or change its group. Bad channels appear in red. <strong>Mark selected as bad</strong> and <strong>Unmark selected as bad</strong> update the same state used by the main viewer.</p>
+<p>Clicking a curve or displayed-channel name makes it active. Its label and curve are emphasized; a selected bad channel has a thicker red curve. Macro and Micro plots keep independent zoom states.</p>
+<p>PyQtGraph mouse controls provide zoom and pan. They affect visualization only. The context menu is disabled, so built-in auto-range and export actions are unavailable.</p>
+</div></details>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="6-compute">6. Compute</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="6-1-computation-panel">6.1 Computation Panel</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Compute &gt; Open Computation Panel</strong>, or right-click selected channels and choose <strong>Open Computation Panel</strong>. The dock can be moved, resized, or floated. It analyzes the open recording.</p>
+<details class="guide-section level-4">
+<summary><h4 id="shared-controls">Shared Controls</h4></summary>
+<div class="section-content">
+<ul>
+<li><strong>Algorithm</strong>: REI, Gamma Spikes, or HFO</li>
+<li><strong>Channels</strong>: analysis inputs</li>
+<li><strong>Time</strong>: interval and method settings</li>
+<li><strong>Output</strong>: run, cancel, import, review, and export</li>
+</ul>
+<p>Time and Output controls change with the algorithm.</p>
+<p>Use <strong>All</strong>, <strong>Macro</strong>, or <strong>Micro</strong> to replace the list with non-bad channels from that scope. Use <strong>Add...</strong>, <strong>Remove selected</strong>, or <strong>Clear</strong> to edit it. Verify the list after changing montage/reference. The signal is extracted using the montage/reference active when the run starts.</p>
+<p>Confirmed bad channels are unavailable for selection. Display high-pass and low-pass filters are not reused unless an algorithm explicitly includes them in its preprocessing.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="import-results">Import Results</h4></summary>
+<div class="section-content">
+<p>Click <strong>Import results...</strong> and select a folder exported by the application. The algorithm is detected automatically. First load the matching recording and montage. Import fails if files are missing, the recording differs, or an imported channel is unavailable in the current montage.</p>
+<p>A valid import restores the available summaries, event-review data, metadata, and main-viewer overlays. Importing replaces the current result for the detected algorithm; export unsaved manual reviews first.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="export-results">Export Results</h4></summary>
+<div class="section-content">
+<p>Each algorithm has its own export button. Export folders contain tables, metadata, and a README; REI also includes a numeric and image heatmap. The application asks before replacing files.</p>
+<p>Run and import controls are always available when their prerequisites are met. Review and export buttons become available after a successful run or import. During processing, the selected algorithm shows its own cancel button.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="6-2-recruitment-energy-index-rei">6.2 Recruitment Energy Index (REI)</h3></summary>
+<div class="section-content">
+<details class="guide-section level-4">
+<summary><h4 id="definition-origin-and-validation">Definition, Origin, and Validation</h4></summary>
+<div class="section-content">
+<p>REI estimates how early and strongly each channel is recruited at seizure onset. It combines baseline-normalized high-frequency energy with recruitment time, then assigns a score and rank. Higher scores indicate earlier, stronger recruitment relative to the analyzed channels.</p>
+<p>This implementation adapts Lucas A.'s <a href="https://github.com/allucas/IEEG_EI">IEEG_EI project</a> and the Epileptogenicity Index method of <a href="https://doi.org/10.1093/brain/awn111">Bartolomei et al. (2008)</a>. Numerical parity and clinical validation are not documented for this GUI implementation. REI is a review aid, not a clinical conclusion.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="time">Time</h4></summary>
+<div class="section-content">
+<p>Enter <strong>Seizure onset</strong> and <strong>Seizure offset</strong>. Onset sets these defaults:</p>
+<ul>
+<li><strong>Baseline</strong>: 70 to 10 seconds before onset</li>
+<li><strong>Ictal</strong>: 5 seconds before to 20 seconds after onset</li>
+</ul>
+<p>Click <strong>Use default windows</strong> to restore them. REI has no minimum seizure duration. Offset must follow onset. Both windows must be non-empty and inside the recording. Baseline must end at or before onset; ictal must start at or before onset and end no later than seizure offset. Shorten invalid default windows.</p>
+<p>For example, if a seizure ends less than 20 seconds after onset, shorten the default ictal window so it ends no later than the entered offset. If onset occurs early in the recording, move or shorten the baseline so it remains within the available data.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="preprocessing-and-advanced-parameters">Preprocessing and Advanced Parameters</h4></summary>
+<div class="section-content">
+<p>Bipolar is recommended. With another montage, choose <strong>Switch to Bipolar</strong>, <strong>Run Anyway</strong>, or <strong>Cancel</strong>. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.</p>
+<p>REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default <strong>60–140 Hz</strong>. In <strong>Advanced parameters...</strong>, the lower limit must be positive and below the upper limit; the upper limit must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are fixed.</p>
+<p>REI reuses each channel's Macro/Micro notch choice. If notch is off for all selected channels, the application warns about possible line-noise effects.</p>
+<p>Confirmed bad channels are excluded. With mixed Macro and Micro selections, each channel uses the notch profile assigned to its own group.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="run-and-results">Run and Results</h4></summary>
+<div class="section-content">
+<p>Click <strong>Run REI</strong>. Status and elapsed time update in the background. <strong>Cancel REI run</strong> requests cancellation; the current filtering step may finish first. Cancellation preserves the last completed result.</p>
+<details class="guide-section level-5">
+<summary><h5 id="main-viewer">Main Viewer</h5></summary>
+<div class="section-content">
+<p>The viewer adds each analyzed channel's rank and colors its label from orange (lower score) to green (higher score). An orange tick marks visible recruitment time. Excluded channels receive no overlay.</p>
+<p>The marker is placed at the estimated recruitment time, not at the entered seizure onset. It appears only when that time lies inside the visible window.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="channel-level-summary">Channel-Level Summary</h5></summary>
+<div class="section-content">
+<p><strong>Open REI summary</strong> shows one sortable row per channel. Selecting a row selects that channel in the viewer.</p>
+<ul>
+<li><strong>Channel</strong>: analyzed channel or bipolar derivation</li>
+<li><strong>REI score</strong>: normalized score from 0 to 1 within this analysis</li>
+<li><strong>Rank</strong>: descending score order; rank 1 is highest</li>
+<li><strong>Peak HFER activity</strong>: maximum baseline-normalized ictal high-frequency energy</li>
+<li><strong>Recruitment delay (s)</strong>: time relative to seizure onset; negative is before onset</li>
+</ul>
+<p>Scores and ranks are normalized within the current channel set. Changing channels, time windows, montage, or frequency limits can change them; compare separate runs cautiously.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="heatmap">Heatmap</h5></summary>
+<div class="section-content">
+<p><strong>Open REI heatmap</strong> shows log10 HFER over the ictal window and a score bar plot. Sort by score, delay, peak/mean HFER, original order, or name. <strong>Show top N channels</strong> limits rows. These controls affect visualization only.</p>
+<p>Heatmap time is expressed relative to seizure onset. Sorting or limiting rows does not change scores or exported values.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="export">Export</h5></summary>
+<div class="section-content">
+<p><strong>Export REI results</strong> creates:</p>
+<ul>
+<li><strong><code>rei_summary.csv</code></strong>: channel group, score, rank, delay, and peak HFER</li>
+<li><strong><code>rei_heatmap.csv</code></strong>: HFER values by channel and time</li>
+<li><strong><code>rei_heatmap.png</code></strong>: heatmap image</li>
+<li><strong><code>rei_metadata.json</code></strong>: source, montage, seizure timing, baseline/ictal windows, sampling rate, channel counts, filters, and parameters</li>
+<li><strong><code>README.txt</code></strong>: file, value, and unit definitions</li>
+</ul>
+</div></details>
+</div></details>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="6-3-gamma-spikes">6.3 Gamma Spikes</h3></summary>
+<div class="section-content">
+<details class="guide-section level-4">
+<summary><h4 id="definition-origin-and-validation-2">Definition, Origin, and Validation</h4></summary>
+<div class="section-content">
+<p>Gamma Spike analysis detects interictal spikes, measures associated <strong>30–100 Hz</strong> activity, and classifies events as <strong>gamma</strong> or <strong>non-gamma</strong>.</p>
+<p>It is a Python translation of the <a href="https://github.com/Lab-Frauscher/Spike-Gamma">Lab-Frauscher Spike-Gamma</a> MATLAB workflow. Candidate detection uses the Janca Hilbert-envelope detector; artifact/spindle rejection, boundary estimation, and preceding-gamma measurement follow the source workflow.</p>
+<p>The translation was compared with the MATLAB workflow, Brainstorm served as an external validation comparison, and segmented processing was checked for consistency. These checks do not establish clinical sensitivity or specificity.</p>
+<p>The validation concerned implementation behavior and agreement with the reference workflows; it did not validate the detector for diagnosis or replace expert EEG/iEEG review.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="time-2">Time</h4></summary>
+<div class="section-content">
+<p>Enter a non-empty interval inside the recording. The full recording is selected by default.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="preprocessing">Preprocessing</h4></summary>
+<div class="section-content">
+<p>Gamma Spike uses the active montage and ignores display high/low-pass values. It reuses each channel's Macro/Micro notch choice and warns if notch is off for all selected channels.</p>
+<p>Detection and boundary estimation use an internal <strong>10–60 Hz</strong> band; gamma measurement uses <strong>30–100 Hz</strong>. Boundary and gamma signals use zero-phase, fourth-order Butterworth filters.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="run-and-results-2">Run and Results</h4></summary>
+<div class="section-content">
+<p>Click <strong>Run Gamma Spike Detector</strong>. The interval is processed in 10-minute chunks with 10 seconds of context, then merged before boundary and gamma calculations. This limits memory use. Progress and estimated time are shown. <strong>Cancel gamma run</strong> stops an active run.</p>
+<p>Context reduces filtering artifacts at chunk boundaries and is removed before results are merged, preventing duplicate boundary events. Cancellation preserves the last completed Gamma Spike result.</p>
+<details class="guide-section level-5">
+<summary><h5 id="main-viewer-2">Main Viewer</h5></summary>
+<div class="section-content">
+<p>Each P1–N2 interval is highlighted on its waveform and as a bar above the viewer: <strong>blue</strong> for non-gamma and <strong>orange</strong> for gamma. Events also appear on the full-recording timeline. <strong>P1</strong> is spike onset, <strong>N1</strong> the main peak, and <strong>N2</strong> spike end.</p>
+<p>The <strong>non-gamma</strong> and <strong>gamma</strong> checkboxes change visibility only. Click a highlight or top bar to open the event in the spike grid. Click a timeline event to jump to it.</p>
+<p>The timeline also marks the current viewer window. Hiding a class does not delete events, alter classifications, or change exported results.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="channel-level-summary-2">Channel-Level Summary</h5></summary>
+<div class="section-content">
+<p><strong>Open channel-level summary</strong> provides sortable rows and <strong>All spikes</strong>, <strong>Gamma only</strong>, and <strong>Non-gamma only</strong> filters.</p>
+<p><strong>Gamma only</strong> keeps channels with at least one officially gamma-classified spike. <strong>Non-gamma only</strong> keeps channels with no officially gamma-classified spike. These controls filter rows; they do not reclassify events.</p>
+<ul>
+<li><strong>Channel</strong>: analyzed channel or bipolar derivation</li>
+<li><strong>Total spikes</strong>: retained events after post-processing</li>
+<li><strong>Gamma-spikes</strong>: events whose official class is gamma</li>
+<li><strong>Spike-gamma rate</strong>: <code>Gamma-spikes / Total spikes × 100</code>; 0% if none</li>
+<li><strong>Mean gamma power</strong>: mean finite 30–100 Hz amplitude for official gamma events, in native units</li>
+<li><strong>Mean gamma duration</strong>: mean selected gamma-episode duration in ms</li>
+</ul>
+<p>Mean values are blank when no finite measurement exists.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="spike-grid-and-manual-review">Spike Grid and Manual Review</h5></summary>
+<div class="section-content">
+<p><strong>Open spike grid</strong> shows cards filterable by class, channel, and minimum gamma power. Select one to view raw and 30–100 Hz signals, time-frequency content, P1/N1/N2, gamma measurements, and the gamma window. Review plots do not alter measurements.</p>
+<p>Page and layout controls support large result sets. The 30–100 Hz review trace is a visualization and is separate from the saved measurements.</p>
+<p>Set <strong>Official class</strong> to <strong>gamma</strong>, <strong>non-gamma</strong>, or <strong>unclassified</strong>. Changes are immediate, mark the event reviewed, and update viewer overlays. There is no separate Save button or bulk classification.</p>
+<p>The official class replaces the algorithmic class in summaries and viewer filters; the original algorithmic class remains stored for traceability. Events are reviewed one at a time.</p>
+<p>Manual changes exist only in the current result; project saving does not preserve them. Finish review before export and export again after later changes. Closing, importing, or running a replacement result can discard unexported changes.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="export-2">Export</h5></summary>
+<div class="section-content">
+<p><strong>Export gamma results</strong> creates:</p>
+<ul>
+<li><strong><code>gamma_channel_summary.csv</code></strong>: per-channel counts, rate, mean power, and mean duration using official classes</li>
+<li><strong><code>gamma_spike_events.csv</code></strong>: channel, event number, timing, 1-based samples, algorithmic/official/manual classes, P1/N1/N2 in samples and seconds, gamma measurements, review status, and errors</li>
+<li><strong><code>gamma_metadata.json</code></strong>: source, analysis interval, sampling rate, chunk/context settings, notch configuration, channel/event counts, completed measurements, and timings</li>
+<li><strong><code>README.txt</code></strong>: file, unit, indexing, context, and filter definitions</li>
+</ul>
+<p>Per-event heatmaps are not exported; they remain available in the spike grid.</p>
+<p>Summary counts use the official classes present at export, including manual corrections. Export again if a class changes afterward.</p>
+</div></details>
+</div></details>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="6-4-high-frequency-oscillations-hfos">6.4 High-Frequency Oscillations (HFOs)</h3></summary>
+<div class="section-content">
+<details class="guide-section level-4">
+<summary><h4 id="definition-models-and-validation">Definition, Models, and Validation</h4></summary>
+<div class="section-content">
+<p>HFO analysis detects candidate high-frequency events, classifies them, and presents them for review. Every route uses selected channels, the active montage and notch settings, one or more candidate detectors (<strong>STE</strong>, <strong>MNI</strong>, or <strong>Hilbert</strong>), shared duration/edge rules, and the same review/export interface.</p>
+<p>The candidate detector locates possible events; the selected model classifies them. Choosing the same detector across routes does not make their preprocessing or classifications equivalent.</p>
+<p>Routes differ in preprocessing, supported band, sampling behavior, classifier, checkpoints, and classes. Results are not interchangeable. Sources: <a href="https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain">pyHFO pyBrain</a> and <a href="https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg">Omni-iEEG</a>.</p>
+<ul>
+<li><strong>pyhfo_pybrain — 80–500 Hz</strong>: default; native sampling; original pyHFO Model A and Model S. Lower rates work only when Nyquist supports the band; above 1000 Hz is required for the complete 80–500 Hz band.</li>
+<li><strong>pyhfo_omni_legacy — 80–300 Hz</strong>: Omni legacy pyHFO route; requires at least 1000 Hz and processes at 1000 Hz.</li>
+<li><strong>eHFO — 80–300 Hz</strong>: Omni artifact, spike, and eHFO three-model route with official checkpoints; requires at least 1000 Hz and processes at 1000 Hz.</li>
+</ul>
+<p>These implementations reproduce their stated software routes; this is not independent clinical validation. Below 1000 Hz, prefer a compatible pyhfo_pybrain band and interpret comparisons cautiously.</p>
+<p>The 1000 Hz threshold is enforced for both Omni routes. For pyhfo_pybrain, the selected upper frequency—not the model name alone—determines Nyquist compatibility.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="time-3">Time</h4></summary>
+<div class="section-content">
+<p>Enter a non-empty interval inside the recording. The full recording is selected by default; all models use the same controls.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="preprocessing-and-advanced-parameters-2">Preprocessing and Advanced Parameters</h4></summary>
+<div class="section-content">
+<p>Choose a model and band. Defaults are <strong>80–500 Hz</strong> for pyhfo_pybrain and <strong>80–300 Hz</strong> for Omni models. <strong>Ripples 80–250 Hz</strong> and <strong>Custom (experimental)</strong> are available for all routes; <strong>Fast ripples 250–500 Hz</strong> is pyhfo_pybrain-only.</p>
+<p>For a custom band, select <strong>Custom (experimental)</strong> and edit <strong>Low frequency</strong> and <strong>High frequency</strong> under <strong>Advanced parameters...</strong>. Click <strong>Save</strong> for the next run. Custom bands are outside documented parity validation, may reset after restart, and appear only under <strong>All ranges</strong> in result filters.</p>
+<p>In <strong>Advanced parameters...</strong>, enable one or more STE, MNI, or Hilbert detectors and edit their parameters. At least one must remain enabled. The application validates band limits, event duration, merge gap, minimum cycles, and detector settings.</p>
+<p>Disabling a detector preserves its parameter values but excludes it from the next run. Detector selection changes candidate generation for every model and can therefore change both event counts and classifications.</p>
+<p>HFO analysis uses the active montage and each channel's Macro/Micro notch choice. It excludes bad channels and ignores display high/low-pass values. Events exceeding maximum duration or lying in analysis-edge padding are excluded before classification and counted in metadata.</p>
+<p>The padding rule prevents incomplete events at the selected interval boundaries from entering classification. Boundary exclusions are reported separately from active candidates.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="run-and-results-3">Run and Results</h4></summary>
+<div class="section-content">
+<p>Click <strong>Run HFO Detector</strong>. All models show progress and estimated time. <strong>Cancel HFO run</strong> requests cancellation between steps; the active detector or classifier may finish first. Cancellation preserves the last completed result.</p>
+<details class="guide-section level-5">
+<summary><h5 id="main-viewer-3">Main Viewer</h5></summary>
+<div class="section-content">
+<p>Each event is highlighted on its waveform, above the viewer, and on the full-recording timeline. Official-class colors are:</p>
+<ul>
+<li><strong>Artifact</strong>: red</li>
+<li><strong>HFO / non-spike HFO</strong>: blue</li>
+<li><strong>spkHFO / spike-HFO</strong>: green</li>
+<li><strong>eHFO</strong>: teal</li>
+<li><strong>spk-eHFO / spike-eHFO</strong>: violet</li>
+<li><strong>Unclassified</strong>: gray</li>
+</ul>
+<p>Deleted events are hidden. Class checkboxes and <strong>Range</strong> change visibility only. Click a highlight or top bar to open the event grid; click a timeline event to jump to it.</p>
+<p>The timeline marks the current viewer window. Visibility filters do not change official classes, summary counts, or exports.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="channel-level-summary-3">Channel-Level Summary</h5></summary>
+<div class="section-content">
+<p><strong>Open HFO summary</strong> shows sortable rows. Filter by <strong>All channels</strong>, <strong>At least one HFO</strong>, or <strong>At least one spkHFO</strong>. Selecting a row selects its viewer channel.</p>
+<p><strong>At least one HFO</strong> keeps channels with an accepted event. <strong>At least one spkHFO</strong> keeps channels with an accepted spike-associated event. Filters use official classes and exclude deleted events.</p>
+<ul>
+<li><strong>Channel</strong>: analyzed channel or bipolar derivation</li>
+<li><strong>Candidates</strong>: active candidates; deleted events excluded</li>
+<li><strong>Accepted HFO</strong>: official HFO, non-spike HFO, spike-HFO, eHFO, or spike-eHFO events</li>
+<li><strong>non-spkHFO</strong>: accepted events without spike association</li>
+<li><strong>spkHFO</strong>: accepted events with spike association</li>
+<li><strong>Artifact</strong>: official artifact events</li>
+<li><strong>HFO/min</strong> and <strong>spkHFO/min</strong>: count divided by analysis duration in minutes</li>
+<li><strong>Artifact %</strong>: <code>Artifact / Candidates × 100</code>; 0% if none</li>
+</ul>
+<p>The footer reports totals and boundary exclusions. Counts use current official classes.</p>
+<p>Rates use the selected analysis duration, not the summed duration of detected events. Artifact percentage uses active candidates as its denominator, so deleting or reclassifying an event can update both the numerator and denominator shown in the summary.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="event-grid-and-manual-review">Event Grid and Manual Review</h5></summary>
+<div class="section-content">
+<p><strong>Open HFO event grid</strong> shows cards filterable by channel, class, frequency range, and channel/time order. Select one to inspect signals, spectrogram or FFT, timing, band, detector, classifier proposition, available probabilities, class, and review status. Display controls do not recalculate events.</p>
+<p>When available, probabilities include accepted-HFO, artifact, and spike association. The filtered-band, context-window, spectrogram, and FFT controls affect review visualization only and do not alter stored event boundaries or measurements.</p>
+<p>Set <strong>Official class</strong> to <strong>artifact</strong>, <strong>HFO</strong>, <strong>non-spike HFO</strong>, <strong>spike-HFO</strong>, <strong>eHFO</strong>, <strong>spike-eHFO</strong>, <strong>unclassified</strong>, or <strong>deleted</strong>. Changes apply immediately; the original proposition remains stored. <strong>Delete / exclude event</strong> removes an event from overlays and summaries but keeps it in the exported event table.</p>
+<p>Manual changes update the main-viewer highlight and timeline immediately. Deleted events remain exportable so the original candidate and the review decision can be audited.</p>
+<p>There is no separate Save button. Project saving does not preserve HFO results or reviews. Finish review before export and export again after later changes.</p>
+<p>Running another HFO analysis or importing a different HFO result replaces the current in-memory result. Export reviewed results before either action.</p>
+</div></details>
+<details class="guide-section level-5">
+<summary><h5 id="export-3">Export</h5></summary>
+<div class="section-content">
+<p><strong>Export HFO events</strong> creates:</p>
+<ul>
+<li><strong><code>hfo_channel_summary.csv</code></strong>: per-channel candidate, accepted, non-spike, spike-associated, eHFO, artifact, deleted, and boundary counts; rates and artifact percentage</li>
+<li><strong><code>hfo_events.csv</code></strong>: identity, timing, sample indices, duration, detector, band, input/detection sampling rates, probabilities, propositions, official/manual classes, review status, boundary flags, and errors; deleted events remain included</li>
+<li><strong><code>hfo_metadata.json</code></strong>: source, interval, sampling rates, model, detectors, parameters, notch settings, montage/reference, exclusions, classifier origin/status, and review totals</li>
+<li><strong><code>README.txt</code></strong>: file, column, class, sampling, preprocessing, and unit definitions</li>
+</ul>
+</div></details>
+</div></details>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="7-review-menu">7. Review Menu</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="7-1-annotate">7.1 Annotate</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Review &gt; Annotate</strong>, then:</p>
 <ol>
-<li>Press and hold the <strong>left mouse button</strong></li>
-<li>Drag a rectangle over the region you want to inspect</li>
-<li>Release the mouse button</li>
+<li>Select the annotation type and scope.</li>
+<li>Add an optional note.</li>
+<li>Click <strong>OK</strong>.</li>
+<li>Drag over the required interval.</li>
 </ol>
-<p>The viewer zooms into the selected time and channel ranges. Press <strong>Escape</strong> to cancel selection mode before applying a zoom.</p>
-<p>Double left-click in the viewer to go back one zoom step.</p>
-<p>Use <strong>View &gt; Reset Zoom</strong> to return to the view that was active before the zoom sequence started.</p>
-<h4 id="3-2-2-scalogram-mode">3.2.2 Scalogram Mode</h4>
-<p>Use <strong>View &gt; Scalogram Mode</strong> to open a time-frequency view from one channel and one selected time interval.</p>
-<ol>
-<li>Click <strong>View &gt; Scalogram Mode</strong></li>
-<li>Drag horizontally on the channel you want to inspect</li>
-<li>Release the mouse button</li>
-</ol>
-<p>The scalogram window shows the selected channel context, raw signal, scalogram image, frequency-range slider, and hover readout. Very short selections are ignored.</p>
-<p>Press <strong>Escape</strong> to cancel scalogram mode before opening a window.</p>
-<h2 id="4-managing-channels">4. Managing Channels</h2>
-<h3 id="4-1-micro-macro-groups">4.1 Micro/Macro Groups</h3>
-<p>The application assigns all channels to Macro by default. Use <strong>Channels &gt; Channel Groups...</strong> to assign the appropriate channels to Micro.</p>
-<ol>
-<li>Use the search field or sort the table by Channel or Group if needed.</li>
-<li>Select one or more channel rows.</li>
-<li>Click <strong>Set selected to Micro</strong> or <strong>Set selected to Macro</strong>.</li>
-<li>Click <strong>OK</strong> to apply the assignments, or <strong>Cancel</strong> to discard them.</li>
-</ol>
-<p>Channel groups control macro/micro styling and group-aware review tools.</p>
-<h3 id="4-2-selecting-channels">4.2 Selecting Channels</h3>
-<p>To select one channel, left-click its trace or label. To select several channels:</p>
+<p>Scope can be the clicked channel, selected channels, or all channels. Press <strong>Escape</strong> before placement to cancel.</p>
+<p>Right-click an annotation to edit or delete it. The Annotations dock lists existing annotations; select one to jump to it.</p>
+<p>Viewer context actions apply to the annotation region under the pointer. Deleting an annotation removes it from both the viewer and the dock.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="8-file-menu">8. File Menu</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="8-1-save">8.1 Save</h3></summary>
+<div class="section-content">
+<p>Choose <strong>File &gt; Save</strong>. The <code>.ieeg</code> project stores:</p>
 <ul>
-<li><strong>Ctrl + click</strong> adds or removes one channel</li>
-<li><strong>Shift + click</strong> selects a range</li>
-<li><strong>Ctrl + Shift + click</strong> adds a range to the current selection</li>
+<li>raw-file link; annotations; hidden/bad channels; Macro/Micro groups</li>
+<li>edited bipolar pairs for later Bipolar use</li>
+<li>Macro/Micro display filters; time range; visible-channel count; amplitude scale</li>
+<li>selected computation algorithm and channels</li>
+<li>REI seizure timing, baseline/ictal windows, and frequency limits</li>
+<li>Gamma Spike and HFO analysis intervals</li>
+<li>HFO model, band, detector selection, and advanced parameters</li>
+<li>latest REI result metadata, when available</li>
 </ul>
-<p>Selected channels use thicker traces. Trace and label colors continue to show the channel group and current theme; bad channels remain red.</p>
-<h3 id="4-3-hidden-channels">4.3 Hidden Channels</h3>
-<p>To hide one or more channels, select them, right-click a selected trace or label, and choose <strong>Hide</strong>.</p>
-<p>To restore hidden channels, click <strong>Hidden...</strong> on the toolbar.</p>
-<p>Hidden channels disappear from the visible display but are not deleted from the recording.</p>
-<h3 id="4-4-bad-channels">4.4 Bad Channels</h3>
-<p>To mark one or more channels as bad, select them, right-click a selected trace or label, and choose <strong>Mark as bad</strong>.</p>
-<p>If all selected channels are already marked as bad, the context menu instead offers <strong>Unmark as bad</strong>.</p>
-<p>To review or unmark bad channels, click <strong>Bad...</strong> on the toolbar. From this menu, you can unmark individual channels or clear all bad-channel markings.</p>
-<p>Bad channels are excluded from review-related computations and from automatic montage generation.</p>
-<hr>
-<h2 id="5-preprocessing">5. Preprocessing</h2>
-<h3 id="5-1-montage-reference">5.1 Montage / Reference</h3>
-<p>Use <strong>Preprocessing &gt; Montage / Reference</strong> to switch reference mode.</p>
-<p>Available options:</p>
+<p>It does not store:</p>
 <ul>
-<li><strong>Monopolar</strong>: shows each channel as imported</li>
-<li><strong>Bipolar</strong>: builds consecutive pairs within each electrode and displays</li>
-<p><code>Channel 1 - Channel 2</code></p>
-<li><strong>Average</strong>: subtracts the shared average from each channel</li>
-<li><strong>Median</strong>: subtracts the shared median from each channel</li>
-<li><strong>Common Reference...</strong>: subtracts one chosen physical channel from each displayed channel</li>
-</ul>
-<p>Average and Median exclude bad channels from the reference pool and mask samples annotated as <strong>Bad segment</strong> while calculating the shared reference. Hidden channels remain in the reference pool.</p>
-<h4 id="automatic-bipolar-montage">Automatic Bipolar Montage</h4>
-<p>When <strong>Bipolar</strong> is selected, the application immediately builds and applies an automatic bipolar montage. It extracts the electrode prefix and contact number from each channel label, groups contacts by electrode, sorts them by number, and pairs only consecutive contacts within the same electrode. For example, <code>A1</code>, <code>A2</code>, and <code>A3</code> produce <code>A1-A2</code> and <code>A2-A3</code>.</p>
-<p>Labels that cannot be parsed and contacts without a consecutive neighbor are skipped. Channels already marked as bad are also excluded when the automatic montage is generated. If no valid pairs can be created, the application shows a warning. If only some channels are skipped, it displays a message listing them. If the imported labels already look bipolar, the application asks for confirmation before applying another bipolar derivation.</p>
-<p>Bipolar mode performs true re-referencing rather than changing labels only. Each displayed bipolar trace is calculated as <strong>Channel 1 minus Channel 2</strong>. Hiding a displayed bipolar channel removes that derived trace from the viewer. Bad channels remain visible unless they are hidden; use <strong>Hide all Bad</strong> to remove them from view. Hiding a source channel does not exclude it when a new automatic montage is generated.</p>
-<h3 id="5-2-edit-bipolar-montage">5.2 Edit Bipolar Montage</h3>
-<p>The toolbar <strong>Edit Bipolar...</strong> button is visible and enabled only while a valid Bipolar montage is active.</p>
-<p>The editor lets you:</p>
-<ul>
-<li>change Channel 2 in automatic pairs</li>
-<li>add manual pairs</li>
-<li>sort rows by pair name or origin</li>
-<li>restore the automatic montage with <strong>Back to default</strong></li>
-<li>apply edits with <strong>OK</strong> or discard them with <strong>Cancel</strong></li>
-</ul>
-<h4 id="validation-and-warnings">Validation and Warnings</h4>
-<p>The editor validates all pairs before applying the montage. <strong>Channel 2 must be different from Channel 1</strong>, and every bipolar channel name must be unique. If either check fails, the montage is not changed. Channels marked as bad are not available when choosing channels for edited pairs.</p>
-<p>If Channel 1 and Channel 2 have recognizable labels but belong to different electrode groups, the editor displays a <strong>Cross-electrode bipolar pairs</strong> warning. Choose <strong>Cancel</strong> to leave the current montage unchanged or <strong>Keep edit</strong> to apply the cross-electrode pair intentionally. This warning preserves editing flexibility while flagging an unusual configuration.</p>
-<h3 id="5-3-display-filters">5.3 Display Filters</h3>
-<p>Use <strong>Preprocessing &gt; Display Filters...</strong> to show or hide the display-filter controls above the signal viewer.</p>
-<p>Use <strong>Scope</strong> to choose which filter profile to edit:</p>
-<ul>
-<li><strong>All</strong> applies the same settings to Macro and Micro channels.</li>
-<li><strong>Macro</strong> changes only the Macro profile.</li>
-<li><strong>Micro</strong> changes only the Micro profile.</li>
-</ul>
-<p>Each profile contains:</p>
-<ul>
-<li><strong>High Pass (Hz)</strong></li>
-<li><strong>Low Pass (Hz)</strong></li>
-<li><strong>Notch: Off</strong></li>
-<li><strong>Notch: 50 Hz + harmonics</strong></li>
-<li><strong>Notch: 60 Hz + harmonics</strong></li>
-</ul>
-<p>The high-pass and low-pass controls are numeric and cannot be empty. Enter <code>0</code> to disable that cutoff. For example, High Pass = <code>0</code> means that no high-pass filter is applied; Low Pass = <code>0</code> means that no low-pass filter is applied.</p>
-<p>Click <strong>Apply filters</strong> to save the displayed values to the selected scope. Click <strong>Back to default</strong> to clear the selected scope's filters.</p>
-<p>Validation rules:</p>
-<ul>
-<li>each active cutoff must be below the recording's Nyquist frequency</li>
-<li>when both cutoffs are active, the high-pass value must be lower than the</li>
-<p>low-pass value</p>
-</ul>
-<p>Display filters are non-destructive: the original recording is never modified. The active reference is applied first, followed by the appropriate Macro or Micro filter profile. For responsive browsing of large recordings, the viewer reads the visible interval with extra padding, filters it, and then crops the padding before plotting.</p>
-<p>The PSD panel applies the same Macro and Micro display-filter profiles to the selected PSD interval. Computation algorithms have separate preprocessing rules: display high-pass and low-pass values are not automatically reused, while the selected notch mode is reused only where stated in the relevant computation section.</p>
-<h3 id="5-4-power-spectrum">5.4 Power Spectrum</h3>
-<p>Use <strong>Preprocessing &gt; Power Spectrum</strong> to inspect power spectral density (PSD) over a chosen recording interval. Enter a start and stop time in the interval dialog. The interval must remain inside the recording, and the stop time must be later than the start time. The PSD opens as a tab beside the main viewer and is calculated from the currently active montage/reference. In Bipolar mode, the PSD therefore uses the actual <code>Channel 1 - Channel 2</code> signals.</p>
-<h4 id="macro-and-micro-panels">Macro and Micro panels</h4>
-<p>The PSD tab is divided into independent <strong>Macro</strong> and <strong>Micro</strong> panels. Channel membership comes from <strong>Channels &gt; Channel Groups...</strong>. Channels are assigned to Macro by default, so the Micro panel remains empty until at least one channel is assigned to Micro. If channel-group assignments change while the PSD tab is open, the two panels are refreshed automatically.</p>
-<p>In Bipolar montage, each displayed bipolar pair is placed in the same PSD group as its first source channel (Channel 1). This keeps the derived channel in one panel even if a manually edited pair crosses Macro and Micro groups.</p>
-<p>Each group has its own:</p>
-<ul>
-<li><strong>Excluded channels</strong> list on the left</li>
-<li><strong>Displayed channels</strong> list on the right</li>
-<li>PSD plot at the bottom</li>
-<li>channel selection, inclusion/exclusion controls, and zoom state</li>
-</ul>
-<p>Macro and Micro channels are processed with their corresponding active display filter profiles before the PSD is calculated. The two panels can therefore show different filtered spectra for the same interval. PSD values are displayed in <strong>dB/Hz</strong> against frequency in <strong>Hz</strong>. The calculation uses Welch-style averaging with Hann windows, up to 2,048 samples per segment, and 50% overlap.</p>
-<h4 id="displaying-and-selecting-psd-curves">Displaying and selecting PSD curves</h4>
-<p>All channels in each group are included in its plot by default. This includes channels hidden from the main viewer and channels marked as bad. Excluding a channel from a PSD plot only changes the PSD tab; it does not hide the channel in the main viewer or change its Macro/Micro assignment.</p>
-<ul>
-<li>Select one or more channels under <strong>Displayed channels</strong>, then click <code>&lt;&lt;</code> to</li>
-<p>move them to <strong>Excluded channels</strong>.</p>
-<li>Select channels under <strong>Excluded channels</strong>, then click <code>&gt;&gt;</code> to return them</li>
-<p>to <strong>Displayed channels</strong>.</p>
-<li><strong>Exclude all</strong> and <strong>Include all</strong> operate only on the corresponding Macro</li>
-<p>or Micro panel.</p>
-<li>Click a displayed channel name or its curve to make it the active channel.</li>
-<p>Its curve and list label are emphasized.</p>
-<li>Each plot can be zoomed independently. Double left-click inside a plot to</li>
-<p>restore that plot's full default range.</p>
-</ul>
-<p>Bad channels remain visible in red. Use <strong>Mark selected as bad</strong> or <strong>Unmark selected as bad</strong> on selected entries in either list to update the application-wide bad-channel state. The change is also reflected in the main viewer and relevant computations. A selected bad channel is shown with a thicker red curve.</p>
-<h4 id="plot-interaction">Plot Interaction</h4>
-<p>The Macro and Micro PSD plots support PyQtGraph mouse controls for zooming and panning. Each plot keeps an independent view, and double left-clicking inside a plot restores its full default range. These actions change visualization only; they do not recalculate the PSD or modify computation results.</p>
-<p>The PyQtGraph context menu is disabled in the current PSD panels, so its built-in auto-range and export options are not available.</p>
-<hr>
-<h2 id="6-compute">6. Compute</h2>
-<h3 id="6-1-open-and-use-the-computation-panel">6.1 Open and Use the Computation Panel</h3>
-<p>Open the panel with <strong>Compute &gt; Open Computation Panel</strong>. You can also select channels in the viewer, right-click the selection, and choose <strong>Open Computation Panel</strong>. The panel can be docked, floated, moved, or resized.</p>
-<p>The panel analyzes the recording currently open in the application; it does not open a separate data file.</p>
-<h4 id="panel-structure">Panel Structure</h4>
-<p>The panel has four main sections:</p>
-<ul>
-<li><strong>Algorithm</strong>: select <strong>REI</strong>, <strong>Gamma spikes</strong>, or <strong>HFO</strong>.</li>
-<li><strong>Channels</strong>: choose the channels to analyze.</li>
-<li><strong>Time</strong>: define the analysis interval and algorithm-specific parameters.</li>
-<li><strong>Output</strong>: run or cancel an analysis, import results, open result views, and</li>
-<p>export results.</p>
-</ul>
-<p>The <strong>Time</strong> and <strong>Output</strong> controls change with the selected algorithm.</p>
-<h4 id="channel-selection">Channel Selection</h4>
-<p>The <strong>Channels</strong> list defines the analysis input. Confirm it before every run, especially after changing the montage or reference. Use:</p>
-<ul>
-<li><strong>All</strong> to replace the list with all non-bad channels</li>
-<li><strong>Macro</strong> or <strong>Micro</strong> to replace it with the non-bad channels in that group</li>
-<li><strong>Add...</strong> to search for and add channels</li>
-<li><strong>Remove selected</strong> or <strong>Clear</strong> to remove channels</li>
-</ul>
-<p>When a run starts, the selected channels are extracted using the montage or reference active at that moment. Confirmed bad channels are not available for selection. Display high-pass and low-pass filters are not applied unless an algorithm explicitly defines them as part of its own preprocessing.</p>
-<h4 id="shared-output-import-and-export-controls">Shared Output, Import, and Export Controls</h4>
-<p>The <strong>Output</strong> section always contains the run control and <strong>Import results...</strong>. Each algorithm shows its own cancel button while processing. Review and export buttons become available after a successful run or import.</p>
-<p>To restore results, first load the matching recording and montage. Click <strong>Import results...</strong> and select a folder previously exported by the application. The algorithm is detected automatically. Available summaries, review data, metadata, and viewer markers are restored. Import is rejected when required files are missing or the recording, channels, or montage are incompatible.</p>
-<p>Use the export button shown for the selected algorithm. The application asks before replacing existing result files.</p>
-<h4 id="shared-result-navigation">Shared Result Navigation</h4>
-<p>Gamma-spike and HFO results add event-visibility checkboxes beside the montage label and a result timeline below the viewer. These controls only show or hide results; they do not filter the EEG signal or change saved results.</p>
-<p>The timeline covers the full recording and highlights the current viewer window. Click a timeline event to jump to its channel and time. Click an event marker in the viewer to open the corresponding review window.</p>
-<h3 id="6-2-recruitment-energy-index-rei">6.2 Recruitment Energy Index (REI)</h3>
-<h4 id="definition-origin-and-validation">Definition, Origin, and Validation</h4>
-<p>The Recruitment Energy Index (REI) estimates how early and strongly each channel becomes involved during seizure onset. It compares ictal high-frequency energy with baseline activity, combines this energy change with the estimated recruitment time, and assigns each channel a normalized score and rank. A higher score indicates earlier and stronger recruitment relative to the other analyzed channels. REI is a review aid and should be interpreted together with the EEG/iEEG traces and clinical context.</p>
-<p>This implementation was adapted from Lucas A.'s <a href="https://github.com/allucas/IEEG_EI">IEEG_EI project</a>, a Python interface for calculating EI from iEEG.org recordings. It draws on the EI method introduced by <a href="https://doi.org/10.1093/brain/awn111">Bartolomei et al. (2008)</a>, which combines high-frequency activity at seizure onset with the relative timing of each channel's involvement.</p>
-<p>No numerical parity with the source implementation or clinical-validation results are currently documented for this GUI implementation.</p>
-<h4 id="time-input">Time Input</h4>
-<p>Enter <strong>Seizure onset</strong> and <strong>Seizure offset</strong>, then check the baseline and ictal windows. Click <strong>Use default windows</strong> to set:</p>
-<ul>
-<li>baseline: 70 to 10 seconds before seizure onset</li>
-<li>ictal: 5 seconds before to 20 seconds after seizure onset</li>
-</ul>
-<p>All windows must be non-empty and remain inside the recording. Seizure offset must be after seizure onset, and the ictal window must end no later than the seizure offset. REI does not impose a minimum seizure duration.</p>
-<h4 id="advanced-parameters-and-preprocessing">Advanced Parameters and Preprocessing</h4>
-<p>Bipolar montage is recommended. If another montage is active, the application lets you switch to Bipolar, continue with the current montage, or cancel.</p>
-<p>REI excludes confirmed bad channels and ignores the display high-pass and low-pass filters. It applies a zero-phase fourth-order Butterworth bandpass; the default range is 60-140 Hz. Use <strong>Advanced parameters...</strong> to change this range. The active notch setting is used when enabled. The algorithm does not add a common-average reference.</p>
-<h4 id="run-and-outputs">Run and Outputs</h4>
-<p>Click <strong>Run REI</strong>. The analysis runs in the background while the status area shows its current processing step and elapsed time. Click <strong>Cancel REI run</strong> to stop it. Cancellation is checked between processing steps, so the current filtering step may need to finish first. A cancelled run does not replace the last completed REI result.</p>
-<p>When the analysis finishes, the main viewer displays the REI rank beside each analyzed channel. Channel labels are color-coded by normalized REI score, from orange for lower scores to green for higher scores. An orange tick on each trace marks the estimated recruitment time when it falls inside the visible time window. Channels excluded from the analysis do not receive an REI rank, score color, or recruitment marker.</p>
-<p>Use:</p>
-<ul>
-<li><strong>Open REI summary</strong> for channel scores, ranks, peak high-frequency energy,</li>
-<p>and recruitment delays</p>
-<li><strong>Open REI heatmap</strong> for high-frequency energy around seizure onset, sorting,</li>
-<p>and top-channel controls</p>
-<li><strong>Export REI results</strong> to save <code>rei_summary.csv</code>, <code>rei_heatmap.csv</code>,</li>
-<p><code>rei_heatmap.png</code>, <code>rei_metadata.json</code>, and <code>README.txt</code></p>
-</ul>
-<h3 id="6-3-gamma-spikes">6.3 Gamma Spikes</h3>
-<h4 id="definition-origin-and-validation">Definition, Origin, and Validation</h4>
-<p>Gamma-spike analysis detects interictal spikes and measures associated gamma activity. Events are classified as gamma or non-gamma spikes for channel-level and event-level review.</p>
-<p>The implementation is a Python translation of the project's original MATLAB spike-gamma workflow and uses the Janca Hilbert-envelope method for candidate spike detection. The translated core was checked against the original MATLAB/Python 2 behavior, and Brainstorm was used as an external comparison during validation. The segmented long-recording pipeline was then checked for consistency with that reference workflow. These are implementation checks, not clinical sensitivity or specificity studies.</p>
-<h4 id="time-input">Time Input</h4>
-<p>Enter the analysis start and end times. The full recording is selected by default.</p>
-<h4 id="run-and-outputs">Run and Outputs</h4>
-<p>Click <strong>Run Gamma Spike Detector</strong>. The detector processes the interval in 10-minute chunks with 10 seconds of context, merges detections once, and then calculates spike boundaries and gamma measurements channel by channel. This limits memory use on long recordings.</p>
-<p>The analysis uses the active montage and notch setting but not the display high-pass or low-pass filters. Progress and estimated remaining time appear in the status area. Click <strong>Cancel gamma run</strong> to stop an active run.</p>
-<p>When the analysis finishes, use:</p>
-<ul>
-<li><strong>Open channel-level summary</strong> for spike counts, gamma-spike rate, and mean</li>
-<p>gamma measurements</p>
-<li><strong>Open spike grid</strong> for raw traces, spike boundaries, gamma windows,</li>
-<p>time-frequency views, and manual event classification</p>
-<li>the <strong>non-gamma</strong> and <strong>gamma</strong> visibility controls to show or hide event</li>
-<p>markers and timeline entries</p>
-<li><strong>Export gamma results</strong> to save <code>gamma_channel_summary.csv</code>,</li>
-<p><code>gamma_spike_events.csv</code>, <code>gamma_metadata.json</code>, and <code>README.txt</code></p>
-</ul>
-<p>Per-spike heatmaps are not exported because they can create very large folders.</p>
-<h3 id="6-4-high-frequency-oscillations-hfos">6.4 High-Frequency Oscillations (HFOs)</h3>
-<h4 id="definition-models-and-validation">Definition, Models, and Validation</h4>
-<p>HFO analysis detects candidate high-frequency events and classifies them for manual review. The three models mainly differ in their source implementation, validated frequency range, sampling requirements, and classifier.</p>
-<p>The model sources are the <a href="https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain">pyHFO pyBrain branch</a> and <a href="https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg">Omni-iEEG</a>.</p>
-<ul>
-<li><strong>pyhfo_pybrain-80-500 Hz</strong> is the default. It preserves the native sampling</li>
-<p>rate and uses the original pyHFO Model A and Model S classifiers. Validation matched 53/53 Zurich15 and 500/500 HUP134 candidate-pool labels. In the full Zurich15 route, events and labels matched for STE (1/1), MNI (36/36), and Hilbert (43/43).</p>
-<li><strong>pyhfo_omni_legacy-80-300 Hz</strong> reproduces Omni's legacy pyHFO route. It</li>
-<p>requires a sampling rate of at least 1000 Hz and processes at 1000 Hz. On the Zurich10 candidate pool, 611/611 labels matched and the maximum recorded score difference was 0.0.</p>
-<li><strong>eHFO-80-300 Hz</strong> reproduces Omni's three-model artifact, spike, and eHFO</li>
-<p>classifier using the official checkpoints. It has the same sampling requirement as the Omni legacy route. On Zurich10, 611/611 labels matched, with exact feature and score agreement.</p>
-</ul>
-<p>These are technical parity tests against each model's source implementation, not clinical performance studies. They apply only to the stated validated configuration; changing the band or detector settings creates an unvalidated configuration.</p>
-<h4 id="time-input">Time Input</h4>
-<p>Enter the analysis start and end times. The full recording is selected by default. This input behaves the same for all three models.</p>
-<h4 id="advanced-parameters-and-preprocessing">Advanced Parameters and Preprocessing</h4>
-<p>Select a model and compatible band preset. The default band is 80-500 Hz for <code>pyhfo_pybrain</code> and 80-300 Hz for both Omni models. <strong>Ripples 80-250 Hz</strong> and <strong>Custom</strong> are available for all models; <strong>Fast ripples 250-500 Hz</strong> is available only for <code>pyhfo_pybrain</code>.</p>
-<p>All models use the same <strong>Advanced parameters...</strong> interface. Select one or more candidate detectors—STE, MNI, or Hilbert—and edit their parameters if needed. At least one detector must remain selected. Click <strong>Save</strong> to apply advanced changes. The high frequency must remain below the effective Nyquist limit.</p>
-<p>The analysis uses the active montage and notch setting, not the display high-pass or low-pass filters. Candidates that exceed the maximum duration or fall inside the analysis-edge padding are excluded before classification and counted in the metadata.</p>
-<h4 id="run-and-outputs">Run and Outputs</h4>
-<p>Click <strong>Run HFO Detector</strong>. All models use the same background-processing, progress, estimated-time, and cancellation interface.</p>
-<p>When the analysis finishes, use:</p>
-<ul>
-<li><strong>Open HFO summary</strong> for channel-level candidate and class counts</li>
-<li><strong>Open HFO event grid</strong> for raw and filtered traces, spectrograms, detector</li>
-<p>information, classifier propositions, and manual review</p>
-<li>the class visibility controls to show or hide <strong>artifact</strong>, <strong>HFO</strong>,</li>
-<p><strong>spkHFO</strong>, <strong>eHFO</strong>, <strong>spk-eHFO</strong>, and <strong>unclassified</strong> events</p>
-<li><strong>Export HFO events</strong> to save <code>hfo_channel_summary.csv</code>, <code>hfo_events.csv</code>,</li>
-<p><code>hfo_metadata.json</code>, and <code>README.txt</code></p>
-</ul>
-<p>Manual classification does not overwrite the model's original proposition. A deleted event is removed from active counts but retained in exported data for traceability.</p>
-<hr>
-<h2 id="7-review-menu">7. Review Menu</h2>
-<h3 id="7-1-annotate">7.1 Annotate</h3>
-<p>Use <strong>Review &gt; Annotate</strong> to add annotations to the signal display.</p>
-<ol>
-<li>Choose annotation type</li>
-<li>Choose annotation scope</li>
-<li>Add an optional note</li>
-<li>Click <strong>OK</strong></li>
-<li>Drag on the signal display where you want to place the annotation</li>
-</ol>
-<p>Annotation scopes:</p>
-<ul>
-<li>clicked channel</li>
-<li>selected channels</li>
-<li>all channels</li>
-</ul>
-<p>Press <strong>Escape</strong> to cancel annotation mode before placing an annotation.</p>
-<p>To modify an annotation from the viewer, right-click the annotation region and choose <strong>Edit annotation...</strong> or <strong>Delete annotation</strong>.</p>
-<p>When annotations exist, the Annotations dock appears. From the list, you can click an annotation to jump to it or delete it from the plot context menu.</p>
-<hr>
-<h2 id="8-file-menu">8. File Menu</h2>
-<h3 id="8-1-save">8.1 Save</h3>
-<p>Use <strong>File &gt; Save</strong> to save the current project.</p>
-<p>The <code>.ieeg</code> project file saves:</p>
-<ul>
-<li>the linked raw file</li>
-<li>annotations</li>
-<li>hidden channels</li>
-<li>bad channels</li>
-<li>macro/micro channel groups</li>
-<li>an edited bipolar montage, ready for reuse after Bipolar is selected</li>
-<li>macro and micro display-filter settings</li>
-<li>display time range, visible-channel count, and amplitude scale</li>
-<li>the selected computation algorithm and channels</li>
-<li>REI seizure timing, baseline/ictal windows, and frequency settings</li>
-<li>gamma-spike and HFO analysis intervals</li>
-<li>HFO classifier, band, detector, and advanced-parameter settings</li>
-<li>the last REI result metadata, when available</li>
-</ul>
-<p>The project file does not save:</p>
-<ul>
-<li>the active reference mode; a project reopens in Monopolar</li>
-<li>complete REI, gamma-spike, or HFO results</li>
-<li>the Light/Dark theme</li>
-<li>the main-viewer time position</li>
+<li>active reference mode; projects reopen in Monopolar</li>
+<li>complete REI, Gamma Spike, or HFO results</li>
+<li>Gamma Spike or HFO manual event reviews</li>
+<li>Light/Dark theme or main-viewer time position</li>
 <li>open docks, review grids, PSD/scalogram windows, or other secondary windows</li>
-<li>gamma/HFO event-filter checkbox selections</li>
+<li>Gamma Spike/HFO class and range visibility filters</li>
 </ul>
-<p>Complete computation results are stored in exported result folders rather than inside the <code>.ieeg</code> project file. To recover those results and their viewer markers, use <strong>Import results...</strong> with the matching exported folder.</p>
-<h3 id="8-2-save-as">8.2 Save As</h3>
-<p>Use <strong>File &gt; Save As...</strong> if the project does not yet have a save path or if you want to save it as another file.</p>
-<p><strong>Save As...</strong> stores the same elements as <strong>Save</strong>, but in a new <code>.ieeg</code> project file.</p>
-<h3 id="8-3-close-project">8.3 Close Project</h3>
-<p>Use <strong>File &gt; Close Project</strong> to close the current project while keeping the application open.</p>
-<p>If there are unsaved changes, the application asks whether to save, continue without saving, or cancel.</p>
-<h3 id="8-4-exit">8.4 Exit</h3>
-<p>Use <strong>File &gt; Exit</strong> to quit the application.</p>
-<p>If there are unsaved changes, the application asks what to do before closing.</p>
-<hr>
-<h2 id="9-help-menu">9. Help Menu</h2>
-<h3 id="9-1-user-guide">9.1 User Guide</h3>
-<p>Use <strong>Help &gt; User Guide</strong> to open this guide from inside the application.</p>
-<h3 id="9-2-shortcuts">9.2 Shortcuts</h3>
-<p>Use <strong>Help &gt; Shortcuts</strong> to open the keyboard and mouse shortcut list.</p>
-<hr>
-<h2 id="10-practical-review-workflow">10. Practical Review Workflow</h2>
-<p>A common workflow is:</p>
+<p>Restore results and viewer overlays with <strong>Import results...</strong> and a matching export folder.</p>
+<p>Save the <code>.ieeg</code> project for review configuration and annotations; export each computation for complete scientific results. These operations are complementary.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="8-2-save-as">8.2 Save As</h3></summary>
+<div class="section-content">
+<p>Choose <strong>File &gt; Save As...</strong> to save the same state to a new <code>.ieeg</code> file.</p>
+<p>Use <strong>Save As...</strong> when the project has no path or when creating a separate project copy. It does not copy the linked raw recording.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="8-3-close-project">8.3 Close Project</h3></summary>
+<div class="section-content">
+<p>Choose <strong>File &gt; Close Project</strong> to keep the application open without a project. If changes are unsaved, choose to save, discard, or cancel.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="8-4-exit">8.4 Exit</h3></summary>
+<div class="section-content">
+<p>Choose <strong>File &gt; Exit</strong> to quit. Unsaved changes trigger the same confirmation.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="9-help-menu">9. Help Menu</h2></summary>
+<div class="section-content">
+<details class="guide-section level-3">
+<summary><h3 id="9-1-user-guide">9.1 User Guide</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Help &gt; User Guide</strong> to open this page in the default browser.</p>
+</div></details>
+<details class="guide-section level-3">
+<summary><h3 id="9-2-shortcuts">9.2 Shortcuts</h3></summary>
+<div class="section-content">
+<p>Choose <strong>Help &gt; Shortcuts</strong> to open the keyboard and mouse shortcut list.</p>
+</div></details>
+</div></details>
+<details class="guide-section level-2">
+<summary><h2 id="10-practical-review-workflow">10. Practical Review Workflow</h2></summary>
+<div class="section-content">
 <ol>
-<li>Create or open a project</li>
-<li>Inspect the recording in <strong>Monopolar</strong></li>
-<li>Mark noisy or unusable channels as <strong>bad</strong></li>
-<li>Hide channels if needed for visual clarity</li>
-<li>Switch reference mode if useful</li>
-<li>Add annotations</li>
-<li>Open the computation panel or PSD panel if needed</li>
-<li>Run a computation or import a matching exported result folder</li>
-<li>Review event classes and use the global timeline to navigate results</li>
-<li>Export results when needed</li>
-<li>Save the project regularly</li>
+<li>Create or open a project.</li>
+<li>Inspect the recording in Monopolar mode.</li>
+<li>Mark unusable channels as bad; hide traces if needed.</li>
+<li>Assign Macro/Micro groups and choose a montage/reference.</li>
+<li>Add annotations or inspect PSD and scalograms as needed.</li>
+<li>Run a computation or import matching results.</li>
+<li>Review events and correct official classes before export.</li>
+<li>Export results, then save the project.</li>
 </ol>
-  </main>
+</div></details>
+    </article>
+  </div>
   <script>
     (() => {
+      const sections = Array.from(document.querySelectorAll(".guide-section"));
+
+      function setAllSections(open) {
+        sections.forEach((section) => { section.open = open; });
+      }
+
+      function revealHeading(heading) {
+        let parent = heading.parentElement;
+        while (parent) {
+          if (parent.tagName === "DETAILS") parent.open = true;
+          parent = parent.parentElement;
+        }
+      }
+
+      document.getElementById("expand-all")?.addEventListener("click", () => {
+        setAllSections(true);
+      });
+      document.getElementById("collapse-all")?.addEventListener("click", () => {
+        setAllSections(false);
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+
+      document.querySelectorAll('.toc a[href^="#"]').forEach((link) => {
+        link.addEventListener("click", (event) => {
+          const anchor = link.getAttribute("href").slice(1);
+          const heading = document.getElementById(decodeURIComponent(anchor));
+          if (!heading) return;
+          event.preventDefault();
+          revealHeading(heading);
+          window.history.replaceState(null, "", `#${anchor}`);
+          window.requestAnimationFrame(() => heading.scrollIntoView({ behavior: "smooth" }));
+        });
+      });
+
+      if (window.location.hash) {
+        const heading = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        if (heading) revealHeading(heading);
+      }
+
       let displayedVersion = null;
 
       async function reloadAfterSavedChange() {
