@@ -285,10 +285,10 @@
 <a class="toc-level-2" href="#5-preprocessing">5. Preprocessing</a>
 <a class="toc-level-3" href="#5-1-montage-reference">5.1 Montage / Reference</a>
 <a class="toc-level-4" href="#automatic-bipolar-montage">Automatic Bipolar Montage</a>
-<a class="toc-level-3" href="#5-2-edit-bipolar-montage">5.2 Edit Bipolar Montage</a>
-<a class="toc-level-4" href="#validation-and-warnings">Validation and Warnings</a>
-<a class="toc-level-3" href="#5-3-display-filters">5.3 Display Filters</a>
-<a class="toc-level-3" href="#5-4-power-spectrum">5.4 Power Spectrum</a>
+<a class="toc-level-4" href="#edit-bipolar-montage">Edit Bipolar Montage</a>
+<a class="toc-level-5" href="#validation-and-warnings">Validation and Warnings</a>
+<a class="toc-level-3" href="#5-2-display-filters">5.2 Display Filters</a>
+<a class="toc-level-3" href="#5-3-power-spectrum">5.3 Power Spectrum</a>
 <a class="toc-level-4" href="#macro-and-micro-panels">Macro and Micro Panels</a>
 <a class="toc-level-4" href="#curves-and-channel-status">Curves and Channel Status</a>
 <a class="toc-level-2" href="#6-compute">6. Compute</a>
@@ -509,21 +509,21 @@
 <p>Each trace contains the actual difference <strong>Channel 1 minus Channel 2</strong>, not only a new label. Hiding a derived trace removes it from view. Hiding a source channel does not exclude it from later automatic generation.</p>
 <p>Bad derived channels remain visible unless hidden; use <strong>Hide all Bad</strong> to remove them from view. Automatic generation uses the bad-channel state that exists when Bipolar mode is selected.</p>
 </div></details>
-</div></details>
-<details class="guide-section level-3">
-<summary><h3 id="5-2-edit-bipolar-montage">5.2 Edit Bipolar Montage</h3></summary>
+<details class="guide-section level-4">
+<summary><h4 id="edit-bipolar-montage">Edit Bipolar Montage</h4></summary>
 <div class="section-content">
 <p>The <strong>Edit Bipolar...</strong> button is available only in Bipolar mode. Use it to change Channel 2, add pairs, restore automatic pairs, apply with <strong>OK</strong>, or discard with <strong>Cancel</strong>.</p>
-<details class="guide-section level-4">
-<summary><h4 id="validation-and-warnings">Validation and Warnings</h4></summary>
+<details class="guide-section level-5">
+<summary><h5 id="validation-and-warnings">Validation and Warnings</h5></summary>
 <div class="section-content">
 <p>Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied. Bad channels cannot be selected.</p>
 <p>A pair spanning two recognized electrode groups triggers a <strong>Cross-electrode bipolar pairs</strong> warning. Choose <strong>Cancel</strong> or <strong>Keep edit</strong>.</p>
 <p><strong>Cancel</strong> leaves the current montage unchanged. <strong>Keep edit</strong> allows an intentional cross-electrode pair; the warning is not an error.</p>
 </div></details>
 </div></details>
+</div></details>
 <details class="guide-section level-3">
-<summary><h3 id="5-3-display-filters">5.3 Display Filters</h3></summary>
+<summary><h3 id="5-2-display-filters">5.2 Display Filters</h3></summary>
 <div class="section-content">
 <p>Choose <strong>Preprocessing &gt; Display Filters...</strong> to show or hide filter controls above the viewer.</p>
 <p>Use <strong>Scope</strong> to edit:</p>
@@ -538,7 +538,7 @@
 <p>The PSD uses these profiles. Computations use separate bandpass rules; only algorithms that explicitly say so reuse the notch choice.</p>
 </div></details>
 <details class="guide-section level-3">
-<summary><h3 id="5-4-power-spectrum">5.4 Power Spectrum</h3></summary>
+<summary><h3 id="5-3-power-spectrum">5.3 Power Spectrum</h3></summary>
 <div class="section-content">
 <p>Choose <strong>Preprocessing &gt; Power Spectrum</strong>, enter start and stop times, and confirm. Stop must follow start, and both values must be inside the recording. The PSD opens beside the main viewer.</p>
 <details class="guide-section level-4">

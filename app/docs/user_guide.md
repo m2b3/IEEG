@@ -144,11 +144,11 @@ Each trace contains the actual difference **Channel 1 minus Channel 2**, not onl
 
 Bad derived channels remain visible unless hidden; use **Hide all Bad** to remove them from view. Automatic generation uses the bad-channel state that exists when Bipolar mode is selected.
 
-### 5.2 Edit Bipolar Montage
+#### Edit Bipolar Montage
 
 The **Edit Bipolar...** button is available only in Bipolar mode. Use it to change Channel 2, add pairs, restore automatic pairs, apply with **OK**, or discard with **Cancel**.
 
-#### Validation and Warnings
+##### Validation and Warnings
 
 Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied. Bad channels cannot be selected.
 
@@ -156,7 +156,7 @@ A pair spanning two recognized electrode groups triggers a **Cross-electrode bip
 
 **Cancel** leaves the current montage unchanged. **Keep edit** allows an intentional cross-electrode pair; the warning is not an error.
 
-### 5.3 Display Filters
+### 5.2 Display Filters
 
 Choose **Preprocessing > Display Filters...** to show or hide filter controls above the viewer.
 
@@ -174,7 +174,7 @@ Filters are non-destructive. The montage/reference is applied first, then the re
 
 The PSD uses these profiles. Computations use separate bandpass rules; only algorithms that explicitly say so reuse the notch choice.
 
-### 5.4 Power Spectrum
+### 5.3 Power Spectrum
 
 Choose **Preprocessing > Power Spectrum**, enter start and stop times, and confirm. Stop must follow start, and both values must be inside the recording. The PSD opens beside the main viewer.
 
