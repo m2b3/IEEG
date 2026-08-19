@@ -9,6 +9,7 @@ from app.computation.hfo.preprocessing.pybrain import (
     apply_pybrain_bandpass,
     prepare_pybrain_hfo_input_from_array,
     prepare_pybrain_hfo_input_from_file,
+    pybrain_effective_high_freq_hz,
 )
 
 __all__ = [
@@ -16,6 +17,7 @@ __all__ = [
     "prepare_hfo_input_from_array",
     "prepare_hfo_input_from_file",
     "apply_pybrain_bandpass",
+    "pybrain_effective_high_freq_hz",
     "prepare_pybrain_hfo_input_from_array",
     "prepare_pybrain_hfo_input_from_file",
 ]

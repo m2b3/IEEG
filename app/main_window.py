@@ -741,10 +741,10 @@ class MainWindow(QMainWindow):
         # Edit bipolar referencing 
         self.btn_edit_bipolar = QToolButton()
         self.btn_edit_bipolar.setText("Edit Bipolar...")
-        self.btn_edit_bipolar.setEnabled(False)
-        self.btn_edit_bipolar.setVisible(False)
         self.btn_edit_bipolar.clicked.connect(self.on_edit_bipolar_pairs)
-        tb.addWidget(self.btn_edit_bipolar)
+        self._edit_bipolar_action = tb.addWidget(self.btn_edit_bipolar)
+        self._edit_bipolar_action.setEnabled(False)
+        self._edit_bipolar_action.setVisible(False)
 
         # ---- Connect toolbar -> viewer ----
         self.time_range.valueChanged.connect(self._on_time_range_changed)
@@ -903,7 +903,13 @@ class MainWindow(QMainWindow):
     def _add_presets_button(self, tb: QToolBar, target, values):
         """Small down-arrow button that pops a menu of preset values."""
         btn = QToolButton()
-        btn.setArrowType(Qt.ArrowType.DownArrow)
+        # Native toolbar arrows are disproportionately large on some Windows
+        # display scales. A text chevron keeps these preset buttons compact and
+        # consistent across platforms.
+        btn.setArrowType(Qt.ArrowType.NoArrow)
+        btn.setText("▾")
+        btn.setFixedSize(18, 22)
+        btn.setToolTip("Choose a preset value")
         btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
 
         menu = QMenu(btn)
@@ -914,7 +920,16 @@ class MainWindow(QMainWindow):
 
         btn.setMenu(menu)
         # Hide the extra tiny menu-indicator arrow so only one arrow is shown
-        btn.setStyleSheet("QToolButton::menu-indicator { image: none; }")
+        btn.setStyleSheet("""
+            QToolButton {
+                padding: 0;
+                font-size: 9px;
+            }
+            QToolButton::menu-indicator {
+                image: none;
+                width: 0;
+            }
+        """)
         tb.addWidget(btn)
 
     # ---------------- File/data loading & Saving----------------
@@ -1872,8 +1887,10 @@ class MainWindow(QMainWindow):
         )
         montage = self.viewer.get_bipolar_montage() if is_bipolar else None
         can_edit = bool(montage is not None and montage.pairs)
-        self.btn_edit_bipolar.setVisible(is_bipolar)
-        self.btn_edit_bipolar.setEnabled(can_edit)
+        # QToolBar.addWidget() wraps the button in a QWidgetAction. That action,
+        # rather than the child widget, owns its toolbar visibility.
+        self._edit_bipolar_action.setVisible(is_bipolar)
+        self._edit_bipolar_action.setEnabled(can_edit)
 
     def _current_montage_for_ei(self) -> str:
         mode = self.viewer.reference_mode()

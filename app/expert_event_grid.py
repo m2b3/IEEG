@@ -27,7 +27,15 @@ COLOR_SPK_EHFO = QColor(124, 58, 237)          # violet
 COLOR_UNCLASSIFIED = QColor(120, 130, 145)     # gray
 COLOR_DELETED = QColor(90, 90, 90)             # dark gray
 
-HFO_REVIEW_CLASS_OPTIONS = [
+STANDARD_HFO_REVIEW_CLASS_OPTIONS = [
+    "artifact",
+    "HFO",
+    "non-spike HFO",
+    "spike-HFO",
+    "unclassified",
+    "deleted",
+]
+EHFO_REVIEW_CLASS_OPTIONS = [
     "artifact",
     "HFO",
     "non-spike HFO",
@@ -37,6 +45,12 @@ HFO_REVIEW_CLASS_OPTIONS = [
     "unclassified",
     "deleted",
 ]
+HFO_REVIEW_CLASS_OPTIONS = EHFO_REVIEW_CLASS_OPTIONS
+
+
+def hfo_review_class_options(*, include_ehfo: bool) -> list[str]:
+    options = EHFO_REVIEW_CLASS_OPTIONS if include_ehfo else STANDARD_HFO_REVIEW_CLASS_OPTIONS
+    return list(options)
 
 # Grid dimensions
 GRID_ROWS = 6
@@ -491,9 +505,18 @@ class ZoomedEventView(QWidget):
     classChanged = Signal(ExpertEvent, str)
     contextWindowChanged = Signal(ExpertEvent, float)
     
-    def __init__(self, event: ExpertEvent, parent=None):
+    def __init__(
+        self,
+        event: ExpertEvent,
+        parent=None,
+        *,
+        review_class_options: list[str] | tuple[str, ...] | None = None,
+    ):
         super().__init__(parent)
         self._event = event
+        self._review_class_options = list(
+            review_class_options or STANDARD_HFO_REVIEW_CLASS_OPTIONS
+        )
         self._setup_ui()
     
     def _setup_ui(self):
@@ -629,7 +652,7 @@ class ZoomedEventView(QWidget):
         review_label.setStyleSheet("color: #374151; font-size: 12px; font-weight: bold;")
         detail_layout.addWidget(review_label)
         self._class_combo = QComboBox()
-        self._class_combo.addItems(HFO_REVIEW_CLASS_OPTIONS)
+        self._class_combo.addItems(self._review_class_options)
         self._class_combo.setStyleSheet("""
             QComboBox {
                 background-color: #ffffff;
@@ -977,9 +1000,18 @@ class ExpertEventGrid(QWidget):
     filteredEventsChanged = Signal(object)
     eventClassChanged = Signal(object)
     
-    def __init__(self, parent=None, *, title: str = "Expert Event Grid"):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        title: str = "Expert Event Grid",
+        review_class_options: list[str] | tuple[str, ...] | None = None,
+    ):
         super().__init__(parent)
         self._title = str(title)
+        self._review_class_options = list(
+            review_class_options or STANDARD_HFO_REVIEW_CLASS_OPTIONS
+        )
         self._all_events: List[ExpertEvent] = []
         self._events: List[ExpertEvent] = []
         self._current_page: int = 0
@@ -1031,7 +1063,7 @@ class ExpertEventGrid(QWidget):
         self._type_filter = QComboBox()
         self._frequency_filter = QComboBox()
         self._order_filter = QComboBox()
-        self._type_filter.addItems(["All active", *HFO_REVIEW_CLASS_OPTIONS])
+        self._type_filter.addItems(["All active", *self._review_class_options])
         self._frequency_filter.addItem("All ranges", userData=None)
         self._frequency_filter.addItem("80-300 Hz", userData=(80.0, 300.0))
         self._frequency_filter.addItem("Ripple", userData=(80.0, 250.0))
@@ -1278,14 +1310,18 @@ class ExpertEventGrid(QWidget):
         self.filteredEventsChanged.emit(list(self._events))
 
     def _event_type_counts(self, events: list[ExpertEvent]) -> dict[str, int]:
-        counts = {label: 0 for label in HFO_REVIEW_CLASS_OPTIONS}
+        counts = {label: 0 for label in self._review_class_options}
         for event in events:
             event_type = self._event_filter_type(event)
             counts[event_type] = counts.get(event_type, 0) + 1
         return counts
 
     def _event_count_text(self, type_counts: dict[str, int]) -> str:
-        labels = [label for label in HFO_REVIEW_CLASS_OPTIONS if int(type_counts.get(label, 0)) > 0]
+        labels = [
+            label
+            for label in self._review_class_options
+            if int(type_counts.get(label, 0)) > 0
+        ]
         if not labels:
             labels = ["artifact", "non-spike HFO", "spike-HFO", "unclassified", "deleted"]
         return ", ".join(f"{label}: {int(type_counts.get(label, 0))}" for label in labels)
@@ -1480,7 +1516,10 @@ class ExpertEventGrid(QWidget):
         
         # Create or update zoomed view
         if self._zoomed_view is None:
-            self._zoomed_view = ZoomedEventView(event)
+            self._zoomed_view = ZoomedEventView(
+                event,
+                review_class_options=self._review_class_options,
+            )
             self._zoomed_view.backClicked.connect(self._on_back_to_grid)
             self._zoomed_view.nextEvent.connect(self._on_next_event)
             self._zoomed_view.prevEvent.connect(self._on_prev_event)

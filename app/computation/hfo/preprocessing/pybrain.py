@@ -20,6 +20,20 @@ from app.computation.hfo.preprocessing.omni import (
 )
 
 
+# The original pyBrain filter uses a very narrow 0.5 Hz transition and 93 dB
+# stop-band attenuation.  Placing its upper pass-band edge almost exactly at
+# Nyquist produces a 100+ section filter whose gain calculation overflows at
+# common 1000/1024 Hz sampling rates.  Keep enough room for a stable digital
+# filter while preserving the requested 500 Hz edge at 2 kHz and above.
+PYBRAIN_NYQUIST_GUARD_FRACTION = 0.05
+
+
+def pybrain_effective_high_freq_hz(requested_high_hz: float, fs: float) -> float:
+    nyquist = 0.5 * float(fs)
+    guarded_nyquist = nyquist * (1.0 - PYBRAIN_NYQUIST_GUARD_FRACTION)
+    return min(float(requested_high_hz), guarded_nyquist)
+
+
 def prepare_pybrain_hfo_input_from_array(
     *,
     data_uv,
@@ -98,9 +112,16 @@ def apply_pybrain_bandpass(
     matrix = np.asarray(data_uv, dtype=float)
     if matrix.ndim != 2:
         raise ValueError("pyBrain HFO bandpass expects a channel x sample array.")
+    if not np.isfinite(matrix).all():
+        bad_rows = np.flatnonzero(~np.isfinite(matrix).all(axis=1)).tolist()
+        raise ValueError(
+            "pyBrain HFO input contains non-finite samples "
+            f"in channel rows {bad_rows}."
+        )
+    effective_high_hz = pybrain_effective_high_freq_hz(float(stop_band_hz), float(fs))
     sos = construct_pybrain_filter(
         pass_band_hz=float(pass_band_hz),
-        stop_band_hz=float(stop_band_hz),
+        stop_band_hz=effective_high_hz,
         ripple_db=float(ripple_db),
         attenuation_db=float(attenuation_db),
         transition_space_hz=float(transition_space_hz),
@@ -111,7 +132,13 @@ def apply_pybrain_bandpass(
         filtered = sosfilt(sos, np.asarray(row, dtype=float))
         filtered = sosfilt(sos, np.flipud(filtered))
         rows.append(np.flipud(filtered))
-    return np.asarray(rows, dtype=float)
+    result = np.asarray(rows, dtype=float)
+    if not np.isfinite(result).all():
+        raise ValueError(
+            "pyBrain HFO filtering produced non-finite values. "
+            "Use a lower upper-frequency edge or a higher-rate recording."
+        )
+    return result
 
 
 def construct_pybrain_filter(
@@ -128,7 +155,7 @@ def construct_pybrain_filter(
     nyquist = float(fs) / 2.0
     if float(pass_band_hz) <= 0.0 or float(pass_band_hz) >= nyquist:
         raise ValueError("Invalid pyBrain HFO filter pass band.")
-    high = min(float(stop_band_hz), nyquist * 0.99)
+    high = pybrain_effective_high_freq_hz(float(stop_band_hz), float(fs))
     if high <= float(pass_band_hz):
         raise ValueError("pyBrain HFO filter high band must be above low band.")
 

@@ -52,13 +52,14 @@ from app.computation.hfo.algorithm import (
     HFO_CLASSIFIER_PYHFO_PYBRAIN,
 )
 from app.computation.hfo.detectors.omni_hfo_detector import DEFAULT_CANDIDATE_DETECTORS, OMNI_TARGET_FS_HZ
+from app.computation.hfo.preprocessing.pybrain import pybrain_effective_high_freq_hz
 from app.computation.exporters import (
     export_ei_result,
     export_gamma_spike_result,
     export_hfo_result,
 )
 from app.computation.importers import ImportedComputationResult, import_computation_result
-from app.expert_event_grid import ExpertEvent, ExpertEventGrid
+from app.expert_event_grid import ExpertEvent, ExpertEventGrid, hfo_review_class_options
 from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
 
@@ -204,8 +205,7 @@ def _validate_hfo_route_constraints(
                 f"{pybrain_max_hz:g} Hz."
             )
 
-        native_nyquist_hz = 0.5 * fs
-        effective_high_hz = min(high, native_nyquist_hz * 0.99)
+        effective_high_hz = pybrain_effective_high_freq_hz(high, fs)
         if low >= effective_high_hz:
             return False, (
                 "The pyhfo_pybrain frequency band is not available at the "
@@ -4388,13 +4388,19 @@ class ComputationPanel(QWidget):
         except (TypeError, ValueError):
             if edge_excluded > 0:
                 edge_text = f"   edge excluded: {edge_excluded} candidate events"
+        classifier_name = str(metadata.get("detector_version", "") or "")
+        ehfo_text = ""
+        if classifier_name == HFO_CLASSIFIER_EHFO:
+            ehfo_text = (
+                f"eHFO: {active_counts.get('eHFO', 0)}   "
+                f"spk-eHFO: {active_counts.get('spike-eHFO', 0)}   "
+            )
         footer = QLabel(
             f"Total events: {len(result.events)}   "
             f"HFO: {active_counts.get('HFO', 0)}   "
             f"non-spkHFO: {active_counts.get('non-spike HFO', 0)}   "
             f"spkHFO: {active_counts.get('spike-HFO', 0)}   "
-            f"eHFO: {active_counts.get('eHFO', 0)}   "
-            f"spk-eHFO: {active_counts.get('spike-eHFO', 0)}   "
+            f"{ehfo_text}"
             f"artifact: {active_counts.get('artifact', 0)}"
             f"{edge_text}"
         )
@@ -4422,7 +4428,14 @@ class ComputationPanel(QWidget):
         dialog.setStyleSheet("QDialog { background-color: #f3f6fa; color: #111827; }")
         layout = QVBoxLayout(dialog)
 
-        grid = ExpertEventGrid(title="HFO Event Grid")
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        classifier_name = str(metadata.get("detector_version", "") or "")
+        grid = ExpertEventGrid(
+            title="HFO Event Grid",
+            review_class_options=hfo_review_class_options(
+                include_ehfo=classifier_name == HFO_CLASSIFIER_EHFO
+            ),
+        )
         grid.set_raw(self._raw)
         grid.set_waveform_callback(self._fetch_hfo_event_waveform)
         grid.set_events(self._hfo_events_for_review_grid(result), title="Computed HFO events")
@@ -4690,10 +4703,13 @@ class ComputationPanel(QWidget):
             return "deleted"
         if "artifact" in lowered:
             return "artifact"
+        is_ehfo_classifier = (
+            str(classifier_name or "").strip() == HFO_CLASSIFIER_EHFO
+        )
         if lowered in {"spike-ehfo", "spike ehfo", "spkehfo", "spk-ehfo", "spk ehfo"}:
-            return "spike-eHFO"
+            return "spike-eHFO" if is_ehfo_classifier else "spike-HFO"
         if lowered in {"ehfo", "e-hfo"}:
-            return "eHFO"
+            return "eHFO" if is_ehfo_classifier else "non-spike HFO"
         if lowered in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
             if str(classifier_name or "").strip() == HFO_CLASSIFIER_EHFO and lowered in {"hfo", "real hfo", "real-hfo"}:
                 return "HFO"

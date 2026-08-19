@@ -1,320 +1,168 @@
 # iEEG Tool
 
-A desktop application for reviewing intracranial EEG (iEEG) recordings with interactive visualization, rereferencing tools, annotation support, scalogram review, PSD tools, computation workflows, result export, and project-based review state.
+> [!WARNING]
+> **Work in progress.** This software is under active development and has not
+> been validated as a medical device. It is intended for research and expert
+> review, not for diagnosis or treatment decisions.
 
-Built with **PySide6**, **PyQtGraph**, **MNE**, NumPy, and SciPy.
+## What is this software?
 
-## Overview
+iEEG Tool is a desktop application for reviewing intracranial EEG recordings.
+It provides a responsive multichannel viewer, montage and rereferencing tools,
+annotations, display filters, PSD and scalogram views, project saving, and
+analysis-result review and export.
 
-iEEG Tool supports clinical or research review of multichannel EEG/iEEG data. The main viewer provides a stacked multichannel signal display, interactive navigation, rereferencing options, annotation tools, PSD and computation panels, scalogram windows, and project files that preserve review state across sessions.
+The complete interface and workflow documentation is in the
+[User Guide](app/docs/user_guide.html), also available from
+**Help > User Guide** inside the application.
 
-The application is built around an MNE-based loading pipeline and a PySide6 / PyQtGraph interface.
+## Included analysis algorithms
 
-The program is structured around a main viewer that:
+### Recruitment Energy Index (REI)
 
-- loads EEG/iEEG data using MNE
-- displays channels stacked vertically
-- shows a selected time window of the recording
-- supports scrolling, zooming, channel selection, annotation, and scalogram selection
+REI ranks channels using spectral changes around seizure onset and their
+recruitment delay. Bipolar montage is recommended. This implementation adapts
+the open `IEEG_EI` implementation; it is a review aid rather than a clinical
+conclusion.
 
-Main components include:
+References:
 
-- `main_window.py` - application logic and UI coordination
-- `plot.py` - `MultiChannelViewer` rendering and interaction engine
-- `scalogram_viewer.py` - selected-channel time-frequency review window
-- `menus.py` - menu structure
-- `console_viewer.py` - console output window
-- `computation/` - REI, gamma spike, HFO, import, and export workflows
+- [Bartolomei, Chauvel & Wendling (2008), *Brain*](https://doi.org/10.1093/brain/awn111)
+- [`allucas/IEEG_EI`](https://github.com/allucas/IEEG_EI)
 
-Rendering is optimized to:
+### Gamma Spike
 
-- load only visible channels
-- load only the visible time window
-- decimate data for responsiveness
+Gamma Spike detects interictal spikes, estimates their boundaries, measures
+preceding 30-100 Hz activity, and separates gamma-positive from non-gamma
+spikes. The application contains a Python translation of the Lab-Frauscher
+MATLAB workflow and uses the Janca Hilbert-envelope spike detector.
 
-## Main Features
+References:
 
-- Load EEG/iEEG recordings from common electrophysiology formats
-- Scroll through multichannel data with adjustable time window, channel count, and gain
-- Switch between monopolar, bipolar, average, median, and common-reference modes
-- Automatically generate bipolar montages from channel labels
-- Warn before bipolar rereferencing when raw channel labels already look bipolar
-- Edit bipolar pairs manually
-- Assign channels to macro/micro groups and sort the channel-group table by label
-- Mark channels as hidden or bad
-- Add and edit annotations directly in the viewer
-- Use transparent outlined selection rectangles for annotation, zoom, and scalogram workflows
-- Use zoom selection for rectangular zoom-in review
-- Open scalogram windows from a selected channel/time interval and filter displayed frequencies
-- Apply windowed display filters from a collapsible control strip
-- Inspect PSD plots with mouse zoom and double-click reset; bad channels remain visible in red
-- Run computation-panel workflows for channel mean traces, Recruitment Energy Index (REI), gamma spike analysis, and HFO analysis
-- Enter seizure onset/offset and baseline/ictal windows manually for REI runs
-- Review REI results in a sortable summary table and heatmap
-- Review gamma spike results in channel-level and spike-level tables with raw trace, boundary, and time-frequency views
-- Run gamma spike analysis through one segmented pipeline for short and long recordings
-- Use segmented gamma spike detection with full-channel boundary/gamma measurements while keeping the selected software notch behavior
-- Run gamma spike detection in the background with progress, estimated remaining time, and cancellation
-- Run HFO candidate detection, pyHFO classification, and Omni eHFO classification from the computation panel
-- Review HFO events in a resizable event grid with filters, main-viewer markers, zoom review, classifier proposition, manual class correction, and deletion
-- Export REI, gamma spike, and HFO results directly from the computation panel after the algorithm has run
-- Export and import HFO results with event-level, channel-level, metadata, and manual review fields
-- Export compact metadata JSON files, CSV summaries, and README notes for output folders
-- Export REI heatmap values and a saved REI heatmap figure
-- Warn before overwriting existing computation output files
-- Save and reopen project state
-- Warn about unsaved review changes before closing
-- Use resizable computation, annotation, and PSD panels for selected channels
+- [`Lab-Frauscher/Spike-Gamma`](https://github.com/Lab-Frauscher/Spike-Gamma)
+- [Janca et al. (2015), *Brain Topography*](https://doi.org/10.1007/s10548-014-0379-1)
 
-## Computation Outputs
+### High-Frequency Oscillations (HFO)
 
-Computation exports are available from the computation panel after a result exists.
+HFO analysis combines STE, MNI, and Hilbert candidate detectors with selectable
+classification routes:
 
-REI export includes:
+- `pyhfo_pybrain` (default): native-sampling pyHFO/pyBrain route, 80-500 Hz
+- `pyhfo_omni_legacy`: Omni-compatible pyHFO route, 80-300 Hz at 1000 Hz
+- `eHFO`: Omni-compatible eHFO route, 80-300 Hz at 1000 Hz
 
-- `rei_summary.csv`
-- `rei_heatmap.csv`
-- `rei_heatmap.png`
-- `rei_metadata.json`
-- `README.txt`
+The classifiers distinguish artifacts, non-spike HFOs, spike-HFOs, and, for the
+eHFO route, eHFO and spike-eHFO events. Results remain available for expert
+review and manual correction.
 
-Gamma spike export includes:
+References:
 
-- `gamma_channel_summary.csv`
-- `gamma_spike_events.csv`
-- `gamma_metadata.json`
-- `README.txt`
-
-`gamma_channel_summary.csv` contains one row per channel with total spikes,
-gamma-positive spikes, non-gamma spikes, gamma rate, mean gamma power, and mean
-gamma duration. `gamma_spike_events.csv` contains one row per retained spike
-with spike timing, boundary points, gamma measurements, and any processing
-error.
-
-Gamma spike heatmaps are shown inside the review UI but are not saved during export, because saving one heatmap per spike can create very large output folders.
-
-HFO export includes:
-
-- `hfo_channel_summary.csv`
-- `hfo_events.csv`
-- `hfo_metadata.json`
-- `README.txt`
-
-`hfo_channel_summary.csv` contains one row per channel with candidate counts,
-accepted HFO counts, HFO counts, spike-HFO counts, eHFO counts, spike-eHFO
-counts, artifact counts, rates per minute, deleted event count, and boundary
-event count.
-`hfo_events.csv` contains one row per retained HFO candidate with timing,
-candidate detector, classifier probabilities, immutable classifier proposition,
-manual review fields, derived official class, band settings, and sampling
-metadata.
-
-## Gamma Spike Pipeline
-
-Gamma spike analysis uses a memory-conscious segmented pipeline:
-
-1. The detector runs in 10-minute chunks with 10 seconds of context.
-2. Detector settings are `-bl 10 -bh 60 -h 60 -k1 3.65 -dec 200`.
-3. Per-chunk detections are merged and postprocessed once globally.
-4. Spike boundary and gamma measurements are computed one channel at a time from full-channel filtered signals.
-5. Boundary/gamma filtering keeps the selected software notch behavior, including 60 Hz harmonics when selected.
-
-The run happens in a background worker. While it is running, the bottom-left
-status area shows the current processing step, time so far, and estimated time
-remaining. When it finishes, the status area keeps a summary with total spikes,
-gamma-positive spikes, and total run duration until another computation starts
-or the computation panel is closed.
-
-This is the gamma spike pipeline used by the computation panel. The older
-Python/export behavior is kept internally for validation work, but it is not
-shown as a user-facing option.
-
-## HFO Pipeline
-
-HFO analysis uses an Omni/pyHFO-style backend while keeping the GUI responsible
-for file loading, channel selection, interval selection, montage/reference
-selection, and microvolt conversion.
-
-The default user-facing HFO path is:
-
-1. The GUI provides a prepared channel x sample signal array in microvolts.
-2. Bad channels are excluded.
-3. The HFO backend applies the notch mode selected in the GUI once.
-4. The selected HFO route applies its own preprocessing:
-   `pyhfo_pybrain` preserves native sampling; `pyhfo_omni_legacy` and `eHFO`
-   use the Omni-compatible 1000 Hz route.
-5. Candidate detection runs with the selected route band: 80-500 Hz for
-   `pyhfo_pybrain`, 80-300 Hz for `pyhfo_omni_legacy` and `eHFO`.
-6. The backend extracts 2-second waveforms centered on candidate events.
-7. The selected classifier runs:
-   - Model A accepts real HFO versus artifact.
-   - Model S classifies accepted events as non-spike HFO or spike-HFO.
-   - For `eHFO`, a third Omni eHFO model also classifies accepted events as
-     eHFO-positive or eHFO-negative.
-8. Results are shown in the HFO event grid, channel summary, main viewer
-   markers, and export files.
-
-The candidate detector choices are STE, MNI, and Hilbert. At least one detector
-must remain selected. Advanced detector parameters are editable, can be restored
-to defaults, and are applied only after saving the advanced-parameter dialog.
-The default user-facing HFO option is `pyhfo_pybrain`, using the pyBrain-native
-80-500 Hz detector/filter route. The Omni legacy pyHFO and Omni eHFO options
-remain available as separate 80-300 Hz, 1000 Hz resampled paths. Ripple and
-fast-ripple presets are reserved for later validation.
-
-HFO review keeps three class concepts separate:
-
-- `final_model_class`: the immutable classifier proposition.
-- `manual_class`: the reviewer correction, if any.
-- `official_class`: the active class used for display, summaries, and active
-  counts. It equals `manual_class` after review, otherwise `final_model_class`.
-
-The implemented HFO algorithms come from these reference repositories:
-
-- Omni-iEEG: https://github.com/Omni-iEEG/Omni-iEEG/tree/master/omni_ieeg
-- pyHFO pyBrain branch: https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain
-- pyHFO repository: https://github.com/roychowdhuryresearch/pyHFO
-
-Two pyHFO classifier implementations are available:
-
-- `pyhfo_pybrain`: default pyBrain-compatible path.
-- `pyhfo_omni_legacy`: Omni legacy path kept as a separate validated option.
-
-`pyhfo_omni_legacy` follows the Omni-iEEG legacy pyHFO event-model code and has
-been validated directly against Omni's legacy pyHFO inference code on Zurich10:
-
-- 611 / 611 labels matched.
-- keep, artifact, spike, and HFO score max differences were 0.0.
-
-`pyhfo_pybrain` follows the pyHFO `pyBrain` branch and has been validated
-directly against the pyHFO/pyBrain reference GUI classifier on candidate pools:
-
-- Zurich15: 53 / 53 labels matched.
-- HUP134: 500 / 500 labels matched.
-- Full Zurich15 pyBrain-native GUI route:
-  - STE: 1 / 1 events matched; 1 / 1 labels matched.
-  - MNI: 36 / 36 events matched; 36 / 36 labels matched.
-  - Hilbert: 43 / 43 events matched; 43 / 43 labels matched.
-
-`pyhfo_pybrain` uses its own preprocessing route: native EDF sampling is
-preserved, pyBrain's Chebyshev-II HFO bandpass is applied before candidate
-detection, and classifier features are reconstructed from the native
-non-bandpassed signal plus candidate coordinates. `pyhfo_omni_legacy` remains on
-the Omni-compatible 1000 Hz processing route.
-
-Events can be manually reclassified or deleted in the HFO zoom review. Deletion
-excludes the event from active counts but preserves the event record for audit.
-
-The HFO backend also contains the Omni eHFO deep-learning classifier path from
-the Omni-iEEG event-model code, with the official `artifacts.pth`, `spikes.pth`,
-and `eHFOs.pth` checkpoints. The classifier-only implementation has been
-validated against the official Omni code on the Zurich10 candidate pool with
-exact feature, score, and label agreement. The eHFO option is selectable in the
-HFO classifier menu but is not the default.
-
-HFO JSON exports include an `algorithm_details` object and `source_repositories`
-list. These record the selected route, preprocessing expectation, detector
-origin, classifier origin, checkpoint family, class mapping, and the GitHub
-repositories used as implementation references.
+- [`HFODetector` candidate-detector package](https://pypi.org/project/HFODetector/)
+- [`roychowdhuryresearch/pyHFO`](https://github.com/roychowdhuryresearch/pyHFO)
+- [pyHFO `pyBrain` branch](https://github.com/roychowdhuryresearch/pyHFO/tree/pyBrain)
+- [`Omni-iEEG/Omni-iEEG`](https://github.com/Omni-iEEG/Omni-iEEG)
 
 ## Installation
 
-### Install Python
+Use a 64-bit installation of **Python 3.10 or 3.11**. Python 3.11 is
+recommended. Install [Git](https://git-scm.com/install/) and
+[Python](https://www.python.org/downloads/) first.
 
-Recommended versions:
-
-- Python 3.10
-- Python 3.11
-
-Download Python from:
-
-https://www.python.org/downloads/
-
-### Install Dependencies
-
-From the project root folder:
+Clone the repository and enter its folder:
 
 ```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+git clone https://github.com/m2b3/I_EEG.git
+cd I_EEG
 ```
 
-Use a machine-local virtual environment. Do not copy `.venv` between Windows
-and macOS.
+If you downloaded a ZIP instead, extract it and open a terminal in the extracted
+`I_EEG` folder.
 
-On macOS:
+### Windows PowerShell
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-On Windows PowerShell:
+Create the virtual environment **before** installing the requirements:
 
 ```powershell
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-After installing dependencies, verify the application imports:
+Using the venv's Python directly avoids PowerShell activation-policy errors.
+Launch the application with:
 
-```bash
-python -m compileall -q app
-python -c "import PySide6, mne, pyqtgraph, torch, torchvision, skimage, safetensors; print('dependency check ok')"
-```
-
-HFO/pyHFO/eHFO checkpoints are tracked under:
-
-```text
-app/computation/hfo/checkpoints/
-```
-
-Verify they are present after cloning or copying:
-
-```bash
-ls app/computation/hfo/checkpoints/pyhfo_legacy_binary
-ls app/computation/hfo/checkpoints/ehfo
-```
-
-Expected files:
-
-```text
-model_a.tar
-model_s.tar
-artifacts.pth
-spikes.pth
-eHFOs.pth
-```
-
-## Running
-
-From the project root folder:
-
-```bash
-python main.py
-```
-
-If you are using the project virtual environment on Windows:
-
-```bash
+```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
-If you are using the project virtual environment on macOS:
+### macOS
+
+Create a separate, machine-local environment. Do not copy `.venv` between
+Windows and macOS.
 
 ```bash
-source .venv/bin/activate
-python main.py
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python main.py
 ```
 
-## User Guide
+If your Python 3.11 command is named `python3`, use that instead of
+`python3.11` when creating the venv.
 
-The full guide is bundled at:
+## HFO files and downloads
 
-`app/docs/user_guide.md`
+A normal Git clone includes the five required classifier checkpoints:
 
-It is also available inside the application from **Help > User Guide**.
+```text
+app/computation/hfo/checkpoints/pyhfo_legacy_binary/model_a.tar
+app/computation/hfo/checkpoints/pyhfo_legacy_binary/model_s.tar
+app/computation/hfo/checkpoints/ehfo/artifacts.pth
+app/computation/hfo/checkpoints/ehfo/spikes.pth
+app/computation/hfo/checkpoints/ehfo/eHFOs.pth
+```
+
+No separate model download is normally required. If any file is missing, get it
+from the project's
+[HFO checkpoint folder](https://github.com/m2b3/I_EEG/tree/main/app/computation/hfo/checkpoints)
+or clone the repository again.
+
+`HFODetector` is also required for HFO candidate detection. It is installed
+automatically by `requirements.txt`; its package page is
+[here](https://pypi.org/project/HFODetector/).
+
+After installation, verify the environment on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe -c "from HFODetector import hil, mni, ste; import PySide6, mne, pyqtgraph, torch, torchvision, skimage, safetensors; print('dependency check ok')"
+```
+
+On macOS, use `./.venv/bin/python` in place of
+`.\.venv\Scripts\python.exe`.
+
+## Updating an existing installation
+
+After pulling a newer version, reinstall the requirements because dependencies
+may have changed:
+
+```bash
+git pull --ff-only
+```
+
+Windows:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+macOS:
+
+```bash
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+## More help
+
+Open **Help > User Guide** in the application, or open
+[`app/docs/user_guide.html`](app/docs/user_guide.html) directly in a browser.

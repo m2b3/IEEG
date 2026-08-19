@@ -21,6 +21,7 @@ from app.computation.hfo.preprocessing.omni import prepare_hfo_input_from_array
 from app.computation.hfo.preprocessing.pybrain import (
     apply_pybrain_bandpass,
     prepare_pybrain_hfo_input_from_array,
+    pybrain_effective_high_freq_hz,
 )
 from app.computation.hfo.types import HFOChannelResult, HFOComputationResult, HFOEventResult
 
@@ -99,7 +100,10 @@ def compute_hfo_for_gui(
     processing_order = list(prepared.processing_order)
     if use_pybrain_pipeline:
         nyquist = float(fs) / 2.0
-        effective_high_freq_hz = min(float(high_freq_hz), nyquist * 0.99)
+        effective_high_freq_hz = pybrain_effective_high_freq_hz(
+            float(high_freq_hz),
+            float(fs),
+        )
         if float(low_freq_hz) >= effective_high_freq_hz:
             raise ValueError(
                 "pyhfo_pybrain low frequency must stay below the native "

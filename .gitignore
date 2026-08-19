@@ -1,5 +1,8 @@
 # Virtual env
 .venv/
+.venv-*/
+venv/
+env/
 
 # Python cache
 __pycache__/
@@ -13,6 +16,10 @@ synthetic_long_recordings/
 .tmp_omni_ieeg_validation/
 reports/performance/
 reports/09_hfo_backend_smoke_test/*/
+reports/hfo_nonfinite_diagnosis.md
+reports/reproduce_pybrain_default_band.py
+tests/test_hfo_review_classes.py
+tests/test_pybrain_preprocessing.py
 
 # OS / editor
 .DS_Store
