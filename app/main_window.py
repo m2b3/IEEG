@@ -415,6 +415,7 @@ class MainWindow(QMainWindow):
         self._active_event_marker_source: str | None = None
         self._raw_gamma_marker_events: dict = {}
         self._raw_hfo_marker_events: dict = {}
+        self._hfo_ehfo_classes_available = False
         self._timeline_gamma_events: list[dict] = []
         self._timeline_hfo_events: list[dict] = []
 
@@ -634,6 +635,7 @@ class MainWindow(QMainWindow):
         self._active_event_marker_source = None
         self._raw_gamma_marker_events = {}
         self._raw_hfo_marker_events = {}
+        self._hfo_ehfo_classes_available = False
         self._timeline_gamma_events = []
         self._timeline_hfo_events = []
         self.event_timeline.clear_events()
@@ -2290,6 +2292,9 @@ class MainWindow(QMainWindow):
 
     def _on_hfo_markers_changed(self, markers: dict) -> None:
         self._raw_hfo_marker_events = markers if isinstance(markers, dict) else {}
+        self._hfo_ehfo_classes_available = bool(
+            self.comp_panel.hfo_result_uses_ehfo_model()
+        )
         self._active_event_marker_source = "hfo"
         if hasattr(self, "combo_hfo_range_filter"):
             self.combo_hfo_range_filter.blockSignals(True)
@@ -2360,11 +2365,14 @@ class MainWindow(QMainWindow):
             self.chk_show_hfo_artifact,
             self.chk_show_hfo_non_spike,
             self.chk_show_hfo_spike,
-            self.chk_show_hfo_ehfo,
-            self.chk_show_hfo_spike_ehfo,
             self.chk_show_hfo_unclassified,
         ):
             checkbox.setVisible(show_hfo_controls)
+        show_ehfo_controls = bool(
+            show_hfo_controls and self._hfo_ehfo_classes_available
+        )
+        self.chk_show_hfo_ehfo.setVisible(show_ehfo_controls)
+        self.chk_show_hfo_spike_ehfo.setVisible(show_ehfo_controls)
         self.lbl_hfo_range_filter.setVisible(show_hfo_controls)
         self.combo_hfo_range_filter.setVisible(show_hfo_controls)
         self.event_class_controls_widget.setVisible(bool(show_gamma_controls or show_hfo_controls))
@@ -2562,6 +2570,7 @@ class MainWindow(QMainWindow):
         self._active_event_marker_source = None
         self._raw_gamma_marker_events = {}
         self._raw_hfo_marker_events = {}
+        self._hfo_ehfo_classes_available = False
         self._timeline_gamma_events = []
         self._timeline_hfo_events = []
         self.event_timeline.clear_events()

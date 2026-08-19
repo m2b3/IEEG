@@ -369,7 +369,7 @@
 <details class="guide-section level-3">
 <summary><h3 id="2-1-overview">2.1 Overview</h3></summary>
 <div class="section-content">
-<figure><img src="images/main-viewer.png" alt="Main window with a loaded recording"><figcaption>Main window with a loaded recording</figcaption></figure>
+<figure><img src="images/main_window.png" alt="Main window with a loaded recording"><figcaption>Main window with a loaded recording</figcaption></figure>
 <ol>
 <li>Window title and recording summary: path, channel count, duration, and sampling rate</li>
 <li>Menu bar</li>
@@ -449,8 +449,9 @@
 <details class="guide-section level-4">
 <summary><h4 id="3-2-2-scalogram-mode">3.2.2 Scalogram Mode</h4></summary>
 <div class="section-content">
-<p>Choose <strong>View &gt; Scalogram Mode</strong>, then drag horizontally across one channel. The new window shows the channel context, raw signal, time-frequency map, frequency slider, and hover values. Very short selections are ignored.</p>
+<p>Choose <strong>View &gt; Scalogram Mode</strong>, then drag horizontally across one channel. The new window shows the channel context, raw signal, time-frequency map, frequency filter slider, and hover values. Very short selections are ignored.</p>
 <p>Press <strong>Escape</strong> before releasing to cancel.</p>
+<figure><img src="images/scalogram.png" alt="Main window with a loaded recording"><figcaption>Main window with a loaded recording</figcaption></figure>
 </div></details>
 </div></details>
 </div></details>
@@ -461,7 +462,8 @@
 <summary><h3 id="4-1-macro-and-micro-groups">4.1 Macro and Micro Groups</h3></summary>
 <div class="section-content">
 <p>All channels are Macro by default. Choose <strong>Channels &gt; Channel Groups...</strong>, select rows, click <strong>Set selected to Micro</strong> or <strong>Set selected to Macro</strong>, then click <strong>OK</strong>.</p>
-<p>Groups control channel styling, filter profiles, and the Macro/Micro PSD panels.</p>
+<p>Groups control channel styling, filter profiles, and the Macro/Micro PSD panels. In the main viewer, Micro channel traces and labels are blue; Macro channels use the default theme colors.</p>
+<figure><img src="channel-group.png" alt="Main window with a loaded recording"><figcaption>Main window with a loaded recording</figcaption></figure>
 </div></details>
 <details class="guide-section level-3">
 <summary><h3 id="4-2-select-channels">4.2 Select Channels</h3></summary>
@@ -482,7 +484,7 @@
 <summary><h3 id="4-4-bad-channels">4.4 Bad Channels</h3></summary>
 <div class="section-content">
 <p>Right-click selected traces and choose <strong>Mark as bad</strong>. If all are already bad, choose <strong>Unmark as bad</strong>. Use <strong>Bad...</strong> to review marks or clear them all.</p>
-<p>Bad status is application-wide: changes in the viewer or PSD appear in both. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.</p>
+<p>Bad status is application-wide: changes in the viewer or PSD appear in both. A bad channel's trace is red, including when that channel belongs to the Micro group; the bad-channel color takes priority for the trace. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.</p>
 <p>Hidden and bad are separate states: restoring a hidden bad channel does not clear its bad mark, and unmarking a channel as bad does not make a hidden channel visible.</p>
 </div></details>
 </div></details>
@@ -790,6 +792,7 @@
 <li><strong>spk-eHFO / spike-eHFO</strong>: violet</li>
 <li><strong>Unclassified</strong>: gray</li>
 </ul>
+<p><strong>eHFO</strong> and <strong>spk-eHFO</strong> are available only for results produced by the eHFO model. They are omitted from the main-viewer legend, result filters, manual-classification choices, and channel-summary export columns for pyhfo_pybrain and pyhfo_omni_legacy results.</p>
 <p>Deleted events are hidden. Class checkboxes and <strong>Range</strong> change visibility only. Click a highlight or top bar to open the event grid; click a timeline event to jump to it.</p>
 <p>The timeline marks the current viewer window. Visibility filters do not change official classes, summary counts, or exports.</p>
 </div></details>

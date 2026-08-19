@@ -4136,15 +4136,34 @@ class ComputationPanel(QWidget):
         )
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
         active_counts = self._hfo_active_label_counts(result)
+        uses_ehfo_model = self.hfo_result_uses_ehfo_model()
+        ehfo_status = ""
+        if uses_ehfo_model:
+            ehfo_status = (
+                f"eHFO {active_counts.get('eHFO', 0)}, "
+                f"spk-eHFO {active_counts.get('spike-eHFO', 0)}, "
+            )
         action_text = "HFO results imported" if bool(metadata.get("imported", False)) else "HFO detection complete"
         self._show_status_message(
             f"{action_text}: "
             f"{metadata.get('total_events', len(result.events))} events, "
             f"non-spkHFO {active_counts.get('non-spike HFO', 0)}, "
             f"spkHFO {active_counts.get('spike-HFO', 0)}, "
+            f"{ehfo_status}"
             f"classification {metadata.get('classification_status', 'unknown')}.",
             timeout_ms=20000,
         )
+
+    def hfo_result_uses_ehfo_model(self) -> bool:
+        """Return whether the currently displayed HFO result uses the eHFO model."""
+        result = self._last_hfo_result
+        if result is None:
+            return False
+        metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        classifier_name = _normalize_hfo_classifier_name(
+            metadata.get("detector_version", "")
+        )
+        return classifier_name == HFO_CLASSIFIER_EHFO
 
     def _hfo_active_label_counts(self, result: HFOComputationResult) -> dict[str, int]:
         metadata = result.metadata if isinstance(result.metadata, dict) else {}

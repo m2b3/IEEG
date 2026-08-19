@@ -24,7 +24,7 @@ Choose **File > Open Project...** and select an `.ieeg` file. The application re
 
 ### 2.1 Overview
 
-![Main window with a loaded recording](images/main-viewer.png)
+![Main window with a loaded recording](images/main_window.png)
 
 1. Window title and recording summary: path, channel count, duration, and sampling rate
 2. Menu bar
@@ -88,9 +88,11 @@ Double-click the viewer to return one zoom step. Choose **View > Reset Zoom** to
 
 #### 3.2.2 Scalogram Mode
 
-Choose **View > Scalogram Mode**, then drag horizontally across one channel. The new window shows the channel context, raw signal, time-frequency map, frequency slider, and hover values. Very short selections are ignored.
+Choose **View > Scalogram Mode**, then drag horizontally across one channel. The new window shows the channel context, raw signal, time-frequency map, frequency filter slider, and hover values. Very short selections are ignored.
 
 Press **Escape** before releasing to cancel.
+
+![Main window with a loaded recording](images/scalogram.png)
 
 ## 4. Manage Channels
 
@@ -98,7 +100,9 @@ Press **Escape** before releasing to cancel.
 
 All channels are Macro by default. Choose **Channels > Channel Groups...**, select rows, click **Set selected to Micro** or **Set selected to Macro**, then click **OK**.
 
-Groups control channel styling, filter profiles, and the Macro/Micro PSD panels.
+Groups control channel styling, filter profiles, and the Macro/Micro PSD panels. In the main viewer, Micro channel traces and labels are blue; Macro channels use the default theme colors.
+
+![Main window with a loaded recording](images/channel_group.png)
 
 ### 4.2 Select Channels
 
@@ -116,7 +120,7 @@ Right-click selected traces and choose **Hide**. Use **Hidden...** to restore th
 
 Right-click selected traces and choose **Mark as bad**. If all are already bad, choose **Unmark as bad**. Use **Bad...** to review marks or clear them all.
 
-Bad status is application-wide: changes in the viewer or PSD appear in both. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.
+Bad status is application-wide: changes in the viewer or PSD appear in both. A bad channel's trace is red, including when that channel belongs to the Micro group; the bad-channel color takes priority for the trace. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.
 
 Hidden and bad are separate states: restoring a hidden bad channel does not clear its bad mark, and unmarking a channel as bad does not make a hidden channel visible.
 
@@ -148,6 +152,8 @@ Bad derived channels remain visible unless hidden; use **Hide all Bad** to remov
 
 The **Edit Bipolar...** button is available only in Bipolar mode. Use it to change Channel 2, add pairs, restore automatic pairs, apply with **OK**, or discard with **Cancel**.
 
+![Main window with a loaded recording](images/edit_bipolar.png)
+
 ##### Validation and Warnings
 
 Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied. Bad channels cannot be selected.
@@ -159,6 +165,8 @@ A pair spanning two recognized electrode groups triggers a **Cross-electrode bip
 ### 5.2 Display Filters
 
 Choose **Preprocessing > Display Filters...** to show or hide filter controls above the viewer.
+
+![Main window with a loaded recording](images/filter_strip.png)
 
 Use **Scope** to edit:
 
@@ -177,6 +185,8 @@ The PSD uses these profiles. Computations use separate bandpass rules; only algo
 ### 5.3 Power Spectrum
 
 Choose **Preprocessing > Power Spectrum**, enter start and stop times, and confirm. Stop must follow start, and both values must be inside the recording. The PSD opens beside the main viewer.
+
+![Main window with a loaded recording](images/psd_panel.png)
 
 #### Macro and Micro Panels
 
@@ -208,12 +218,15 @@ PyQtGraph mouse controls provide zoom and pan. They affect visualization only. T
 
 Choose **Compute > Open Computation Panel**, or right-click selected channels and choose **Open Computation Panel**. The dock can be moved, resized, or floated. It analyzes the open recording.
 
+
 #### Shared Controls
 
-- **Algorithm**: REI, Gamma Spikes, or HFO
-- **Channels**: analysis inputs
-- **Time**: interval and method settings
-- **Output**: run, cancel, import, review, and export
+![Main window with a loaded recording](images/computation_panel.png)
+
+- **1 - Algorithm**: REI, Gamma Spikes, or HFO
+- **2 - Channels**: analysis inputs
+- **3 - Time**: interval and method settings
+- **4 - Output**: run, cancel, import, review, and export
 
 Time and Output controls change with the algorithm.
 
@@ -268,6 +281,8 @@ Click **Run REI**. Status and elapsed time update in the background. **Cancel RE
 
 ##### Main Viewer
 
+![Main window with a loaded recording](images/REI_main_window.png)
+
 The viewer adds each analyzed channel's rank and colors its label from orange (lower score) to green (higher score). An orange tick marks visible recruitment time. Excluded channels receive no overlay.
 
 The marker is placed at the estimated recruitment time, not at the entered seizure onset. It appears only when that time lies inside the visible window.
@@ -275,6 +290,8 @@ The marker is placed at the estimated recruitment time, not at the entered seizu
 ##### Channel-Level Summary
 
 **Open REI summary** shows one sortable row per channel. Selecting a row selects that channel in the viewer.
+
+![Main window with a loaded recording](images/REI_channel_summary.png)
 
 - **Channel**: analyzed channel or bipolar derivation
 - **REI score**: normalized score from 0 to 1 within this analysis
@@ -289,6 +306,9 @@ Scores and ranks are normalized within the current channel set. Changing channel
 **Open REI heatmap** shows log10 HFER over the ictal window and a score bar plot. Sort by score, delay, peak/mean HFER, original order, or name. **Show top N channels** limits rows. These controls affect visualization only.
 
 Heatmap time is expressed relative to seizure onset. Sorting or limiting rows does not change scores or exported values.
+
+![Main window with a loaded recording](images/REI_heatmap.png)
+
 
 ##### Export
 
@@ -336,9 +356,14 @@ The **non-gamma** and **gamma** checkboxes change visibility only. Click a highl
 
 The timeline also marks the current viewer window. Hiding a class does not delete events, alter classifications, or change exported results.
 
+![Main window with a loaded recording](images/gamma_main_viewer.png)
+
 ##### Channel-Level Summary
 
 **Open channel-level summary** provides sortable rows and **All spikes**, **Gamma only**, and **Non-gamma only** filters.
+
+![Main window with a loaded recording](images/gamma_channel_summary.png)
+
 
 **Gamma only** keeps channels with at least one officially gamma-classified spike. **Non-gamma only** keeps channels with no officially gamma-classified spike. These controls filter rows; they do not reclassify events.
 
@@ -353,7 +378,13 @@ Mean values are blank when no finite measurement exists.
 
 ##### Spike Grid and Manual Review
 
-**Open spike grid** shows cards filterable by class, channel, and minimum gamma power. Select one to view raw and 30–100 Hz signals, time-frequency content, P1/N1/N2, gamma measurements, and the gamma window. Review plots do not alter measurements.
+**Open spike grid** shows cards filterable by class, channel, and minimum gamma power. 
+
+![Main window with a loaded recording](images/gamma_grid.png)
+
+Select one to view raw and 30–100 Hz signals, time-frequency content, P1/N1/N2, gamma measurements, and the gamma window. Review plots do not alter measurements.
+
+![Main window with a loaded recording](images/gamma_card.png)
 
 Page and layout controls support large result sets. The 30–100 Hz review trace is a visualization and is separate from the saved measurements.
 
@@ -427,6 +458,11 @@ Each event is highlighted on its waveform, above the viewer, and on the full-rec
 - **spk-eHFO / spike-eHFO**: violet
 - **Unclassified**: gray
 
+![Main window with a loaded recording](images/hfo_main_viewer.png)
+
+
+**eHFO** and **spk-eHFO** are available only for results produced by the eHFO model. They are omitted from the main-viewer legend, result filters, manual-classification choices, and channel-summary export columns for pyhfo_pybrain and pyhfo_omni_legacy results.
+
 Deleted events are hidden. Class checkboxes and **Range** change visibility only. Click a highlight or top bar to open the event grid; click a timeline event to jump to it.
 
 The timeline marks the current viewer window. Visibility filters do not change official classes, summary counts, or exports.
@@ -434,6 +470,9 @@ The timeline marks the current viewer window. Visibility filters do not change o
 ##### Channel-Level Summary
 
 **Open HFO summary** shows sortable rows. Filter by **All channels**, **At least one HFO**, or **At least one spkHFO**. Selecting a row selects its viewer channel.
+
+![Main window with a loaded recording](images/hfo_channel_summary.png)
+
 
 **At least one HFO** keeps channels with an accepted event. **At least one spkHFO** keeps channels with an accepted spike-associated event. Filters use official classes and exclude deleted events.
 
@@ -452,7 +491,14 @@ Rates use the selected analysis duration, not the summed duration of detected ev
 
 ##### Event Grid and Manual Review
 
-**Open HFO event grid** shows cards filterable by channel, class, frequency range, and channel/time order. Select one to inspect signals, spectrogram or FFT, timing, band, detector, classifier proposition, available probabilities, class, and review status. Display controls do not recalculate events.
+**Open HFO event grid** shows cards filterable by channel, class, frequency range, and channel/time order. 
+
+![Main window with a loaded recording](images/hfo_grid.png)
+
+Select one to inspect signals, spectrogram or FFT, timing, band, detector, classifier proposition, available probabilities, class, and review status. Display controls do not recalculate events.
+
+![Main window with a loaded recording](images/hfo_card.png)
+
 
 When available, probabilities include accepted-HFO, artifact, and spike association. The filtered-band, context-window, spectrogram, and FFT controls affect review visualization only and do not alter stored event boundaries or measurements.
 

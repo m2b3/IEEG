@@ -409,6 +409,7 @@ def export_gamma_spike_result(
 def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    include_ehfo = str(metadata.get("detector_version", "") or "").strip().lower() == "ehfo"
     analysis_duration_min = _hfo_analysis_duration_min(metadata)
 
     summary_rows: list[dict[str, Any]] = []
@@ -416,42 +417,50 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
         channel_events = list(channel_result.events)
         active_channel_events = [
             event for event in channel_events
-            if _hfo_event_class(event) != "deleted"
+            if _hfo_event_class(event, include_ehfo=include_ehfo) != "deleted"
         ]
         candidate_count = len(active_channel_events)
         deleted_count = len(channel_events) - candidate_count
-        artifact_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "artifact")
-        spike_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "spike-HFO")
-        non_spike_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "HFO")
-        ehfo_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "eHFO")
-        spike_ehfo_count = sum(1 for event in active_channel_events if _hfo_event_class(event) == "spike-eHFO")
+        event_classes = [
+            _hfo_event_class(event, include_ehfo=include_ehfo)
+            for event in active_channel_events
+        ]
+        artifact_count = sum(1 for label in event_classes if label == "artifact")
+        spike_count = sum(1 for label in event_classes if label == "spike-HFO")
+        non_spike_count = sum(1 for label in event_classes if label == "HFO")
+        ehfo_count = sum(1 for label in event_classes if label == "eHFO")
+        spike_ehfo_count = sum(1 for label in event_classes if label == "spike-eHFO")
         accepted_count = non_spike_count + spike_count + ehfo_count + spike_ehfo_count
         boundary_count = sum(1 for event in active_channel_events if bool(getattr(event, "boundary_warning", event.is_boundary)))
-        summary_rows.append(
-            {
-                "channel": channel_result.channel,
-                "candidate_count": candidate_count,
-                "accepted_hfo_count": accepted_count,
-                "non_spike_hfo_count": non_spike_count,
-                "spike_hfo_count": spike_count,
-                "ehfo_count": ehfo_count,
-                "spike_ehfo_count": spike_ehfo_count,
-                "artifact_count": artifact_count,
-                "candidate_rate_per_min": _rate_per_min(candidate_count, analysis_duration_min),
-                "accepted_hfo_rate_per_min": _rate_per_min(accepted_count, analysis_duration_min),
-                "non_spike_hfo_rate_per_min": _rate_per_min(non_spike_count, analysis_duration_min),
-                "spike_hfo_rate_per_min": _rate_per_min(spike_count, analysis_duration_min),
-                "ehfo_rate_per_min": _rate_per_min(ehfo_count, analysis_duration_min),
-                "spike_ehfo_rate_per_min": _rate_per_min(spike_ehfo_count, analysis_duration_min),
-                "artifact_percentage": (
-                    100.0 * float(artifact_count) / float(candidate_count)
-                    if candidate_count > 0
-                    else 0.0
-                ),
-                "deleted_event_count": deleted_count,
-                "boundary_event_count": boundary_count,
-            }
-        )
+        summary_row = {
+            "channel": channel_result.channel,
+            "candidate_count": candidate_count,
+            "accepted_hfo_count": accepted_count,
+            "non_spike_hfo_count": non_spike_count,
+            "spike_hfo_count": spike_count,
+            "artifact_count": artifact_count,
+            "candidate_rate_per_min": _rate_per_min(candidate_count, analysis_duration_min),
+            "accepted_hfo_rate_per_min": _rate_per_min(accepted_count, analysis_duration_min),
+            "non_spike_hfo_rate_per_min": _rate_per_min(non_spike_count, analysis_duration_min),
+            "spike_hfo_rate_per_min": _rate_per_min(spike_count, analysis_duration_min),
+            "artifact_percentage": (
+                100.0 * float(artifact_count) / float(candidate_count)
+                if candidate_count > 0
+                else 0.0
+            ),
+            "deleted_event_count": deleted_count,
+            "boundary_event_count": boundary_count,
+        }
+        if include_ehfo:
+            summary_row.update(
+                {
+                    "ehfo_count": ehfo_count,
+                    "spike_ehfo_count": spike_ehfo_count,
+                    "ehfo_rate_per_min": _rate_per_min(ehfo_count, analysis_duration_min),
+                    "spike_ehfo_rate_per_min": _rate_per_min(spike_ehfo_count, analysis_duration_min),
+                }
+            )
+        summary_rows.append(summary_row)
 
     event_rows: list[dict[str, Any]] = []
     for event_number, event in enumerate(result.events, start=1):
@@ -469,7 +478,7 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
                 "spike_hfo_probability": _finite_float(getattr(event, "spike_hfo_probability", event.spike_score)),
                 "final_model_class": getattr(event, "final_model_class", None) or event.classification_label,
                 "manual_class": getattr(event, "manual_class", None),
-                "official_class": _hfo_event_class(event),
+                "official_class": _hfo_event_class(event, include_ehfo=include_ehfo),
                 "manual_review_status": getattr(event, "manual_review_status", "unreviewed"),
                 "start_sample": int(event.start_sample),
                 "end_sample": int(event.end_sample),
@@ -489,27 +498,32 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
         )
 
     summary_path = output_dir / "hfo_channel_summary.csv"
-    _write_rows(
-        summary_path,
+    summary_fields = [
+        "channel",
+        "candidate_count",
+        "accepted_hfo_count",
+        "non_spike_hfo_count",
+        "spike_hfo_count",
+    ]
+    if include_ehfo:
+        summary_fields.extend(["ehfo_count", "spike_ehfo_count"])
+    summary_fields.extend(
         [
-            "channel",
-            "candidate_count",
-            "accepted_hfo_count",
-            "non_spike_hfo_count",
-            "spike_hfo_count",
-            "ehfo_count",
-            "spike_ehfo_count",
             "artifact_count",
             "candidate_rate_per_min",
             "accepted_hfo_rate_per_min",
             "non_spike_hfo_rate_per_min",
             "spike_hfo_rate_per_min",
-            "ehfo_rate_per_min",
-            "spike_ehfo_rate_per_min",
-            "artifact_percentage",
-            "deleted_event_count",
-            "boundary_event_count",
-        ],
+        ]
+    )
+    if include_ehfo:
+        summary_fields.extend(["ehfo_rate_per_min", "spike_ehfo_rate_per_min"])
+    summary_fields.extend(
+        ["artifact_percentage", "deleted_event_count", "boundary_event_count"]
+    )
+    _write_rows(
+        summary_path,
+        summary_fields,
         summary_rows,
     )
 
@@ -553,7 +567,13 @@ def export_hfo_result(output_dir: Path, result: HFOComputationResult) -> list[Pa
     _write_json(metadata_path, _compact_hfo_metadata(metadata))
 
     readme_path = output_dir / "README.txt"
-    _write_readme(readme_path, _hfo_readme_text())
+    _write_readme(
+        readme_path,
+        _hfo_readme_text(
+            str(metadata.get("detector_version", "") or ""),
+            include_ehfo=include_ehfo,
+        ),
+    )
 
     return [summary_path, events_path, metadata_path, readme_path]
 
@@ -572,7 +592,7 @@ def _rate_per_min(count: int, duration_min: float) -> float:
     return float(count) / float(duration_min) if float(duration_min) > 0.0 else 0.0
 
 
-def _hfo_event_class(event: Any) -> str:
+def _hfo_event_class(event: Any, *, include_ehfo: bool = True) -> str:
     label = str(
         getattr(event, "manual_class", None)
         or getattr(event, "final_model_class", None)
@@ -584,9 +604,9 @@ def _hfo_event_class(event: Any) -> str:
     if "artifact" in label:
         return "artifact"
     if label in {"spike-ehfo", "spkehfo", "spk-ehfo", "spk ehfo", "spike ehfo"}:
-        return "spike-eHFO"
+        return "spike-eHFO" if include_ehfo else "spike-HFO"
     if label in {"ehfo", "e-hfo"}:
-        return "eHFO"
+        return "eHFO" if include_ehfo else "HFO"
     if label in {"spike-hfo", "spkhfo", "spk-hfo", "spk hfo", "spike hfo"}:
         return "spike-HFO"
     if label in {"hfo", "real hfo", "real-hfo", "non-spike hfo", "non-spkhfo", "non-spk hfo"}:
@@ -776,13 +796,37 @@ Notes:
 """
 
 
-def _hfo_readme_text() -> str:
-    return """HFO Export
+def _hfo_readme_text(
+    classifier_name: str = "",
+    *,
+    include_ehfo: bool = False,
+) -> str:
+    classifier_key = str(classifier_name or "").strip().lower()
+    class_summary = ""
+    if include_ehfo:
+        class_summary = ", eHFO counts, and spike-eHFO counts"
+    if classifier_key == "ehfo":
+        route_notes = (
+            "- The eHFO route requires at least 1000 Hz, resamples higher-rate "
+            "recordings to 1000 Hz, and uses the validated 80-300 Hz detector band.\n"
+            "- eHFO and spike-eHFO classes are produced only by this route."
+        )
+    elif classifier_key == "pyhfo_omni_legacy":
+        route_notes = (
+            "- The pyhfo_omni_legacy route requires at least 1000 Hz, resamples "
+            "higher-rate recordings to 1000 Hz, and uses the validated 80-300 Hz detector band."
+        )
+    else:
+        route_notes = (
+            "- The pyhfo_pybrain route preserves native sampling and uses its "
+            "validated 80-500 Hz detector and filter route."
+        )
+    return f"""HFO Export
 
 Files:
 - hfo_channel_summary.csv
   One row per channel with candidate counts, accepted HFO counts, artifact
-  counts, spike-HFO counts, rates per minute, artifact percentage, and boundary
+  counts, spike-HFO counts{class_summary}, rates per minute, artifact percentage, and boundary
   event counts. Manually deleted events are excluded from active counts and
   reported separately.
 
@@ -817,14 +861,8 @@ Files:
   checkpoint family, class mapping, and source GitHub repositories.
 
 Notes:
-- `pyhfo_omni_legacy` and `eHFO` reject recordings below 1000 Hz and resample
-  higher-rate recordings internally to 1000 Hz.
-- `pyhfo_pybrain` preserves native sampling to match the pyHFO/pyBrain route.
+{route_notes}
 - HFO uses the notch setting selected in the main GUI.
-- The validated pyhfo_omni_legacy and eHFO routes use the 80-300 Hz detector
-  band after internal 1000 Hz resampling.
-- The validated pyhfo_pybrain route uses the 80-500 Hz pyBrain-native detector
-  and filter route.
 - Candidates longer than max_duration_ms are excluded before waveform extraction
   and classification; excluded counts are recorded in metadata.
 - Candidates inside boundary_padding_s from the selected analysis-window start or
