@@ -59,7 +59,7 @@ from app.computation.exporters import (
     export_hfo_result,
 )
 from app.computation.importers import ImportedComputationResult, import_computation_result
-from app.expert_event_grid import ExpertEvent, ExpertEventGrid, hfo_review_class_options
+from app.hfo_event_grid import HFOReviewEvent, HFOEventGrid, hfo_review_class_options
 from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
 
@@ -624,7 +624,7 @@ class ComputationPanel(QWidget):
                 },
             },
             "notch_behavior": "Uses active notch if enabled",
-            "output_model": "expert_event_grid",
+            "output_model": "hfo_event_grid",
         }
         self._built_in_hfo_params = deepcopy(self.hfo_params)
 
@@ -4430,7 +4430,7 @@ class ComputationPanel(QWidget):
 
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
         classifier_name = str(metadata.get("detector_version", "") or "")
-        grid = ExpertEventGrid(
+        grid = HFOEventGrid(
             title="HFO Event Grid",
             review_class_options=hfo_review_class_options(
                 include_ehfo=classifier_name == HFO_CLASSIFIER_EHFO
@@ -4506,7 +4506,7 @@ class ComputationPanel(QWidget):
         times = start + np.arange(waveform.size, dtype=float) / sfreq
         return waveform, times
 
-    def _hfo_events_for_review_grid(self, result: HFOComputationResult) -> list[ExpertEvent]:
+    def _hfo_events_for_review_grid(self, result: HFOComputationResult) -> list[HFOReviewEvent]:
         metadata = result.metadata if isinstance(result.metadata, dict) else {}
         source_file = str(metadata.get("source_file_name") or metadata.get("source_file_path") or "")
         detection_fs = float(metadata.get("detection_fs", metadata.get("input_fs", 1000.0)) or 1000.0)
@@ -4515,7 +4515,7 @@ class ComputationPanel(QWidget):
         classifier_name = str(metadata.get("detector_version", "") or "")
         channel_event_counts: dict[str, int] = {}
 
-        events: list[ExpertEvent] = []
+        events: list[HFOReviewEvent] = []
         for index, event in enumerate(result.events, start=1):
             label = self._hfo_display_class(event)
             if not label or label == "candidate":
@@ -4574,7 +4574,7 @@ class ComputationPanel(QWidget):
                     )
 
             events.append(
-                ExpertEvent(
+                HFOReviewEvent(
                     edf_file=source_file,
                     channel=str(event.channel),
                     start=float(event.start_time_s),
@@ -4650,7 +4650,7 @@ class ComputationPanel(QWidget):
     def _on_hfo_event_class_changed(
         self,
         result: HFOComputationResult,
-        event: ExpertEvent,
+        event: HFOReviewEvent,
     ) -> None:
         source_event = getattr(event, "source_event", None)
         if source_event is None:
@@ -4671,7 +4671,7 @@ class ComputationPanel(QWidget):
     def _matching_hfo_source_event(
         self,
         result: HFOComputationResult,
-        review_event: ExpertEvent,
+        review_event: HFOReviewEvent,
     ) -> object | None:
         review_event_number = str(getattr(review_event, "event_number", "") or "").strip()
         review_channel = str(getattr(review_event, "channel", "") or "")
@@ -4769,7 +4769,7 @@ class ComputationPanel(QWidget):
                 return score
         return None
 
-    def _hfo_markers_from_events(self, events: list[ExpertEvent]) -> dict[str, list[dict[str, float | str]]]:
+    def _hfo_markers_from_events(self, events: list[HFOReviewEvent]) -> dict[str, list[dict[str, float | str]]]:
         markers: dict[str, list[dict[str, float | str]]] = {}
         for event in events:
             if self._normalize_hfo_display_class(event.review_label) == "deleted":
@@ -4810,12 +4810,12 @@ class ComputationPanel(QWidget):
             setattr(source_event, "manual_review_status", manual_review_status)
         self._refresh_hfo_review_metadata(result)
 
-    def _current_hfo_event_grid(self) -> ExpertEventGrid | None:
+    def _current_hfo_event_grid(self) -> HFOEventGrid | None:
         dialog = self._hfo_event_grid_dialog
         if dialog is None:
             return None
-        grid = dialog.findChild(ExpertEventGrid)
-        return grid if isinstance(grid, ExpertEventGrid) else None
+        grid = dialog.findChild(HFOEventGrid)
+        return grid if isinstance(grid, HFOEventGrid) else None
 
     def _export_hfo_results(self) -> None:
         result = self._last_hfo_result

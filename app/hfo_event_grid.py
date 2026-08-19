@@ -1,5 +1,5 @@
-# app/expert_event_grid.py
-"""Reusable event grid widget for computed HFO review."""
+# app/hfo_event_grid.py
+"""Reusable HFO event grid widget for computed-event review."""
 
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ DEFAULT_DISPLAY_FILTER = "80-300 Hz"
 
 
 def get_event_context_window(
-    event: "ExpertEvent",
+    event: "HFOReviewEvent",
     window_s: float = EVENT_CONTEXT_WINDOW_SECONDS,
 ) -> tuple[float, float]:
     window_s = float(getattr(event, "review_context_window_s", window_s) or window_s)
@@ -277,7 +277,7 @@ WIDE_CONTEXT_SECONDS = 1.0
 
 
 def get_event_wide_context_window(
-    event: ExpertEvent,
+    event: HFOReviewEvent,
     context_seconds: float = WIDE_CONTEXT_SECONDS,
 ) -> tuple[float, float]:
     """Return a wider time window centered on the event for raw-channel context."""
@@ -287,7 +287,7 @@ def get_event_wide_context_window(
 
 
 @dataclass
-class ExpertEvent:
+class HFOReviewEvent:
     """
     Represents a single event in the HFO review grid.
     
@@ -383,14 +383,14 @@ class ExpertEvent:
         return COLOR_NON_SPK_HFO
 
 
-class EventCellWidget(QFrame):
+class HFOEventCellWidget(QFrame):
     """
     A single cell in the event grid displaying waveform snippet and event info.
     """
     
-    clicked = Signal(ExpertEvent)
+    clicked = Signal(HFOReviewEvent)
     
-    def __init__(self, event: ExpertEvent, parent=None):
+    def __init__(self, event: HFOReviewEvent, parent=None):
         super().__init__(parent)
         self._event = event
         self._setup_ui()
@@ -490,11 +490,11 @@ class EventCellWidget(QFrame):
         super().mousePressEvent(event)
     
     @property
-    def event(self) -> ExpertEvent:
+    def event(self) -> HFOReviewEvent:
         return self._event
 
 
-class ZoomedEventView(QWidget):
+class ZoomedHFOEventView(QWidget):
     """
     Zoomed view of a single event with larger waveform display.
     """
@@ -502,12 +502,12 @@ class ZoomedEventView(QWidget):
     backClicked = Signal()  # Signal to return to grid
     nextEvent = Signal()    # Signal for next event (n key)
     prevEvent = Signal()    # Signal for previous event (b key)
-    classChanged = Signal(ExpertEvent, str)
-    contextWindowChanged = Signal(ExpertEvent, float)
+    classChanged = Signal(HFOReviewEvent, str)
+    contextWindowChanged = Signal(HFOReviewEvent, float)
     
     def __init__(
         self,
-        event: ExpertEvent,
+        event: HFOReviewEvent,
         parent=None,
         *,
         review_class_options: list[str] | tuple[str, ...] | None = None,
@@ -696,7 +696,7 @@ class ZoomedEventView(QWidget):
         instructions.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(instructions)
     
-    def set_event(self, event: ExpertEvent):
+    def set_event(self, event: HFOReviewEvent):
         """Update the displayed event."""
         self._event = event
         self._sync_context_combo_to_event()
@@ -984,18 +984,18 @@ class ZoomedEventView(QWidget):
             super().keyPressEvent(event)
 
 
-class ExpertEventGrid(QWidget):
+class HFOEventGrid(QWidget):
     """
     Main widget for displaying HFO events in a grid format.
     
     Signals:
-        eventClicked(ExpertEvent): Emitted when an event cell is clicked
-        eventSelected(ExpertEvent): Emitted when an event is selected (for navigation)
+        eventClicked(HFOReviewEvent): Emitted when an event cell is clicked
+        eventSelected(HFOReviewEvent): Emitted when an event is selected (for navigation)
         requestJumpToTime(float, str): Emitted to request main viewer jump to time/channel
     """
     
-    eventClicked = Signal(ExpertEvent)
-    eventSelected = Signal(ExpertEvent)
+    eventClicked = Signal(HFOReviewEvent)
+    eventSelected = Signal(HFOReviewEvent)
     requestJumpToTime = Signal(float, str)  # time, channel
     filteredEventsChanged = Signal(object)
     eventClassChanged = Signal(object)
@@ -1004,7 +1004,7 @@ class ExpertEventGrid(QWidget):
         self,
         parent=None,
         *,
-        title: str = "Expert Event Grid",
+        title: str = "HFO Event Grid",
         review_class_options: list[str] | tuple[str, ...] | None = None,
     ):
         super().__init__(parent)
@@ -1012,12 +1012,12 @@ class ExpertEventGrid(QWidget):
         self._review_class_options = list(
             review_class_options or STANDARD_HFO_REVIEW_CLASS_OPTIONS
         )
-        self._all_events: List[ExpertEvent] = []
-        self._events: List[ExpertEvent] = []
+        self._all_events: List[HFOReviewEvent] = []
+        self._events: List[HFOReviewEvent] = []
         self._current_page: int = 0
         self._total_pages: int = 0
         self._is_zoomed: bool = False
-        self._zoomed_view: Optional[ZoomedEventView] = None
+        self._zoomed_view: Optional[ZoomedHFOEventView] = None
         self._current_zoomed_index: int = 0
         
         # Callback for fetching waveform data from raw
@@ -1185,7 +1185,7 @@ class ExpertEventGrid(QWidget):
         """
         self._get_waveform_callback = callback
 
-    def set_events(self, events: List[ExpertEvent], *, title: str = "Loaded events") -> None:
+    def set_events(self, events: List[HFOReviewEvent], *, title: str = "Loaded events") -> None:
         """Load already parsed events into the review grid."""
         self._all_events = list(events)
         self._events_title = str(title)
@@ -1208,7 +1208,7 @@ class ExpertEventGrid(QWidget):
             self._channel_filter.setCurrentText(current)
         self._channel_filter.blockSignals(False)
 
-    def _event_filter_type(self, event: ExpertEvent) -> str:
+    def _event_filter_type(self, event: HFOReviewEvent) -> str:
         label = str(event.review_label or "").strip().lower()
         normalized = label.replace("_", "-").replace(" ", "-")
         if normalized in {"deleted", "excluded"}:
@@ -1234,8 +1234,8 @@ class ExpertEventGrid(QWidget):
         return "non-spike HFO"
 
     @staticmethod
-    def _event_frequency_matches(event: ExpertEvent, frequency_filter: object) -> bool:
-        band = ExpertEventGrid._frequency_filter_band(frequency_filter)
+    def _event_frequency_matches(event: HFOReviewEvent, frequency_filter: object) -> bool:
+        band = HFOEventGrid._frequency_filter_band(frequency_filter)
         if band is None:
             return True
         if event.low_freq_hz is None or event.high_freq_hz is None:
@@ -1309,7 +1309,7 @@ class ExpertEventGrid(QWidget):
         self._update_grid()
         self.filteredEventsChanged.emit(list(self._events))
 
-    def _event_type_counts(self, events: list[ExpertEvent]) -> dict[str, int]:
+    def _event_type_counts(self, events: list[HFOReviewEvent]) -> dict[str, int]:
         counts = {label: 0 for label in self._review_class_options}
         for event in events:
             event_type = self._event_filter_type(event)
@@ -1349,7 +1349,7 @@ class ExpertEventGrid(QWidget):
 
     def _fetch_waveform_window(
         self,
-        event: ExpertEvent,
+        event: HFOReviewEvent,
         start_s: float,
         end_s: float,
     ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
@@ -1377,7 +1377,7 @@ class ExpertEventGrid(QWidget):
         eps = 1e-9
         return float(waveform_start) <= float(start_s) + eps and float(waveform_end) >= float(end_s) - eps
 
-    def _ensure_event_waveform(self, event: ExpertEvent, *, include_wide: bool = False) -> None:
+    def _ensure_event_waveform(self, event: HFOReviewEvent, *, include_wide: bool = False) -> None:
         """Populate waveform fields using context-aware callback requests."""
         context_start, context_end = get_event_context_window(event)
 
@@ -1450,7 +1450,7 @@ class ExpertEventGrid(QWidget):
             col = i % GRID_COLS
             self._ensure_event_waveform(event, include_wide=False)
             
-            cell = EventCellWidget(event)
+            cell = HFOEventCellWidget(event)
             cell.clicked.connect(self._on_event_clicked)
             self._grid_layout.addWidget(cell, row, col)
         
@@ -1474,7 +1474,7 @@ class ExpertEventGrid(QWidget):
         self._prev_btn.setEnabled(self._current_page > 0)
         self._next_btn.setEnabled(self._current_page < self._total_pages - 1)
     
-    def _on_event_clicked(self, event: ExpertEvent):
+    def _on_event_clicked(self, event: HFOReviewEvent):
         """Handle event cell click - switch to zoomed view."""
         # Find the index of this event
         try:
@@ -1504,7 +1504,7 @@ class ExpertEventGrid(QWidget):
         self._show_zoomed_view(self._events[self._current_zoomed_index])
         return True
     
-    def _show_zoomed_view(self, event: ExpertEvent):
+    def _show_zoomed_view(self, event: HFOReviewEvent):
         """Show the zoomed view for a single event."""
         self._is_zoomed = True
         self._ensure_event_waveform(event, include_wide=False)
@@ -1516,7 +1516,7 @@ class ExpertEventGrid(QWidget):
         
         # Create or update zoomed view
         if self._zoomed_view is None:
-            self._zoomed_view = ZoomedEventView(
+            self._zoomed_view = ZoomedHFOEventView(
                 event,
                 review_class_options=self._review_class_options,
             )
@@ -1536,7 +1536,7 @@ class ExpertEventGrid(QWidget):
         self.requestJumpToTime.emit(event.start, event.channel)
         self.eventClicked.emit(event)
 
-    def _on_zoom_context_changed(self, event: ExpertEvent, window_s: float) -> None:
+    def _on_zoom_context_changed(self, event: HFOReviewEvent, window_s: float) -> None:
         event.review_context_window_s = float(window_s)
         event.waveform_unavailable = False
         context_start, context_end = get_event_context_window(event)
@@ -1555,7 +1555,7 @@ class ExpertEventGrid(QWidget):
         if self._zoomed_view is not None:
             self._zoomed_view.set_event(event)
 
-    def _on_event_class_changed(self, event: ExpertEvent, label: str) -> None:
+    def _on_event_class_changed(self, event: HFOReviewEvent, label: str) -> None:
         normalized = self._normalize_event_class(label)
         event.manual_class = normalized
         event.manual_review_status = "deleted" if normalized == "deleted" else "reviewed"
@@ -1595,7 +1595,7 @@ class ExpertEventGrid(QWidget):
             return "non-spike HFO"
         return "unclassified"
 
-    def _refresh_after_class_change(self, changed_event: ExpertEvent) -> None:
+    def _refresh_after_class_change(self, changed_event: HFOReviewEvent) -> None:
         channel_filter = str(self._channel_filter.currentText() or "All channels")
         type_filter = str(self._type_filter.currentText() or "All active")
         frequency_filter = self._frequency_filter.currentData()
@@ -1711,9 +1711,9 @@ class ExpertEventGrid(QWidget):
         return self._is_zoomed
     
     @property
-    def events(self) -> List[ExpertEvent]:
+    def events(self) -> List[HFOReviewEvent]:
         return self._events
 
     @property
-    def all_events(self) -> List[ExpertEvent]:
+    def all_events(self) -> List[HFOReviewEvent]:
         return self._all_events
