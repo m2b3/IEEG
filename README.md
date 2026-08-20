@@ -7,13 +7,51 @@
 
 ## What is this software?
 
-iEEG Tool is a desktop application for reviewing intracranial EEG recordings.
-It provides a responsive multichannel viewer, montage and rereferencing tools,
-annotations, display filters, PSD and scalogram views, project saving, and
-analysis-result review and export.
+iEEG Tool is a desktop application for computing, visualizing, and reviewing
+quantitative analyses of intracranial EEG recordings.
+
+```mermaid
+flowchart TD
+    A[EEG/iEEG recording] --> B[Viewer and preprocessing]
+    P[.ieeg project] --> B
+    B --> P
+
+    B --> C[Computation panel]
+    C --> D1[REI]
+    C --> D2[Gamma Spike]
+    C --> D3[HFO]
+
+    D3 --> CD[Omni candidate pipeline: STE, MNI, Hilbert]
+    CD --> M1[pyhfo_pybrain]
+    CD --> M2[pyhfo_omni_legacy]
+    CD --> M3[eHFO]
+
+    D1 --> E[Results and visualizations]
+    D2 --> E
+    M1 --> E
+    M2 --> E
+    M3 --> E
+
+    E --> F[Expert review and manual correction]
+    F --> G[CSV, JSON, image, and README exports]
+
+    B --> H[Annotations, PSD, and scalograms]
+    H --> P
+```
+
+Available computations are **Recruitment Energy Index (REI)**, **Gamma Spike**,
+and **High-Frequency Oscillation (HFO)** analysis. HFO candidate detection
+follows Omni-iEEG's STE, MNI, and Hilbert pipeline, implemented through the
+`HFODetector` package. Candidates are then classified through the
+`pyhfo_pybrain`, `pyhfo_omni_legacy`, or `eHFO` route. The sections below
+describe each algorithm.
+
+The viewer provides montage and rereferencing tools, bad-channel management,
+display filters, annotations, PSD, scalograms, project saving, result
+visualization, manual event review, and export.
 
 The complete interface and workflow documentation is in the
-[User Guide](app/docs/user_guide.html), also available from
+[User Guide](https://m2b3.github.io/I_EEG/user_guide.html), also available from
 **Help > User Guide** inside the application.
 
 ## Included analysis algorithms
@@ -21,7 +59,7 @@ The complete interface and workflow documentation is in the
 ### Recruitment Energy Index (REI)
 
 REI ranks channels using spectral changes around seizure onset and their
-recruitment delay. Bipolar montage is recommended. This implementation adapts
+recruitment delay. This implementation adapts
 the open `IEEG_EI` implementation; it is a review aid rather than a clinical
 conclusion.
 
@@ -44,8 +82,11 @@ References:
 
 ### High-Frequency Oscillations (HFO)
 
-HFO analysis combines STE, MNI, and Hilbert candidate detectors with selectable
-classification routes:
+HFO analysis uses the STE, MNI, and Hilbert candidate-detector pipeline
+integrated by Omni-iEEG. The detector implementations come from the
+`HFODetector` package; Omni's integration and parameterization are adapted here
+to process the recording already loaded in memory. The resulting candidates
+are passed to one of three selectable classification routes:
 
 - `pyhfo_pybrain` (default): native-sampling pyHFO/pyBrain route, 80-500 Hz
 - `pyhfo_omni_legacy`: Omni-compatible pyHFO route, 80-300 Hz at 1000 Hz
@@ -165,4 +206,4 @@ macOS:
 ## More help
 
 Open **Help > User Guide** in the application, or open
-[`app/docs/user_guide.html`](app/docs/user_guide.html) directly in a browser.
+[the online User Guide](https://m2b3.github.io/I_EEG/user_guide.html) directly in a browser.

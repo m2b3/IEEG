@@ -92,7 +92,7 @@ Choose **View > Scalogram Mode**, then drag horizontally across one channel. The
 
 Press **Escape** before releasing to cancel.
 
-![Main window with a loaded recording](images/scalogram.png)
+![Scalogram window for a selected channel and time interval](images/scalogram.png)
 
 ## 4. Manage Channels
 
@@ -102,7 +102,7 @@ All channels are Macro by default. Choose **Channels > Channel Groups...**, sele
 
 Groups control channel styling, filter profiles, and the Macro/Micro PSD panels. In the main viewer, Micro channel traces and labels are blue; Macro channels use the default theme colors.
 
-![Main window with a loaded recording](images/channel_group.png)
+![Channel Groups dialog for assigning Macro and Micro channels](images/channel_group.png)
 
 ### 4.2 Select Channels
 
@@ -152,7 +152,7 @@ Bad derived channels remain visible unless hidden; use **Hide all Bad** to remov
 
 The **Edit Bipolar...** button is available only in Bipolar mode. Use it to change Channel 2, add pairs, restore automatic pairs, apply with **OK**, or discard with **Cancel**.
 
-![Main window with a loaded recording](images/edit_bipolar.png)
+![Bipolar montage editor](images/edit_bipolar.PNG)
 
 ##### Validation and Warnings
 
@@ -166,7 +166,7 @@ A pair spanning two recognized electrode groups triggers a **Cross-electrode bip
 
 Choose **Preprocessing > Display Filters...** to show or hide filter controls above the viewer.
 
-![Main window with a loaded recording](images/filter_strip.png)
+![Macro and Micro display-filter controls](images/filter_strip.png)
 
 Use **Scope** to edit:
 
@@ -186,7 +186,7 @@ The PSD uses these profiles. Computations use separate bandpass rules; only algo
 
 Choose **Preprocessing > Power Spectrum**, enter start and stop times, and confirm. Stop must follow start, and both values must be inside the recording. The PSD opens beside the main viewer.
 
-![Main window with a loaded recording](images/psd_panel.png)
+![Power Spectrum tab with Macro and Micro panels](images/psd_panel.png)
 
 #### Macro and Micro Panels
 
@@ -221,7 +221,7 @@ Choose **Compute > Open Computation Panel**, or right-click selected channels an
 
 #### Shared Controls
 
-![Main window with a loaded recording](images/computation_panel.png)
+![Computation panel and its shared controls](images/computation_panel.png)
 
 - **1 - Algorithm**: REI, Gamma Spikes, or HFO
 - **2 - Channels**: analysis inputs
@@ -281,7 +281,7 @@ Click **Run REI**. Status and elapsed time update in the background. **Cancel RE
 
 ##### Main Viewer
 
-![Main window with a loaded recording](images/REI_main_window.png)
+![REI ranks, channel colors, and recruitment markers in the main viewer](images/REI_main_window results.PNG)
 
 The viewer adds each analyzed channel's rank and colors its label from orange (lower score) to green (higher score). An orange tick marks visible recruitment time. Excluded channels receive no overlay.
 
@@ -291,7 +291,7 @@ The marker is placed at the estimated recruitment time, not at the entered seizu
 
 **Open REI summary** shows one sortable row per channel. Selecting a row selects that channel in the viewer.
 
-![Main window with a loaded recording](images/REI_channel_summary.png)
+![REI channel-level summary](images/REI_channel_summary.PNG)
 
 - **Channel**: analyzed channel or bipolar derivation
 - **REI score**: normalized score from 0 to 1 within this analysis
@@ -307,7 +307,7 @@ Scores and ranks are normalized within the current channel set. Changing channel
 
 Heatmap time is expressed relative to seizure onset. Sorting or limiting rows does not change scores or exported values.
 
-![Main window with a loaded recording](images/REI_heatmap.png)
+![REI HFER heatmap and channel scores](images/REI_heatmap.PNG)
 
 
 ##### Export
@@ -356,13 +356,13 @@ The **non-gamma** and **gamma** checkboxes change visibility only. Click a highl
 
 The timeline also marks the current viewer window. Hiding a class does not delete events, alter classifications, or change exported results.
 
-![Main window with a loaded recording](images/gamma_main_viewer.png)
+![Gamma Spike event highlights in the main viewer](images/gamma_main_viewer.PNG)
 
 ##### Channel-Level Summary
 
 **Open channel-level summary** provides sortable rows and **All spikes**, **Gamma only**, and **Non-gamma only** filters.
 
-![Main window with a loaded recording](images/gamma_channel_summary.png)
+![Gamma Spike channel-level summary](images/gamma_channel_summary.PNG)
 
 
 **Gamma only** keeps channels with at least one officially gamma-classified spike. **Non-gamma only** keeps channels with no officially gamma-classified spike. These controls filter rows; they do not reclassify events.
@@ -380,11 +380,11 @@ Mean values are blank when no finite measurement exists.
 
 **Open spike grid** shows cards filterable by class, channel, and minimum gamma power. 
 
-![Main window with a loaded recording](images/gamma_grid.png)
+![Gamma Spike event grid](images/gamma_grid.PNG)
 
 Select one to view raw and 30–100 Hz signals, time-frequency content, P1/N1/N2, gamma measurements, and the gamma window. Review plots do not alter measurements.
 
-![Main window with a loaded recording](images/gamma_card.png)
+![Detailed Gamma Spike event card](images/gamma_card.PNG)
 
 Page and layout controls support large result sets. The 30–100 Hz review trace is a visualization and is separate from the saved measurements.
 
@@ -458,7 +458,7 @@ Each event is highlighted on its waveform, above the viewer, and on the full-rec
 - **spk-eHFO / spike-eHFO**: violet
 - **Unclassified**: gray
 
-![Main window with a loaded recording](images/hfo_main_viewer.png)
+![HFO event highlights and class legend in the main viewer](images/hfo_main_viewer.PNG)
 
 
 **eHFO** and **spk-eHFO** are available only for results produced by the eHFO model. They are omitted from the main-viewer legend, result filters, manual-classification choices, and channel-summary export columns for pyhfo_pybrain and pyhfo_omni_legacy results.
@@ -471,7 +471,7 @@ The timeline marks the current viewer window. Visibility filters do not change o
 
 **Open HFO summary** shows sortable rows. Filter by **All channels**, **At least one HFO**, or **At least one spkHFO**. Selecting a row selects its viewer channel.
 
-![Main window with a loaded recording](images/hfo_channel_summary.png)
+![HFO channel-level summary](images/hfo_channel_summary.PNG)
 
 
 **At least one HFO** keeps channels with an accepted event. **At least one spkHFO** keeps channels with an accepted spike-associated event. Filters use official classes and exclude deleted events.
@@ -493,11 +493,11 @@ Rates use the selected analysis duration, not the summed duration of detected ev
 
 **Open HFO event grid** shows cards filterable by channel, class, frequency range, and channel/time order. 
 
-![Main window with a loaded recording](images/hfo_grid.png)
+![HFO event grid](images/hfo_grid.PNG)
 
 Select one to inspect signals, spectrogram or FFT, timing, band, detector, classifier proposition, available probabilities, class, and review status. Display controls do not recalculate events.
 
-![Main window with a loaded recording](images/hfo_card.png)
+![Detailed HFO event card](images/hfo_card.PNG)
 
 
 When available, probabilities include accepted-HFO, artifact, and spike association. The filtered-band, context-window, spectrogram, and FFT controls affect review visualization only and do not alter stored event boundaries or measurements.

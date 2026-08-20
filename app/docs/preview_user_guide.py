@@ -524,8 +524,10 @@ def html_document(body: str, title: str) -> str:
         }}
       }}
 
-      reloadAfterSavedChange();
-      window.setInterval(reloadAfterSavedChange, 1000);
+      if (["127.0.0.1", "localhost"].includes(window.location.hostname)) {{
+        reloadAfterSavedChange();
+        window.setInterval(reloadAfterSavedChange, 1000);
+      }}
     }})();
   </script>
 </body>
