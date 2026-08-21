@@ -719,8 +719,8 @@
 <details class="guide-section level-4">
 <summary><h4 id="run-and-results-2">Run and Results</h4></summary>
 <div class="section-content">
-<p>Click <strong>Run Gamma Spike Detector</strong>. The interval is processed in 10-minute chunks with 10 seconds of context, then merged before boundary and gamma calculations. This limits memory use. Progress and estimated time are shown. <strong>Cancel gamma run</strong> stops an active run.</p>
-<p>Context reduces filtering artifacts at chunk boundaries and is removed before results are merged, preventing duplicate boundary events. Cancellation preserves the last completed Gamma Spike result.</p>
+<p>Click <strong>Run Gamma Spike Detector</strong>. The interval is processed in 10-minute chunks to limit memory use. Each chunk includes up to 10 seconds of overlapping signal before and after it. This temporary padding reduces filter-edge artifacts. Only events from the central 10-minute interval are retained, preventing duplicates when chunks are merged before boundary and gamma calculations.</p>
+<p>Progress and estimated time are shown. <strong>Cancel gamma run</strong> stops an active run and preserves the last completed Gamma Spike result.</p>
 <details class="guide-section level-5">
 <summary><h5 id="main-viewer-2">Main Viewer</h5></summary>
 <div class="section-content">
@@ -733,6 +733,7 @@
 <summary><h5 id="channel-level-summary-2">Channel-Level Summary</h5></summary>
 <div class="section-content">
 <p><strong>Open channel-level summary</strong> provides sortable rows and <strong>All spikes</strong>, <strong>Gamma only</strong>, and <strong>Non-gamma only</strong> filters.</p>
+<p>The main viewer follows the order of the rows currently shown in the summary. Sorting a column or changing the summary filter updates that order; filtered-out and non-analyzed channels remain afterward. This changes presentation only and does not reclassify events.</p>
 <figure><img src="images/gamma_channel_summary.PNG" alt="Gamma Spike channel-level summary"><figcaption>Gamma Spike channel-level summary</figcaption></figure>
 <p><strong>Gamma only</strong> keeps channels with at least one officially gamma-classified spike. <strong>Non-gamma only</strong> keeps channels with no officially gamma-classified spike. These controls filter rows; they do not reclassify events.</p>
 <ul>
@@ -847,6 +848,7 @@
 <summary><h5 id="channel-level-summary-3">Channel-Level Summary</h5></summary>
 <div class="section-content">
 <p><strong>Open HFO summary</strong> shows sortable rows. Filter by <strong>All channels</strong>, <strong>At least one HFO</strong>, or <strong>At least one spkHFO</strong>. Selecting a row selects its viewer channel.</p>
+<p>The main viewer follows the order of the rows currently shown in the summary. Sorting a column or changing the summary filter updates that order; filtered-out and non-analyzed channels remain afterward. This changes presentation only and does not reclassify events.</p>
 <figure><img src="images/hfo_channel_summary.PNG" alt="HFO channel-level summary"><figcaption>HFO channel-level summary</figcaption></figure>
 <p><strong>At least one HFO</strong> keeps channels with an accepted event. <strong>At least one spkHFO</strong> keeps channels with an accepted spike-associated event. Filters use official classes and exclude deleted events.</p>
 <ul>

@@ -363,9 +363,9 @@ Gamma Spike has no advanced-parameter dialog. Its detection bands, thresholds, a
 
 #### Run and Results
 
-Click **Run Gamma Spike Detector**. The interval is processed in 10-minute chunks with 10 seconds of context, then merged before boundary and gamma calculations. This limits memory use. Progress and estimated time are shown. **Cancel gamma run** stops an active run.
+Click **Run Gamma Spike Detector**. The interval is processed in 10-minute chunks to limit memory use. Each chunk includes up to 10 seconds of overlapping signal before and after it. This temporary padding reduces filter-edge artifacts. Only events from the central 10-minute interval are retained, preventing duplicates when chunks are merged before boundary and gamma calculations.
 
-Context reduces filtering artifacts at chunk boundaries and is removed before results are merged, preventing duplicate boundary events. Cancellation preserves the last completed Gamma Spike result.
+Progress and estimated time are shown. **Cancel gamma run** stops an active run and preserves the last completed Gamma Spike result.
 
 ##### Main Viewer
 
@@ -380,6 +380,8 @@ The timeline also marks the current viewer window. Hiding a class does not delet
 ##### Channel-Level Summary
 
 **Open channel-level summary** provides sortable rows and **All spikes**, **Gamma only**, and **Non-gamma only** filters.
+
+The main viewer follows the order of the rows currently shown in the summary. Sorting a column or changing the summary filter updates that order; filtered-out and non-analyzed channels remain afterward. This changes presentation only and does not reclassify events.
 
 ![Gamma Spike channel-level summary](images/gamma_channel_summary.PNG)
 
@@ -509,6 +511,8 @@ The timeline marks the current viewer window. Visibility filters do not change o
 ##### Channel-Level Summary
 
 **Open HFO summary** shows sortable rows. Filter by **All channels**, **At least one HFO**, or **At least one spkHFO**. Selecting a row selects its viewer channel.
+
+The main viewer follows the order of the rows currently shown in the summary. Sorting a column or changing the summary filter updates that order; filtered-out and non-analyzed channels remain afterward. This changes presentation only and does not reclassify events.
 
 ![HFO channel-level summary](images/hfo_channel_summary.PNG)
 
