@@ -35,6 +35,8 @@ Choose **File > Open Project...** and select an `.ieeg` file. The application re
 7. Amplitude axis in µV
 8. Time-navigation bar
 
+Trace colors identify channel state: **Micro channels are blue** and confirmed bad channels are red. Red takes priority when a Micro channel is also bad.
+
 ### 2.2 Menu Bar
 
 - **File**: create, open, save, or close a project; exit the application
@@ -120,7 +122,7 @@ Right-click selected traces and choose **Hide**. Use **Hidden...** to restore th
 
 Right-click selected traces and choose **Mark as bad**. If all are already bad, choose **Unmark as bad**. Use **Bad...** to review marks or clear them all.
 
-Bad status is application-wide: changes in the viewer or PSD appear in both. A bad channel's trace is red, including when that channel belongs to the Micro group; the bad-channel color takes priority for the trace. Bad channels are excluded from computation lists and automatic bipolar generation, but remain visible until hidden.
+Bad status is application-wide: changes in the viewer or PSD appear in both. A bad trace is red and remains visible until hidden; red takes priority over the blue Micro-channel color. Bad displayed channels are excluded from computation lists.
 
 Hidden and bad are separate states: restoring a hidden bad channel does not clear its bad mark, and unmarking a channel as bad does not make a hidden channel visible.
 
@@ -140,13 +142,19 @@ Average and Median exclude bad channels from the reference pool. Samples covered
 
 #### Automatic Bipolar Montage
 
-Bipolar mode extracts each label's electrode prefix and contact number, groups and sorts contacts by electrode, and pairs consecutive contacts. For example, `A1`, `A2`, and `A3` produce `A1-A2` and `A2-A3`.
+Bipolar mode extracts each label's electrode prefix and contact number, groups contacts by electrode, sorts them numerically, and pairs consecutive contacts. For example, `A1`, `A2`, and `A3` produce `A1-A2` and `A2-A3`. Each displayed trace is the actual signal **Channel 1 minus Channel 2**.
 
-Unrecognized labels, non-consecutive contacts, and bad channels are skipped. The application reports skipped channels and warns if no pair is possible. If labels already appear bipolar, it asks before deriving them again.
+Unrecognized labels and non-consecutive contacts are skipped. The application reports skipped contacts, warns if no pair is possible, and asks for confirmation if imported labels already look bipolar.
 
-Each trace contains the actual difference **Channel 1 minus Channel 2**, not only a new label. Hiding a derived trace removes it from view. Hiding a source channel does not exclude it from later automatic generation.
+##### Bad-Channel Behavior
 
-Bad derived channels remain visible unless hidden; use **Hide all Bad** to remove them from view. Automatic generation uses the bad-channel state that exists when Bipolar mode is selected.
+Automatic generation uses the raw bad-channel state present when Bipolar mode is selected. A pair is omitted if either source contact is bad. If `A2` is bad, neither `A1-A2` nor `A2-A3` is created; the software does not bridge the gap with `A1-A3`.
+
+While Bipolar mode is active, marking `A1-A2` as bad marks the derived trace only. The pair remains visible in red and is excluded from computation lists; raw `A1` and `A2` are not immediately marked. Use **Hide** or **Hide all Bad** to remove the trace from view. Hiding does not change the montage or bad-channel state.
+
+When leaving Bipolar for Monopolar, Average, Median, or Common Reference, each bad derived pair is converted to its first source contact: bad `A1-A2` becomes bad `A1`; `A2` is not marked. Existing raw bad contacts remain bad. Returning to Bipolar then excludes every automatic pair containing `A1`.
+
+Changing bad status does not rebuild the montage currently on screen. After unmarking a raw contact, regenerate pairs by switching away from Bipolar and selecting it again, or choose **Edit Bipolar... > Back to default > OK**. Hiding a raw contact does not exclude it from automatic pairing.
 
 #### Edit Bipolar Montage
 
@@ -154,9 +162,11 @@ The **Edit Bipolar...** button is available only in Bipolar mode. Use it to chan
 
 ![Bipolar montage editor](images/edit_bipolar.PNG)
 
+Raw contacts marked bad are excluded from the available Channel 1 and Channel 2 choices and from the automatic montage restored by **Back to default**. Unmark a raw contact before opening the editor if it must be used in a pair.
+
 ##### Validation and Warnings
 
-Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied. Bad channels cannot be selected.
+Channel 1 and Channel 2 must differ, and bipolar names must be unique. Invalid edits are not applied.
 
 A pair spanning two recognized electrode groups triggers a **Cross-electrode bipolar pairs** warning. Choose **Cancel** or **Keep edit**.
 
@@ -269,7 +279,12 @@ For example, if a seizure ends less than 20 seconds after onset, shorten the def
 
 Bipolar is recommended. With another montage, choose **Switch to Bipolar**, **Run Anyway**, or **Cancel**. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.
 
-REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default **60–140 Hz**. In **Advanced parameters...**, the lower limit must be positive and below the upper limit; the upper limit must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are fixed.
+REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default **60–140 Hz**. In **Advanced parameters...**, the user can change:
+
+- **Low frequency**: lower boundary of the REI analysis band
+- **High frequency**: upper boundary of the REI analysis band
+
+Changes apply to the next run; there is no separate Save button. The lower value must be positive and below the upper value, and the upper value must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are shown for reference but are fixed.
 
 REI reuses each channel's Macro/Micro notch choice. If notch is off for all selected channels, the application warns about possible line-noise effects.
 
@@ -289,7 +304,9 @@ The marker is placed at the estimated recruitment time, not at the entered seizu
 
 ##### Channel-Level Summary
 
-**Open REI summary** shows one sortable row per channel. Selecting a row selects that channel in the viewer.
+**Open REI summary** shows one sortable row per channel. Selecting a row selects and centers that channel in the main viewer.
+
+Click a column header to sort the summary. The analyzed channels in the main viewer immediately follow the same order; channels not included in the REI run remain after them. Clicking a numeric header again reverses the order. The **Channel** header alternates between the current display order and alphabetical order. Sorting changes presentation only; it does not recalculate REI values.
 
 ![REI channel-level summary](images/REI_channel_summary.PNG)
 
@@ -341,6 +358,8 @@ Enter a non-empty interval inside the recording. The full recording is selected 
 Gamma Spike uses the active montage and ignores display high/low-pass values. It reuses each channel's Macro/Micro notch choice and warns if notch is off for all selected channels.
 
 Detection and boundary estimation use an internal **10–60 Hz** band; gamma measurement uses **30–100 Hz**. Boundary and gamma signals use zero-phase, fourth-order Butterworth filters.
+
+Gamma Spike has no advanced-parameter dialog. Its detection bands, thresholds, and segmented-processing settings follow the translated reference workflow and are not user-editable.
 
 #### Run and Results
 
@@ -438,6 +457,26 @@ For a custom band, select **Custom (experimental)** and edit **Low frequency** a
 In **Advanced parameters...**, enable one or more STE, MNI, or Hilbert detectors and edit their parameters. At least one must remain enabled. The application validates band limits, event duration, merge gap, minimum cycles, and detector settings.
 
 Disabling a detector preserves its parameter values but excludes it from the next run. Detector selection changes candidate generation for every model and can therefore change both event counts and classifications.
+
+![Scrollable HFO advanced-parameters dialog](images/hfo_advanced_parameters.png)
+
+The shared controls are:
+
+- **Low / High frequency**: detection-band boundaries; editable only for **Custom (experimental)**
+- **Candidate detectors**: enable STE, MNI, Hilbert, or any combination
+- **Threshold sigma**: shared fallback detection threshold, measured in standard deviations
+- **Minimum / Maximum duration**: shortest and longest retained candidate
+- **Ignore edges**: interval removed from both ends to avoid incomplete events
+- **Merge gap**: maximum separation for joining nearby detections
+- **Minimum cycles**: minimum oscillations required for a candidate
+
+Detector-specific settings take priority over the matching shared fallback. Their concise meanings are:
+
+- **STE**: RMS window controls envelope smoothing; minimum window and gap control event duration and merging; epoch length divides long data for processing; minimum oscillations sets the cycle count; RMS and peak thresholds set detector sensitivity.
+- **MNI**: epoch time divides the analysis; epoch CHF and percent CHF define continuous high-frequency activity; minimum window and gap control duration and merging; threshold percentile sets detection sensitivity; baseline segment, shift, threshold, and minimum define baseline estimation.
+- **Hilbert**: SD threshold sets envelope sensitivity; minimum window sets event duration; epoch length divides long data for processing.
+
+Lower thresholds or shorter duration rules usually produce more candidates. These settings affect reproducibility and comparison with the reference workflows; keep the defaults unless changes are justified and recorded. Click **Save** to use changes in the next run. **Back to default** restores the built-in values in the dialog but still requires **Save**; **Close** discards unsaved changes.
 
 HFO analysis uses the active montage and each channel's Macro/Micro notch choice. It excludes bad channels and ignores display high/low-pass values. Events exceeding maximum duration or lying in analysis-edge padding are excluded before classification and counted in metadata.
 

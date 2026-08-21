@@ -2,8 +2,7 @@
 
 > [!WARNING]
 > **Work in progress.** This software is under active development and has not
-> been validated as a medical device. It is intended for research and expert
-> review, not for diagnosis or treatment decisions.
+> been validated as a medical device.
 
 ## What is this software?
 
@@ -12,9 +11,8 @@ quantitative analyses of intracranial EEG recordings.
 
 ```mermaid
 flowchart TD
-    A[EEG/iEEG recording] --> B[Viewer and preprocessing]
-    P[.ieeg project] --> B
-    B --> P
+    A[EEG/iEEG recording] --> P[.ieeg project]
+    P --> B[Viewer and preprocessing]
 
     B --> C[Computation panel]
     C --> D1[REI]
@@ -36,7 +34,7 @@ flowchart TD
     F --> G[CSV, JSON, image, and README exports]
 
     B --> H[Annotations, PSD, and scalograms]
-    H --> P
+    H --> S[Saved .ieeg project]
 ```
 
 Available computations are **Recruitment Energy Index (REI)**, **Gamma Spike**,
@@ -202,8 +200,3 @@ macOS:
 ```bash
 ./.venv/bin/python -m pip install -r requirements.txt
 ```
-
-## More help
-
-Open **Help > User Guide** in the application, or open
-[the online User Guide](https://m2b3.github.io/I_EEG/user_guide.html) directly in a browser.

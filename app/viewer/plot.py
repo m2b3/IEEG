@@ -2320,37 +2320,68 @@ class MultiChannelViewer(pg.GraphicsLayoutWidget):
         return sorted(self._bad_channels)
 
  # ---------------- Referencing / Montage----------------
+    def _remap_bipolar_bad_channels_to_first_sources(self) -> bool:
+        """Convert bad bipolar derivations to their first raw contact."""
+        if self._reference_mode != "bipolar" or not self._bad_channels:
+            return False
+
+        first_source_by_pair = {
+            str(pair.name): str(pair.ch1)
+            for pair in self._bipolar_pairs
+        }
+        remapped = {
+            first_source_by_pair.get(str(channel_name), str(channel_name))
+            for channel_name in self._bad_channels
+        }
+        if remapped == self._bad_channels:
+            return False
+
+        self._bad_channels = remapped
+        return True
+
     def set_monopolar_mode(self) -> None:
+        bad_channels_changed = self._remap_bipolar_bad_channels_to_first_sources()
         self._reference_mode = "monopolar"
         self._display_names = list(self._channel_names)
         self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
         self._clamp_ch_start()
         self.render()
+        if bad_channels_changed:
+            self.badChannelsChanged.emit()
 
     def set_average_mode(self) -> None:
+        bad_channels_changed = self._remap_bipolar_bad_channels_to_first_sources()
         self._reference_mode = "average"
         self._display_names = list(self._channel_names)
         self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
         self._clamp_ch_start()
         self.render()
+        if bad_channels_changed:
+            self.badChannelsChanged.emit()
 
     def set_median_mode(self) -> None:
+        bad_channels_changed = self._remap_bipolar_bad_channels_to_first_sources()
         self._reference_mode = "median"
         self._display_names = list(self._channel_names)
         self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
         self._clamp_ch_start()
         self.render()
+        if bad_channels_changed:
+            self.badChannelsChanged.emit()
 
     def set_common_reference_mode(self, ref_name: str) -> None:
         if ref_name not in self._channel_names:
             return
 
+        bad_channels_changed = self._remap_bipolar_bad_channels_to_first_sources()
         self._reference_mode = "common"
         self._common_ref_name = str(ref_name)
         self._display_names = list(self._channel_names)
         self._monopolar_abs_to_pick_idx = list(range(len(self._channel_names)))
         self._clamp_ch_start()
         self.render()
+        if bad_channels_changed:
+            self.badChannelsChanged.emit()
 
     def set_bipolar_mode(self, montage: BipolarMontage) -> None:
         self._reference_mode = "bipolar"
