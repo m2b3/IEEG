@@ -19,7 +19,7 @@ flowchart TD
     C --> D2[Gamma Spike]
     C --> D3[HFO]
 
-    D3 --> CD[Omni candidate pipeline: STE, MNI, Hilbert]
+    D3 --> CD[hfos detectors: STE, MNI, Hilbert]
     CD --> M1[pyhfo_pybrain]
     CD --> M2[pyhfo_omni_legacy]
     CD --> M3[eHFO]
