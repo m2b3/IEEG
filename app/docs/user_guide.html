@@ -295,12 +295,12 @@
 <a class="toc-level-2" href="#6-compute">6. Compute</a>
 <a class="toc-level-3" href="#6-1-computation-panel">6.1 Computation Panel</a>
 <a class="toc-level-4" href="#shared-controls">Shared Controls</a>
-<a class="toc-level-4" href="#import-results">Import Results</a>
-<a class="toc-level-4" href="#export-results">Export Results</a>
+<a class="toc-level-4" href="#export-and-import-results">Export and Import Results</a>
 <a class="toc-level-3" href="#6-2-recruitment-energy-index-rei">6.2 Recruitment Energy Index (REI)</a>
 <a class="toc-level-4" href="#definition-origin-and-validation">Definition, Origin, and Validation</a>
 <a class="toc-level-4" href="#time">Time</a>
 <a class="toc-level-4" href="#preprocessing-and-advanced-parameters">Preprocessing and Advanced Parameters</a>
+<a class="toc-level-4" href="#computation">Computation</a>
 <a class="toc-level-4" href="#run-and-results">Run and Results</a>
 <a class="toc-level-5" href="#main-viewer">Main Viewer</a>
 <a class="toc-level-5" href="#channel-level-summary">Channel-Level Summary</a>
@@ -590,27 +590,24 @@
 <summary><h4 id="shared-controls">Shared Controls</h4></summary>
 <div class="section-content">
 <figure><img src="images/computation_panel.png" alt="Computation panel and its shared controls"><figcaption>Computation panel and its shared controls</figcaption></figure>
-<ul>
-<li><strong>1 - Algorithm</strong>: REI, Gamma Spikes, or HFO</li>
-<li><strong>2 - Channels</strong>: analysis inputs</li>
-<li><strong>3 - Time</strong>: interval and method settings</li>
-<li><strong>4 - Output</strong>: run, cancel, import, review, and export</li>
-</ul>
-<p>Time and Output controls change with the algorithm.</p>
+<p>Follow the panel from top to bottom:</p>
+<ol>
+<li><strong>Choose an algorithm</strong>: REI, Gamma Spikes, or HFO.</li>
+<li><strong>Choose channels</strong>: select the signals to analyze.</li>
+<li><strong>Define the analysis</strong>: enter the time interval, then review the algorithm-specific settings and <strong>Advanced parameters...</strong> when available.</li>
+<li><strong>Run the algorithm</strong>: monitor progress or cancel if required. Review and export controls become available only after a successful run or import.</li>
+<li><strong>Review the outputs</strong>: inspect the main-viewer overlays, channel summary, and event or heatmap views provided by that algorithm. Complete any manual event corrections before export.</li>
+<li><strong>Export the results</strong>: this creates the persistent result folder. Use <strong>Import results...</strong> later to reopen that folder with the matching recording and montage.</li>
+</ol>
+<p>The <strong>Time</strong> and <strong>Output</strong> areas adapt to the selected algorithm. Import is also available before a new run.</p>
 <p>Use <strong>All</strong>, <strong>Macro</strong>, or <strong>Micro</strong> to replace the list with non-bad channels from that scope. Use <strong>Add...</strong>, <strong>Remove selected</strong>, or <strong>Clear</strong> to edit it. Verify the list after changing montage/reference. The signal is extracted using the montage/reference active when the run starts.</p>
 <p>Confirmed bad channels are unavailable for selection. Display high-pass and low-pass filters are not reused unless an algorithm explicitly includes them in its preprocessing.</p>
 </div></details>
 <details class="guide-section level-4">
-<summary><h4 id="import-results">Import Results</h4></summary>
+<summary><h4 id="export-and-import-results">Export and Import Results</h4></summary>
 <div class="section-content">
-<p>Click <strong>Import results...</strong> and select a folder exported by the application. The algorithm is detected automatically. First load the matching recording and montage. Import fails if files are missing, the recording differs, or an imported channel is unavailable in the current montage.</p>
-<p>A valid import restores the available summaries, event-review data, metadata, and main-viewer overlays. Importing replaces the current result for the detected algorithm; export unsaved manual reviews first.</p>
-</div></details>
-<details class="guide-section level-4">
-<summary><h4 id="export-results">Export Results</h4></summary>
-<div class="section-content">
-<p>Each algorithm has its own export button. Export folders contain tables, metadata, and a README; REI also includes a numeric and image heatmap. The application asks before replacing files.</p>
-<p>Run and import controls are always available when their prerequisites are met. Review and export buttons become available after a successful run or import. During processing, the selected algorithm shows its own cancel button.</p>
+<p>After review, use the algorithm's <strong>Export</strong> button to save tables, metadata, and a README; REI also exports its heatmap. Export again after manual corrections. <strong>File &gt; Save</strong> does not replace result export.</p>
+<p>To reopen results, first load the matching recording and montage, then click <strong>Import results...</strong> and select the exported folder. The algorithm is detected automatically and its summaries, reviews, and overlays are restored. Import rejects incompatible data and replaces the current result, so export unsaved reviews first.</p>
 </div></details>
 </div></details>
 <details class="guide-section level-3">
@@ -645,6 +642,29 @@
 <p>Changes apply to the next run; there is no separate Save button. The lower value must be positive and below the upper value, and the upper value must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are shown for reference but are fixed.</p>
 <p>REI reuses each channel's Macro/Micro notch choice. If notch is off for all selected channels, the application warns about possible line-noise effects.</p>
 <p>Confirmed bad channels are excluded. With mixed Macro and Micro selections, each channel uses the notch profile assigned to its own group.</p>
+</div></details>
+<details class="guide-section level-4">
+<summary><h4 id="computation">Computation</h4></summary>
+<div class="section-content">
+<p>REI is calculated independently for each selected, non-bad channel:</p>
+<ol>
+<li><strong>Estimate high-frequency energy.</strong> The filtered signal is squared and smoothed with a fixed 0.5-second window in both the baseline and ictal intervals.</li>
+<li><strong>Normalize to baseline.</strong> Each channel's baseline and ictal energy time series are divided by that channel's mean baseline energy. The resulting series is the normalized high-frequency energy ratio (HFER).</li>
+<li><strong>Set a channel-specific threshold.</strong> For channel <code>i</code>:</li>
+</ol>
+<p><code>Tᵢ = max(Eᵢ,baseline) + 10 × σᵢ,baseline</code></p>
+<p><code>Eᵢ,baseline</code> is the normalized baseline HFER series and <code>σᵢ,baseline</code> is its standard deviation.</p>
+<ol>
+<li><strong>Find recruitment onset.</strong> Recruitment is the first ictal-window sample whose HFER is strictly greater than <code>Tᵢ</code>. If a channel never crosses its threshold, its onset is assigned to the end of the ictal window. Recruitment delay is reported relative to the entered seizure onset, so it can be negative when the ictal window begins before seizure onset.</li>
+<li><strong>Measure recruitment magnitude.</strong> For every channel, mean HFER is measured over a window of up to 0.25 seconds beginning at the earliest recruitment detected across the analyzed channels. The window is shortened if it reaches the ictal-window end.</li>
+<li><strong>Combine magnitude and timing.</strong> Channels are ordered by recruitment onset and assigned an inverse timing rank <code>1/rᵢ</code>, where rank 1 is the earliest. The raw score is:</li>
+</ol>
+<p><code>REIᵢ,raw = √(HFERᵢ × 1/rᵢ)</code></p>
+<ol>
+<li><strong>Normalize the scores.</strong> Raw scores are divided by the largest raw score in the current run, producing REI values from 0 to 1. The channel with the highest final REI receives final <strong>Rank 1</strong>.</li>
+</ol>
+<p>The timing rank used inside the formula and the final REI rank are different: the first reflects recruitment order; the second orders the combined normalized scores. Scores are relative to the channels and windows in the current run and should not be compared as absolute values across separate seizures.</p>
+<p>NaN or infinite raw scores are replaced with zero. If every score is zero, the result remains all-zero and should be treated as non-informative; the GUI does not automatically exclude the recording.</p>
 </div></details>
 <details class="guide-section level-4">
 <summary><h4 id="run-and-results">Run and Results</h4></summary>

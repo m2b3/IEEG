@@ -233,28 +233,26 @@ Choose **Compute > Open Computation Panel**, or right-click selected channels an
 
 ![Computation panel and its shared controls](images/computation_panel.png)
 
-- **1 - Algorithm**: REI, Gamma Spikes, or HFO
-- **2 - Channels**: analysis inputs
-- **3 - Time**: interval and method settings
-- **4 - Output**: run, cancel, import, review, and export
+Follow the panel from top to bottom:
 
-Time and Output controls change with the algorithm.
+1. **Choose an algorithm**: REI, Gamma Spikes, or HFO.
+2. **Choose channels**: select the signals to analyze.
+3. **Define the analysis**: enter the time interval, then review the algorithm-specific settings and **Advanced parameters...** when available.
+4. **Run the algorithm**: monitor progress or cancel if required. Review and export controls become available only after a successful run or import.
+5. **Review the outputs**: inspect the main-viewer overlays, channel summary, and event or heatmap views provided by that algorithm. Complete any manual event corrections before export.
+6. **Export the results**: this creates the persistent result folder. Use **Import results...** later to reopen that folder with the matching recording and montage.
+
+The **Time** and **Output** areas adapt to the selected algorithm. Import is also available before a new run.
 
 Use **All**, **Macro**, or **Micro** to replace the list with non-bad channels from that scope. Use **Add...**, **Remove selected**, or **Clear** to edit it. Verify the list after changing montage/reference. The signal is extracted using the montage/reference active when the run starts.
 
 Confirmed bad channels are unavailable for selection. Display high-pass and low-pass filters are not reused unless an algorithm explicitly includes them in its preprocessing.
 
-#### Import Results
+#### Export and Import Results
 
-Click **Import results...** and select a folder exported by the application. The algorithm is detected automatically. First load the matching recording and montage. Import fails if files are missing, the recording differs, or an imported channel is unavailable in the current montage.
+After review, use the algorithm's **Export** button to save tables, metadata, and a README; REI also exports its heatmap. Export again after manual corrections. **File > Save** does not replace result export.
 
-A valid import restores the available summaries, event-review data, metadata, and main-viewer overlays. Importing replaces the current result for the detected algorithm; export unsaved manual reviews first.
-
-#### Export Results
-
-Each algorithm has its own export button. Export folders contain tables, metadata, and a README; REI also includes a numeric and image heatmap. The application asks before replacing files.
-
-Run and import controls are always available when their prerequisites are met. Review and export buttons become available after a successful run or import. During processing, the selected algorithm shows its own cancel button.
+To reopen results, first load the matching recording and montage, then click **Import results...** and select the exported folder. The algorithm is detected automatically and its summaries, reviews, and overlays are restored. Import rejects incompatible data and replaces the current result, so export unsaved reviews first.
 
 ### 6.2 Recruitment Energy Index (REI)
 
@@ -277,18 +275,38 @@ For example, if a seizure ends less than 20 seconds after onset, shorten the def
 
 #### Preprocessing and Advanced Parameters
 
-Bipolar is recommended. With another montage, choose **Switch to Bipolar**, **Run Anyway**, or **Cancel**. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.
+REI uses the active montage. Bipolar is recommended. With another montage, choose **Switch to Bipolar**, **Run Anyway**, or **Cancel**. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.
 
-REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default **60–140 Hz**. In **Advanced parameters...**, the user can change:
-
-- **Low frequency**: lower boundary of the REI analysis band
-- **High frequency**: upper boundary of the REI analysis band
+REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default **60–140 Hz**. Analysis band can be edited by the user in **Advanced parameters...**.
 
 Changes apply to the next run; there is no separate Save button. The lower value must be positive and below the upper value, and the upper value must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are shown for reference but are fixed.
 
 REI reuses each channel's Macro/Micro notch choice. If notch is off for all selected channels, the application warns about possible line-noise effects.
 
 Confirmed bad channels are excluded. With mixed Macro and Micro selections, each channel uses the notch profile assigned to its own group.
+
+#### Computation
+
+REI is calculated independently for each selected, non-bad channel:
+
+1. **Estimate high-frequency energy.** The filtered signal is squared and smoothed with a fixed 0.5-second window in both the baseline and ictal intervals.
+2. **Normalize to baseline.** Each channel's baseline and ictal energy time series are divided by that channel's mean baseline energy. The resulting series is the normalized high-frequency energy ratio (HFER).
+3. **Set a channel-specific threshold.** For channel `i`:
+
+   `Tᵢ = max(Eᵢ,baseline) + 10 × σᵢ,baseline`
+
+   `Eᵢ,baseline` is the normalized baseline HFER series and `σᵢ,baseline` is its standard deviation.
+4. **Find recruitment onset.** Recruitment is the first ictal-window sample whose HFER is strictly greater than `Tᵢ`. If a channel never crosses its threshold, its onset is assigned to the end of the ictal window. Recruitment delay is reported relative to the entered seizure onset, so it can be negative when the ictal window begins before seizure onset.
+5. **Measure recruitment magnitude.** For every channel, mean HFER is measured over a window of up to 0.25 seconds beginning at the earliest recruitment detected across the analyzed channels. The window is shortened if it reaches the ictal-window end.
+6. **Combine magnitude and timing.** Channels are ordered by recruitment onset and assigned an inverse timing rank `1/rᵢ`, where rank 1 is the earliest. The raw score is:
+
+   `REIᵢ,raw = √(HFERᵢ × 1/rᵢ)`
+
+7. **Normalize the scores.** Raw scores are divided by the largest raw score in the current run, producing REI values from 0 to 1. The channel with the highest final REI receives final **Rank 1**.
+
+The timing rank used inside the formula and the final REI rank are different: the first reflects recruitment order; the second orders the combined normalized scores. Scores are relative to the channels and windows in the current run and should not be compared as absolute values across separate seizures.
+
+NaN or infinite raw scores are replaced with zero. If every score is zero, the result remains all-zero and should be treated as non-informative; the GUI does not automatically exclude the recording.
 
 #### Run and Results
 
@@ -344,10 +362,6 @@ Heatmap time is expressed relative to seizure onset. Sorting or limiting rows do
 Gamma Spike analysis detects interictal spikes, measures associated **30–100 Hz** activity, and classifies events as **gamma** or **non-gamma**.
 
 It is a Python translation of the [Lab-Frauscher Spike-Gamma](https://github.com/Lab-Frauscher/Spike-Gamma) MATLAB workflow. Candidate detection uses the Janca Hilbert-envelope detector; artifact/spindle rejection, boundary estimation, and preceding-gamma measurement follow the source workflow.
-
-The translation was compared with the MATLAB workflow, Brainstorm served as an external validation comparison, and segmented processing was checked for consistency. These checks do not establish clinical sensitivity or specificity.
-
-The validation concerned implementation behavior and agreement with the reference workflows; it did not validate the detector for diagnosis or replace expert EEG/iEEG review.
 
 #### Time
 
