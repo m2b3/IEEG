@@ -180,6 +180,13 @@ After installation, verify the environment on Windows:
 On macOS, use `./.venv/bin/python` in place of
 `.\.venv\Scripts\python.exe`.
 
+For a comprehensive cross-platform check of the imports, bundled HFO
+checkpoints, and Qt main window, run:
+
+```bash
+./.venv/bin/python check_environment.py
+```
+
 ## Updating an existing installation
 
 After pulling a newer version, reinstall the requirements because dependencies

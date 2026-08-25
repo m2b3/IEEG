@@ -59,7 +59,7 @@ from app.computation.exporters import (
     export_hfo_result,
 )
 from app.computation.importers import ImportedComputationResult, import_computation_result
-from app.hfo_event_grid import HFOReviewEvent, HFOEventGrid, hfo_review_class_options
+from app.computation.hfo.event_grid import HFOReviewEvent, HFOEventGrid, hfo_review_class_options
 from app.diagnostics.performance_monitor import timed_mark
 from app.preprocessing.filtering import NOTCH_OFF
 

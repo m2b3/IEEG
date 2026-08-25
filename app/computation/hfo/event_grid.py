@@ -1,4 +1,3 @@
-# app/hfo_event_grid.py
 """Reusable HFO event grid widget for computed-event review."""
 
 from __future__ import annotations

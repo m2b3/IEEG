@@ -1186,3 +1186,694 @@ Renamed cleanly:
 All imports and type annotations were updated. Seven tests passed, the full `app` package compiled, and `git diff --check` passed.
 
 These rename changes are currently in the working tree and are not yet part of commit `1fddd4a`. Because including them by amendment would rewrite the last commit again, I have not amended it without explicit permission.
+
+## User
+make it workkkkkkk the venv and everything
+
+## Assistant
+It works now.
+
+- Installed Homebrew Python 3.11.16 and repaired its pip bootstrap.
+- Created `.venv` with Python 3.11.16.
+- Installed every package from `requirements.txt`.
+- `pip check` reports no broken requirements.
+- All required imports pass, including Qt, MNE, HFODetector, PyTorch, and torchvision.
+- All five HFO checkpoints exist and deserialize successfully.
+- The Qt `MainWindow` constructs, processes events, and closes successfully in a headless smoke test.
+
+Launch it from the repository with:
+
+```bash
+./.venv/bin/python main.py
+```
+
+I also added `check_environment.py` and documented it in `README.md`. Recheck the setup anytime with:
+
+```bash
+./.venv/bin/python check_environment.py
+```
+
+The source changes are currently uncommitted: `README.md` is modified and `check_environment.py` is new.
+
+## User
+polish and critic my gsoc repport introduction (full introduction supplied in the user message)
+
+## Assistant
+The structure is already strong. The main improvements are to state the project goal earlier, separate the contribution from its outcomes, remove repetition, and avoid implying clinical readiness.
+
+### Revised introduction
+
+## 1. Introduction
+
+### 1.1 Clinical motivation
+
+Epilepsy affects approximately 50 million people worldwide, and around one-third of patients continue to experience seizures despite appropriate antiseizure medication. For selected patients with drug-resistant epilepsy, resective surgery can offer the possibility of seizure freedom. Its success, however, depends on accurately identifying the epileptogenic zone—the brain region that must be removed or disconnected to prevent seizure recurrence. Intracranial electroencephalography (iEEG) plays an important role in this localization during presurgical evaluation.
+
+A central challenge is the scale and complexity of iEEG data. Recordings may span several days and include hundreds of channels, making exhaustive manual review both time-consuming and vulnerable to missed subtle patterns. Although computational methods have been developed to support this process, many remain standalone research scripts that are difficult to incorporate into reproducible, interactive workflows.
+
+This project addresses that gap by extending an open-source desktop application for epilepsy research and expert review. Its overall goal is to make computational iEEG analyses easier to configure, inspect, validate, and reproduce within a unified interface.
+
+### 1.2 Project starting point
+
+Before GSoC, the graphical user interface already supported EEG file loading, interactive signal visualization, temporal navigation and zooming, annotations, filtering, montage configuration and re-referencing, power spectral density estimation, and scalogram visualization.
+
+The application’s modular architecture separated visualization, preprocessing, and annotation into distinct components, providing a strong foundation for further development. A computation panel had also been created as a placeholder for future analysis modules. However, no analysis algorithms were connected to it, and the application lacked a unified workflow for configuring computations, visualizing their results, reviewing detected events, and exporting reproducible outputs.
+
+### 1.3 GSoC scope and outcomes
+
+The aim of the GSoC project was to transform this foundation into a functional, semi-automated analysis environment by integrating three clinically relevant iEEG analysis methods:
+
+- the Recruitment Energy Index (REI);
+- gamma-spike analysis; and
+- high-frequency oscillation (HFO) detection and classification.
+
+The main engineering contribution was the development of a unified workflow through which expert users can configure analyses, inspect algorithmic outputs alongside the original signals, review and correct detected events, and export results together with the parameters needed for reproducibility. This work also introduced analysis-specific visualizations and summaries, improved the processing of large recordings, refined existing interface components, and expanded the project documentation.
+
+The resulting platform makes computational iEEG analyses more accessible, inspectable, and reproducible within a single desktop application. Selected implementations were compared with reference outputs as part of technical verification. Formal clinical validation and assessment of clinical performance, however, were outside the scope of the project. The software is therefore intended to support—not replace—expert interpretation.
+
+### Critique and recommendations
+
+- “Recruitment Epileptogenicity Index” and “Recruitment Energy Index” are not interchangeable. The repository currently uses **Recruitment Energy Index (REI)**, so verify the official name and use it consistently throughout the report.
+- Put the overall project-goal sentence at the end of Section 1.1. It creates a clean transition from the clinical problem to the software starting point.
+- Use “epilepsy research and expert review” instead of “clinical workflows” unless the software has been clinically validated. This preserves the motivation without overstating readiness.
+- The original Section 1.3 repeated the same outputs across two paragraphs. The revision gives the first paragraph the scope, the second the engineering contribution, and the third the outcome and limitation.
+- “Compared with reference outputs” is more precise than “evaluated” if you performed technical agreement checks rather than a formal performance study. Later in the report, name the reference implementations, datasets, and comparison criteria.
+- Remove whole-paragraph bold formatting and the irregular spacing around headings, colons, and bullets. Reserve bold text for genuinely important terms.
+- Keep terminology consistent: **open-source**, **semi-automated**, **re-referencing**, **analysis algorithms**, and **developing**.
+
+## User
+is nt paragraph 3 repetitive with paragraph 2
+
+## Assistant
+Yes. The first sentence of paragraph 3 repeats the idea already expressed in paragraph 2: paragraph 2 explains that the platform supports accessible, inspectable, and reproducible analysis, and paragraph 3 states the same benefit in more general terms.
+
+I would remove that sentence and make the third paragraph focus exclusively on verification and scope:
+
+Selected implementations were compared with reference outputs as part of technical verification. Formal clinical validation and assessment of clinical performance, however, were outside the scope of the project. The software is therefore intended to support—not replace—expert interpretation.
+
+This gives each paragraph a distinct role:
+
+- Paragraph 1: project aim and algorithms.
+- Paragraph 2: engineering contributions and delivered functionality.
+- Paragraph 3: verification, limitations, and intended use.
+
+## User
+next part is my contribution (still missing HFOs and other material); review and polish it, shorten it where required, and avoid repetitions (full attached draft supplied)
+
+## Assistant
+Yes—this section needed shortening, mainly because its opening repeated the introduction and each algorithm section repeated the shared computation-panel features. I would restructure it as follows.
+
+## 2. My contribution
+
+During GSoC, I transformed the existing placeholder computation panel into an integrated analysis workflow. My work covered the integration of analysis algorithms, their connection to the application’s data pipeline, and the development of interfaces for configuration, visualization, expert review, import, and export.
+
+I also contributed cross-cutting improvements to navigation, large-recording performance, existing interface components, and the technical and user documentation. The following sections distinguish this shared infrastructure from the work specific to each analysis module.
+
+*Figure X should present the overall data flow: loaded iEEG → montage and preprocessing → computation panel → REI/Gamma Spike/HFO → shared result representation → visualization and expert review → import/export. It should complement the text rather than repeat a list of features.*
+
+### 2.1 Shared computation infrastructure
+
+The algorithms were selected in consultation with clinicians based on biomarkers used or investigated in epilepsy research and presurgical assessment. Preference was given to methods supported by scientific publications and publicly available reference implementations.
+
+The computation panel provides a common interface organized into four sections:
+
+1. **Algorithm:** selection of REI, Gamma Spike, or HFO analysis.
+2. **Channels:** selection of the channels to analyze.
+3. **Time:** definition of the analysis interval and algorithm-specific timing parameters.
+4. **Output:** controls for running or cancelling an analysis and for importing, reviewing, or exporting results.
+
+Although this structure is shared, the available timing parameters, preprocessing options, and output controls adapt to the selected algorithm.
+
+Several rules apply across the three modules:
+
+- channels marked as bad are excluded automatically;
+- computations use the montage active when they are launched;
+- each algorithm defines its own preprocessing rather than inheriting the viewer’s display filters;
+- computations run in the background to keep the interface responsive;
+- progress and status information appear in the status bar; and
+- users may request cancellation during execution.
+
+A shared results infrastructure connects algorithm outputs to the main signal viewer, channel-level summaries, event timelines, and event-review interfaces. For event-detection modules, the original algorithmic classification is stored separately from subsequent expert corrections, preserving traceability.
+
+Each module also provides dedicated import and export controls. Exported folders contain tabular results, analysis metadata, and a README defining the files, variables, and units. Importing an analysis restores its results, metadata, visualizations, and review data, allowing work to resume without rerunning the computation.
+
+*Figure 2. Computation panels for the three analysis modules.*
+
+### 2.2 Recruitment Energy Index
+
+#### Purpose
+
+The Recruitment Energy Index (REI) ranks channels according to the strength and timing of their recruitment during a seizure. It combines high-frequency energy with recruitment delay relative to seizure onset; higher scores indicate earlier and stronger recruitment within the analyzed channel set.
+
+#### Scientific basis
+
+The module was adapted from Lucas A.’s open-source **IEEG_EI** implementation of the Epileptogenicity Index method introduced by Bartolomei et al. (2008). The report should clarify the relationship between that method and the application’s name, **Recruitment Energy Index**, because “Energy” and “Epileptogenicity” should not be used interchangeably.
+
+#### Integration and engineering work
+
+I adapted the reference implementation to operate with the application’s channel-selection, montage, and preprocessing systems. I also developed a dedicated configuration interface in which seizure onset and offset initialize editable baseline and ictal windows.
+
+The module applies its own preprocessing, including a zero-phase, fourth-order Butterworth band-pass filter with a default range of 60–140 Hz. This range can be changed through the advanced parameters. Additional work included input validation, integration of channel-group-specific notch settings, conversion of algorithm outputs into the platform’s internal result format, and implementation of dedicated visualization and export components.
+
+#### Outputs
+
+REI results are presented through three complementary views:
+
+- **Main viewer:** channel ranks, score-based label colors, and estimated recruitment-time markers.
+- **Channel summary:** sortable scores, ranks, recruitment delays, and peak high-frequency energy values.
+- **Heatmap:** temporal high-frequency energy patterns across channels, accompanied by a channel-score visualization.
+
+Together, these views connect the overall channel ranking to the temporal signal features underlying each result. Results and their associated parameters can be exported and later restored for continued review.
+
+#### Limitations
+
+REI scores and ranks are normalized within the channels included in a given analysis. Changing the selected channels, montage, analysis windows, or frequency limits may therefore alter the results and complicate comparisons across runs.
+
+Recruitment estimates also depend on the selected seizure onset and preprocessing parameters. Numerical parity with the reference implementation and clinical performance have not been formally established for this integration. A high REI score should therefore be treated as a review aid rather than independent evidence that a channel belongs to the epileptogenic zone.
+
+### 2.3 Gamma Spike analysis
+
+#### Purpose
+
+Gamma Spike analysis detects interictal spikes and measures associated activity in the 30–100 Hz band. A **gamma spike** is a detected spike classified by the source workflow as being accompanied by qualifying gamma-band activity; events that do not meet its criteria are classified as non-gamma. The resulting event- and channel-level measures support investigation of spike–gamma activity as a potential marker of epileptogenic tissue.
+
+#### Scientific basis
+
+The module is a Python translation of the Lab-Frauscher **Spike-Gamma** MATLAB workflow. Within that workflow, candidate spikes are detected using the Janca Hilbert-envelope method and subsequently undergo artifact and spindle rejection, boundary estimation, and gamma measurement. This wording makes it clear that the Janca detector is part of the source pipeline rather than a separate method introduced by the application.
+
+#### Integration and engineering work
+
+I translated the MATLAB workflow into Python and integrated it with the application’s computation pipeline. To limit memory use on long recordings, the selected interval is processed in 10-minute segments. Each segment includes up to 10 seconds of temporary context on either side to reduce filtering-edge effects. Only detections within the central interval are retained, preventing duplicates when segments are merged.
+
+I also converted the algorithm outputs into the platform’s internal event representation, enabling synchronized visualization, channel summaries, and manual expert review. The translated detection parameters follow the reference workflow and are not currently exposed through the interface.
+
+#### Outputs
+
+Results can be examined through three views:
+
+- **Main viewer and timeline:** show the positions and classifications of detected events.
+- **Channel summary:** reports total spikes, gamma-spike counts and proportions, mean gamma power, and mean gamma duration for each channel.
+- **Spike-review grid:** presents the raw signal, gamma-band activity, time–frequency representation, spike boundaries, and gamma measurements for each event.
+
+In the review grid, an expert can change the official class to gamma, non-gamma, or unclassified. The original algorithmic class remains stored separately, while summaries and viewer overlays update according to the official class.
+
+#### Limitations
+
+The detection bands, thresholds, and segmentation settings currently follow the translated workflow and cannot be adjusted through the interface. Performance may therefore vary with sampling rate, signal quality, recording characteristics, and the suitability of the fixed parameters for a particular dataset. Long recordings may also require substantial processing time despite segmented execution.
+
+Manual corrections are included in exported results but are not preserved by the general project-saving mechanism. Consequently, unexported corrections may be lost when results are replaced or the application is closed. Gamma classification remains an algorithmic biomarker and should be interpreted alongside the original signals and other relevant information.
+
+### Main editorial recommendations
+
+- Use one consistent structure for every module: **Purpose → Scientific basis → Integration and engineering work → Outputs → Limitations**. Apply the same structure to the future HFO section.
+- Do not repeat channel selection, background execution, cancellation, shared visualizations, or export behavior in every module. Explain them once in Section 2.1 and mention only module-specific differences afterward.
+- Keep the opening of Section 2 brief because the introduction already states the project’s overall aim and lists the three algorithms.
+- Move menu reorganization, documentation, general interface refinement, and performance work into a later **Cross-cutting contributions** subsection, where each can be described concretely.
+- The heading numbers are inconsistent: “2.2 Computation Panel” is followed by “4.1.1 Shared Computation Infrastructure.” Renumber the subsections before finalizing the report.
+- Write figure captions consistently—for example, **Figure 2. Computation panels for the three analysis modules.**
+- Do not add the claim that REI performs poorly for particular seizure-onset patterns unless you provide an appropriate scientific citation.
+- I could not find quantitative Gamma Spike parity figures in the current repository. It documents a validated Python core translation and a segmented validation pipeline, but not exact agreement statistics. Avoid giving a percentage or claiming exact MATLAB parity unless you have the original comparison report or results.
+
+## User
+maybe we should deleat the last section of the intro and merge it with the beginning of my contribution?
+
+## Assistant
+Yes. I think that produces a cleaner structure. Section 1.3 currently previews the same algorithms, workflow, outputs, and engineering contributions that Section 2 explains immediately afterward. It therefore reads more like a summary of Section 2 than part of the introduction.
+
+Delete Section 1.3 and let the introduction end with the gap identified in Section 1.2. Then open Section 2 with the project aim and scope:
+
+## 2. My contribution
+
+The aim of my GSoC project was to transform the existing foundation into a functional, semi-automated analysis environment by integrating three clinically relevant iEEG analysis methods:
+
+- the Recruitment Energy Index (REI);
+- Gamma Spike analysis; and
+- high-frequency oscillation (HFO) detection and classification.
+
+To achieve this, I connected the algorithms to the application data-processing pipeline and developed the shared infrastructure required to configure analyses, visualize their outputs, review and correct detected events, and import or export reproducible results. I also implemented analysis-specific visualizations and summaries, improved the handling of large recordings, refined existing interface components, and expanded the technical and user documentation.
+
+The following sections distinguish the shared computation infrastructure from the work specific to each analysis module.
+
+Then continue directly with:
+
+### 2.1 Shared computation infrastructure
+
+This creates a clearer progression:
+
+1. Clinical motivation: why the problem matters.
+2. Project starting point: what existed and what was missing.
+3. My contribution: what you set out to build and what you implemented.
+
+It also means you should remove the broader contribution summary that previously opened Section 2, since the replacement above already performs that role.
+
+## User
+i feel limitations you chose are not really relevant for ou gsoc report
+
+## Assistant
+That is fair. Those limitations are more appropriate for a scientific paper or user guide than for the contribution section of a GSoC report. Statements about clinical interpretation, dependence on seizure characteristics, or whether a biomarker identifies the epileptogenic zone distract from explaining what you implemented.
+
+I would remove the Known limitations subsection from each algorithm. If the final report needs to identify unfinished work, add one short section near the end titled Remaining work rather than repeating limitations module by module.
+
+Relevant remaining work would be limited to concrete project issues:
+
+- documenting quantitative agreement with the REI and Gamma Spike reference implementations;
+- preserving manual event corrections through general project saving, rather than only through result export;
+- exposing additional Gamma Spike parameters if user configuration is desired;
+- further benchmarking or optimizing very long recordings; and
+- completing any unfinished HFO validation or interface work.
+
+A possible paragraph is:
+
+## Remaining work
+
+The three analysis modules are integrated into the application and available through the shared computation workflow. Future work should document quantitative comparisons with the reference implementations, preserve reviewed event classifications through general project saving, and further evaluate performance on long recordings. Additional validation on representative datasets will also be required before the software can be considered for clinical use.
+
+Keep only items that were genuinely unfinished at the end of GSoC. Algorithm-specific scientific limitations can instead be mentioned briefly in the background or discussion, if your report requires them.
+
+## User
+let us repolish the Gamma Spike part and recommend figures and relevant limitations (full attached draft supplied)
+
+## Assistant
+I would keep this section focused on three things: what the method does, what you specifically implemented, and how users inspect the result.
+
+## 2.3 Gamma Spike analysis
+
+### Purpose
+
+Gamma Spike analysis detects interictal spikes and measures associated activity in the 30–100 Hz band. A gamma spike is a detected spike that meets the source workflow’s criteria for associated gamma-band activity; other detected events are classified as non-gamma. These event- and channel-level measurements support investigation of spike–gamma activity as a potential marker of epileptogenic tissue.
+
+### Scientific basis
+
+The module is a Python translation of the Lab-Frauscher **Spike-Gamma** MATLAB workflow. Within this workflow, candidate spikes are identified using the Janca Hilbert-envelope detector before undergoing artifact and spindle rejection, spike-boundary estimation, and gamma measurement.
+
+### Implementation and modifications
+
+I translated the MATLAB workflow into Python and integrated it into the application’s computation pipeline. To process long recordings without loading the entire selected interval into memory, I implemented segmented execution using 10-minute blocks. Each block includes up to 10 seconds of temporary context on either side to reduce filtering-edge effects. Only events detected within the central interval are retained, preventing duplicates when the blocks are merged.
+
+I also designed an internal event representation containing the detected channel, event timing, P1/N1/N2 boundaries, gamma measurements, and both algorithmic and reviewed classifications. This representation connects the computation to synchronized viewer overlays, channel summaries, event-level inspection, manual review, and export.
+
+### Outputs and expert review
+
+Gamma Spike results can be inspected at three levels:
+
+- **Recording level:** the main viewer and timeline show the location and classification of detected events.
+- **Channel level:** a summary reports spike counts, gamma-spike counts and proportions, mean gamma power, and mean gamma duration.
+- **Event level:** a detailed review view displays the raw signal, 30–100 Hz activity, time–frequency representation, P1/N1/N2 boundaries, and gamma measurements.
+
+During event review, an expert can change the official classification to gamma, non-gamma, or unclassified. The original algorithmic classification is retained for traceability, while viewer overlays and summaries are updated according to the reviewed classification.
+
+### Verification and remaining work
+
+The translation and segmented processing pipeline were checked against reference behavior during development. However, a reproducible quantitative comparison documenting the datasets, parameters, event-matching criteria, and numerical tolerances is not currently included in the repository. Manual classifications are preserved in exported results but are not yet stored through the general project-saving mechanism.
+
+I would stop there. The fixed parameters can be mentioned only if exposing them was an intended deliverable that remains unfinished:
+
+> Detection parameters currently follow the reference workflow and are not configurable through the interface.
+
+Do not add generic statements about clinical interpretation here; one project-wide disclaimer elsewhere in the report is sufficient. Likewise, do not say that long recordings “may take time” unless you can provide a benchmark. Segmented processing is better presented as an engineering contribution than undermined with an unmeasured performance caveat.
+
+## Recommended figures
+
+Keep two Gamma Spike figures:
+
+1. **Main-viewer integration**
+
+   Keep the screenshot showing blue non-gamma and orange gamma events, the full-recording event timeline, and the selected event on the signal. This demonstrates that the algorithm was integrated into the pre-existing viewer rather than implemented as a detached script.
+
+   Suggested caption:
+
+   > **Figure X. Gamma Spike results in the main signal viewer.** Detected non-gamma and gamma events are shown in blue and orange, respectively, and their distribution across the recording is displayed on the event timeline.
+
+   Add two or three unobtrusive callouts to identify the waveform highlight, event marker, and full-recording timeline. The existing screenshot already has a clear color legend, so avoid covering it with excessive annotations.
+
+2. **Detailed event-review view**
+
+   Definitely keep the detailed event card. It is the strongest Gamma-specific figure because it shows the raw signal, filtered gamma activity, time–frequency representation, P1/N1/N2 boundaries, measured values, and editable official classification in one image.
+
+   Suggested caption:
+
+   > **Figure Y. Detailed review of a detected Gamma Spike event.** The interface combines the raw signal, 30–100 Hz activity, time–frequency representation, estimated P1/N1/N2 boundaries, gamma measurements, and expert classification controls.
+
+I would omit:
+
+- **The channel summary:** it is visually similar to the REI summary and does not demonstrate a substantially different engineering contribution.
+- **The Gamma event grid:** it mainly shows navigation and filtering, while the detailed card communicates the scientifically meaningful review functionality more effectively.
+
+If space permits and the grid itself was a major contribution, combine the grid and detailed card into a single two-panel figure: **(A) event selection and filtering; (B) detailed review**. Otherwise, reserve the grid figure for HFO, where multiple detectors, models, and event classes make the overview more informative. You do not need nearly identical grid screenshots for both modules.
+
+## About the MATLAB and Brainstorm comparison
+
+I checked the current repository and its history. I found an older general statement saying that the translation was compared with MATLAB, that Brainstorm served as an external comparison, and that segmented processing was checked for consistency. That statement remains in the generated HTML guide but was removed from the current Markdown source.
+
+I did not find the underlying dataset description, number of matched events, error metrics, numerical results, or an exact-parity report. Therefore:
+
+- do not claim that the implementations were “identical”;
+- do not report numerical agreement without recovering the original comparison material; and
+- mention Brainstorm only if you can explain exactly what was compared and provide the supporting result.
+
+The safe report wording is the verification paragraph proposed above. If you recover the comparison files later, replace it with a small table describing the dataset, parameters, matched detections, timing differences, and measurement errors.
+
+## User
+The project report is already very long; complete and correct it, shorten where possible, avoid repetition, and make it clear, complete, and concise (full attached draft supplied).
+
+## Assistant
+The report becomes much clearer if you centralize shared behavior, remove per-module “limitations,” and keep only algorithm-specific engineering in each module. Below is a shortened, completed version of the material you provided.
+
+# Project duration: 14 weeks
+
+## 1. Introduction
+
+### 1.1 Clinical motivation
+
+Epilepsy affects approximately 50 million people worldwide, and around one-third of patients continue to experience seizures despite appropriate antiseizure medication. For selected patients with drug-resistant epilepsy, resective surgery can offer the possibility of seizure freedom. Its success, however, depends on accurately identifying the epileptogenic zone—the brain region that must be removed or disconnected to prevent seizure recurrence. Intracranial electroencephalography (iEEG) plays an important role in this localization during presurgical evaluation.
+
+iEEG recordings may span several days and include hundreds of channels, making exhaustive manual review time-consuming and vulnerable to missed subtle patterns. Although computational methods have been developed to support this process, many remain standalone research scripts that are difficult to incorporate into reproducible, interactive workflows.
+
+This project addresses that gap by extending an open-source desktop application for epilepsy research and expert review.
+
+### 1.2 Project starting point
+
+Before GSoC, the application already supported EEG file loading, interactive visualization, navigation, annotations, filtering, montage configuration and re-referencing, power spectral density estimation, and scalogram visualization.
+
+Its modular architecture provided a strong foundation for further development, and a computation panel existed as a placeholder for future analyses. However, no analysis algorithms were connected to it.
+
+## 2. My contribution
+
+The aim of my GSoC project was to transform this foundation into a functional, semi-automated analysis environment by integrating three iEEG analysis methods:
+
+- the Recruitment Energy Index (REI);
+- Gamma Spike analysis; and
+- high-frequency oscillation (HFO) detection and classification.
+
+I connected these methods to the application’s data-processing pipeline and developed the interfaces required to configure analyses, inspect results, review detected events, and export reproducible outputs. I also improved large-recording performance, refined existing interface components, and expanded the project documentation.
+
+### 2.1 Shared computation infrastructure
+
+The algorithms were selected in consultation with clinicians based on biomarkers used or investigated in epilepsy research and presurgical assessment. Preference was given to methods supported by scientific publications and publicly available implementations.
+
+The computation panel provides a common interface with four sections:
+
+1. **Algorithm:** selection of REI, Gamma Spike, or HFO analysis.
+2. **Channels:** selection of the channels to analyze.
+3. **Time:** definition of the analysis interval and algorithm-specific timing parameters.
+4. **Output:** controls for running, cancelling, importing, reviewing, and exporting analyses.
+
+The controls adapt to the selected algorithm. Across all modules, bad channels are excluded automatically, the active montage is used, and preprocessing is defined independently from the viewer’s display filters. Computations run as background tasks with progress reporting and cancellation support, keeping the interface responsive.
+
+Exports contain tabular results, analysis metadata, and a README defining the files, variables, and units. Previous results can be imported and reviewed without rerunning the computation.
+
+*Figure 1. Shared computation interface for the three analysis modules.*
+
+### 2.2 Recruitment Energy Index
+
+#### Purpose and scientific basis
+
+The Recruitment Energy Index ranks channels according to the strength and timing of their recruitment during a seizure. It combines high-frequency energy with recruitment delay; higher scores indicate earlier and stronger recruitment within the analyzed channel set.
+
+The module was adapted from Lucas A.’s open-source **IEEG_EI** implementation of the Epileptogenicity Index method introduced by Bartolomei et al. (2008). Because the integrated implementation differs from the original method, it was named **Recruitment Energy Index** to avoid implying exact equivalence.
+
+#### Implementation
+
+I adapted the reference implementation to work with the application’s channel selection, montage, and preprocessing systems. I also developed a configuration interface in which seizure onset and offset initialize editable baseline and ictal windows.
+
+The module uses a zero-phase, fourth-order Butterworth band-pass filter with a default range of 60–140 Hz. Users can modify this range through the advanced parameters. Additional work included input validation and support for channel-group-specific notch settings.
+
+#### Results
+
+REI results are presented through:
+
+- the main viewer, with channel ranks, score-based colors, and estimated recruitment markers;
+- a sortable channel summary containing scores, ranks, delays, and peak high-frequency energy; and
+- a heatmap showing temporal high-frequency energy patterns alongside channel scores.
+
+*Figure 2. REI heatmap and channel ranking.*
+
+### 2.3 Gamma Spike analysis
+
+#### Purpose and scientific basis
+
+Gamma Spike analysis detects interictal spikes and measures associated activity in the 30–100 Hz band. Events meeting the source workflow’s gamma criteria are classified as gamma spikes; the remaining detections are classified as non-gamma.
+
+The module is a Python translation of the Lab-Frauscher **Spike-Gamma** MATLAB workflow. Candidate spikes are identified using the Janca Hilbert-envelope detector before artifact and spindle rejection, spike-boundary estimation, and gamma measurement.
+
+#### Implementation
+
+I translated the MATLAB workflow into Python and integrated it into the application. To process long recordings without loading the full interval into memory, I implemented segmented execution using 10-minute blocks. Each block includes up to 10 seconds of temporary context on either side to reduce filtering-edge effects. Only events within the central interval are retained, preventing duplicates when blocks are merged.
+
+#### Results and review
+
+Results are available at three levels:
+
+- the main viewer and timeline show event locations and classifications;
+- the channel summary reports spike counts, gamma-spike rates, mean gamma power, and mean gamma duration; and
+- the detailed event view displays the raw signal, 30–100 Hz activity, time–frequency representation, P1/N1/N2 boundaries, and gamma measurements.
+
+Reviewers can change an event’s official class to gamma, non-gamma, or unclassified. The original algorithmic classification remains available for traceability, while summaries and overlays follow the reviewed class.
+
+*Figure 3. Gamma Spike results: (A) events in the main viewer and timeline; (B) detailed event review.*
+
+### 2.4 High-frequency oscillation analysis
+
+#### Purpose and scientific basis
+
+High-frequency oscillations are short oscillatory events investigated as potential biomarkers of epileptogenic tissue. This module was the most technically substantial analysis component because it combined multiple candidate detectors and classification routes with different preprocessing, sampling, and output requirements.
+
+The implementation builds on **pyHFO**, including its pyBrain models, and **Omni-iEEG**, including its legacy pyHFO and eHFO pipelines.
+
+#### Implementation
+
+The pipeline has two stages:
+
+1. **Candidate detection:** events are detected using the Short-Term Energy (STE), Montreal Neurological Institute (MNI), Hilbert method, or any combination of the three.
+2. **Classification:** candidates are processed using one of three routes.
+
+| Route | Processing | Output classes |
+|---|---|---|
+| **pyhfo_pybrain** | Native sampling; normally 80–500 Hz; original pyHFO Model A and Model S | artifact, HFO, spike-HFO |
+| **pyhfo_omni_legacy** | Resampled to 1,000 Hz; normally 80–300 Hz; Omni-compatible pyHFO route | artifact, HFO, spike-HFO |
+| **eHFO** | Omni-compatible preprocessing with artifact, spike, and eHFO classifiers | artifact, HFO, spike-HFO, eHFO, spike-eHFO |
+
+I implemented separate preprocessing paths so that each route retains the frequency, sampling, feature-generation, and classification behavior of its reference workflow. The application includes and loads the two pyHFO checkpoints and three official eHFO checkpoints required by these classifiers.
+
+The pyhfo_pybrain route operates at the recording’s native sampling rate and is limited by its Nyquist frequency. The Omni-based routes require input sampled at 1,000 Hz or above and process data at 1,000 Hz. Validation prevents unsupported frequency and sampling-rate combinations.
+
+Users can select one or more candidate detectors and configure detector-specific thresholds, duration rules, merging criteria, minimum cycle counts, and epoch lengths. Standard ripple and fast-ripple presets are provided where compatible, together with an experimental custom frequency band. Parameters and model provenance are recorded with the results.
+
+#### Results and review
+
+The three routes use a common review interface despite their different output classes. Events are displayed in the main viewer and timeline, summarized by channel, and available in an event grid. The detailed event view includes original and filtered signals, an FFT or spectrogram, event timing, detector provenance, model predictions, and classification probabilities where available.
+
+Reviewers can change an event’s official class or exclude it from summaries and overlays. The original model prediction and excluded candidates remain in the exported event table, preserving the complete path from candidate detection to expert decision.
+
+*Figure 4. HFO analysis: (A) advanced detector and model configuration; (B) event grid; (C) detailed event review.*
+
+### 2.5 Cross-cutting improvements
+
+In addition to the analysis modules, I made several improvements across the application:
+
+- optimized waveform rendering and downsampling for large recordings while preserving short spikes;
+- improved macro/micro channel grouping across montages and analysis views;
+- refined menu organization, navigation, and computation-panel behavior;
+- added full-recording event timelines linked to the main viewer;
+- standardized reproducibility metadata and result documentation;
+- improved macOS compatibility; and
+- expanded the user guide with workflows, parameter definitions, figures, output formats, and interpretation notes.
+
+## 3. Testing and verification
+
+Testing covered the complete GUI workflows for short and long recordings, including invalid intervals, unsupported sampling rates, bad or missing channels, cancellation, import/export round trips, and manual classification updates.
+
+The Gamma Spike translation and HFO routes were compared with reference behavior during development where outputs were available. However, the repository does not currently contain a complete quantitative report documenting the datasets, matching rules, and numerical tolerances. The report should therefore avoid claiming exact parity.
+
+Automated regression coverage remains limited and should be expanded in future development.
+
+If you retain the Gamma Spike performance result, report it only with its full context:
+
+| Duration | Channels | Sampling rate | Hardware | Runtime |
+|---|---:|---:|---|---:|
+| 2.5 hours | approximately 100 | **[insert]** | **[CPU and RAM]** | approximately 55 minutes |
+
+Delete this table if the missing experimental details cannot be recovered.
+
+## 4. Remaining work
+
+The main remaining tasks are to:
+
+- document reproducible quantitative comparisons with the reference implementations;
+- preserve manual review decisions through general project saving, not only result export;
+- expand automated regression and import/export testing;
+- benchmark and further optimize processing on long recordings; and
+- expose additional Gamma Spike parameters if user configuration is required.
+
+The custom HFO frequency band and model-checkpoint integration are already implemented and should not be listed as unfinished work.
+
+## 5. Conclusion
+
+Over 14 weeks, the project transformed an existing visualization application into an integrated environment for REI, Gamma Spike, and HFO analysis. The resulting workflow connects algorithm configuration, background computation, visualization, expert review, and reproducible export within one desktop interface. The project also established a common architecture for adding and evaluating further iEEG analysis methods.
+
+## Recommended cuts and figure plan
+
+Use only four principal figures:
+
+1. shared computation panels;
+2. REI heatmap and ranking;
+3. Gamma viewer plus detailed card as a two-panel figure;
+4. HFO configuration, grid, and detailed review as a composite figure.
+
+Omit the REI and Gamma channel-summary screenshots, since the text already describes them and their layouts are similar. Do not show separate Gamma and HFO grid figures unless space is abundant.
+
+This revision removes the duplicated limitation paragraphs, repeated export descriptions, repeated HFO route explanations, unsupported validation claims, and all drafting notes. It also corrects the HFO custom-band status, adds checkpoint integration, and centralizes testing and remaining work.
+
+## User
+Help polish the structure and complete the cross-cutting improvements, final state, challenges, remaining work, code contributions, roadmap, and conclusion sections (full attached draft supplied).
+
+## Assistant
+I recommend this order for the rest of the report:
+
+3. **Technical challenges and decisions**  
+4. **Testing and performance**  
+5. **Final project state and work product**  
+6. **Remaining work**  
+7. **Lessons learned and conclusion**
+
+“Code contributions” belongs inside the final-state section, and the long implementation roadmap should be shortened to priorities or moved to an appendix or issue tracker.
+
+## 2.5 Cross-cutting improvements
+
+Beyond the three analysis modules, I implemented several improvements that support the application as a whole.
+
+### Visualization and performance
+
+I optimized waveform rendering for large recordings by introducing display-oriented downsampling that preserves local signal extrema, making short spikes less likely to disappear when long windows are shown. I also added bounded caching for filtered signal segments, reused bipolar data where possible, and debounced rapid timeline updates to avoid unnecessary repeated processing.
+
+Gamma Spike analysis received a separate large-recording improvement through its segmented execution strategy, described in Section 2.3.
+
+### Channel handling and interface consistency
+
+I improved the handling of macro- and microelectrode channels across filtering, montages, the main viewer, PSD visualization, and computation modules. I also refined menu organization, navigation, computation-panel behavior, and event timelines to make analysis results easier to locate and inspect.
+
+### Reproducibility and documentation
+
+I implemented computation-specific import and export workflows with tabular outputs, processing metadata, parameter records, and file descriptions. HFO results and review decisions can also be restored through project saving; Gamma Spike review results currently require export.
+
+Finally, I expanded the user guide with installation instructions, analysis workflows, parameter descriptions, figures, output definitions, and interpretation notes. I also improved macOS setup and compatibility documentation.
+
+This is stronger than one long bullet list because it groups the work into three clear engineering themes. Do not add performance numbers here; reserve them for Section 4.
+
+## 3. Technical challenges and decisions
+
+### 3.1 Handling large recordings without losing short events
+
+Long iEEG recordings create two different problems: rendering too many samples makes interaction slow, while loading and processing complete recordings can require excessive memory.
+
+For visualization, simple stride-based downsampling can omit brief spikes. I therefore used an envelope-based approach that retains local minima and maxima, preserving transient events while reducing the number of rendered points. Caching and debounced updates further reduce repeated filtering and rendering during navigation.
+
+For Gamma Spike analysis, I implemented 10-minute processing blocks with up to 10 seconds of context on each side. Context reduces filter-edge effects, while retaining only events from each central block prevents duplication. HFO analysis still processes the selected interval in memory and therefore remains the main target for future bounded-memory processing.
+
+### 3.2 Preserving reference-specific algorithm behavior
+
+The integrated algorithms originated in independent projects with different assumptions about sampling rate, filtering, data representation, and model inputs. This was particularly important for HFO analysis: pyhfo_pybrain preserves native sampling, whereas the Omni-compatible routes require input at or above 1,000 Hz and process resampled 1,000 Hz signals.
+
+Using one universal preprocessing path would have changed the behavior of the reference workflows. I therefore implemented separate processing routes with explicit validation of sampling rates, frequency bands, model checkpoints, and classifier inputs.
+
+### 3.3 Combining automated output with expert review
+
+The application needed to support manual correction without overwriting the original algorithmic result. Event records therefore distinguish the model proposition from the reviewed class. Viewer overlays and summaries follow the reviewed decision, while the automated classification remains available for traceability.
+
+A shared review interface was designed around this principle while adapting its available classes and measurements to Gamma Spike and each HFO route.
+
+These three challenges are sufficient. They demonstrate signal-processing, architectural, and usability decisions without repeating the module descriptions.
+
+## 4. Testing and performance
+
+The application was tested through end-to-end GUI workflows covering:
+
+- short and long analysis intervals;
+- invalid intervals and unsupported sampling rates;
+- bad or missing channels;
+- monopolar and bipolar montages;
+- computation cancellation;
+- import/export round trips; and
+- manual classification updates and their effect on summaries and overlays.
+
+Reference comparisons were performed during development where corresponding outputs were available. However, the repository does not yet contain a complete quantitative report specifying the datasets, parameters, event-matching rules, and numerical tolerances. The report should therefore describe this work as behavioral verification rather than claim exact numerical parity or clinical validation.
+
+Automated regression coverage remains limited and should be expanded.
+
+### Performance example
+
+Include the Gamma Spike timing only after adding the missing context:
+
+> On **[CPU, RAM, and operating system]**, Gamma Spike analysis of a **2.5-hour**, approximately **100-channel** recording sampled at **[sampling rate]** completed in approximately **55 minutes** using the default settings.
+
+Present this as one observed workload, not a general benchmark. If the hardware and sampling rate cannot be recovered, omit the number. A large hypothetical benchmark matrix belongs in future technical documentation, not in the final GSoC report.
+
+## 5. Final project state and work product
+
+| Deliverable | State at the end of GSoC |
+|---|---|
+| Shared computation workflow | Functional |
+| REI computation and visualization | Functional; quantitative reference comparison not yet documented |
+| Gamma Spike translation and segmented processing | Functional; quantitative comparison documentation incomplete |
+| Three HFO detection/classification routes | Functional |
+| Custom HFO frequency band | Implemented as an experimental option |
+| HFO model-checkpoint integration | Functional: two pyHFO and three eHFO checkpoints |
+| Expert event review | Functional |
+| Computation import/export | Functional |
+| HFO result and review project persistence | Functional |
+| Gamma result and review project persistence | Not implemented; export is required |
+| Bounded-memory HFO processing | Not implemented |
+| Automated regression suite | Incomplete |
+| Clinical validation | Outside the project scope |
+
+The overall architecture diagram should appear after Section 2.1, where the shared workflow is introduced—not here. In this section, the status table communicates the final state more effectively.
+
+### Work-product links
+
+Include a short list with stable, specific links:
+
+- **Repository:** [github.com/m2b3/IEEG](https://github.com/m2b3/IEEG)
+- **Final report:** `docs/gsoc-2026-final-report.md` at the final tag
+- **Final GSoC tag:** `gsoc-2026-final`
+- **GSoC commit range:** **[first GSoC commit]…[final GSoC commit]**
+- **Relevant pull requests:** **[insert links]**
+- **User guide source:** [app/docs/user_guide.md](https://github.com/m2b3/IEEG/blob/main/app/docs/user_guide.md)
+- **Published user guide:** [m2b3.github.io/I_EEG/user_guide.html](https://m2b3.github.io/I_EEG/user_guide.html)
+- **Demonstration video:** **[insert link or omit]**
+- **Validation material:** **[insert link or state that no standalone report is available]**
+
+The Git remote currently points to `m2b3/IEEG`, while the published guide URL still uses `I_EEG`. Verify that the public guide link works before submitting.
+
+Create the final tag only after the report and intended code are committed. Link to the tagged report rather than only to the repository homepage.
+
+## 6. Remaining work
+
+Future work should prioritize:
+
+1. **Bounded-memory HFO processing.** Process long recordings in overlapping chunks, deduplicate boundary candidates, classify events in batches, and verify agreement with the current pipeline on shorter reference recordings.
+2. **Reproducible validation.** Document the datasets, parameters, event-matching criteria, numerical tolerances, and reference outputs used for each algorithm.
+3. **Automated testing.** Add regression tests for preprocessing, chunk boundaries, unusual sampling rates, cancellation, import/export, and review-state restoration.
+4. **Gamma Spike persistence and configuration.** Save Gamma results and manual reviews within project files and evaluate whether selected reference parameters should become user-configurable.
+5. **Performance benchmarking.** Record runtime and peak memory across representative durations, channel counts, sampling rates, detectors, and HFO routes.
+
+The experimental custom HFO frequency band and model checkpoints are already implemented. Future work should **validate and stabilize** the custom-band behavior, not implement it from scratch.
+
+Potential research extensions—including automatic bad-channel detection, additional biomarkers such as the Connectivity Epileptogenicity Index, newer HFO classifiers, and 3D electrode visualization—can be mentioned in one final sentence. The detailed multi-page implementation roadmap should be moved to a separate document.
+
+## 7. Lessons learned and conclusion
+
+This project demonstrated that integrating research algorithms into an interactive application requires more than translating their code. It requires preserving preprocessing assumptions, validating inputs, managing large recordings, representing results consistently, supporting expert correction, and recording enough metadata for reproducibility.
+
+The work also strengthened my experience in software architecture, scientific-software validation, performance profiling, Git-based development, documentation, and communication with mentors and users.
+
+Over 14 weeks, the project transformed an existing visualization application into an integrated environment for REI, Gamma Spike, and HFO analysis. The resulting workflow connects algorithm configuration, background computation, visualization, expert review, and reproducible export within one desktop interface. It also provides a common architecture for integrating and evaluating additional iEEG analysis methods.
+
+### What to remove from the current draft
+
+- Delete the duplicate “Final project state” headings and keep one status table.
+- Merge “Code contributions” into “Final project state and work product.”
+- Remove the full benchmark matrix and detailed HFO chunking steps from the main report.
+- Remove duplicate claims about manual-review persistence; HFO reviews are now saved in projects, while Gamma reviews are not.
+- Remove “implement custom HFO frequency band” from remaining work because it already exists.
+- Do not describe every possible future research feature in detail; list them in one sentence or move them to a roadmap.
+- Avoid claiming exact reference parity or clinical validation without a documented comparison protocol and results.
