@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # Virtual env
 .venv/
 .venv-*/
@@ -23,6 +26,7 @@ tests/test_pybrain_preprocessing.py
 
 # OS / editor
 .DS_Store
+._*
 .vscode/
 
 codex.md

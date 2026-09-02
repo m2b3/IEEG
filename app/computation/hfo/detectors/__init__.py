@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """HFO candidate detector wrappers."""
 
 from app.computation.hfo.detectors.omni_hfo_detector import (

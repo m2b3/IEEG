@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 The Project Authors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 # I-EEG User Guide
 
 This guide covers project setup, signal review, preprocessing, computations, annotations, and result export.
@@ -349,9 +352,11 @@ Heatmap time is expressed relative to seizure onset. Sorting or limiting rows do
 
 **Export REI results** creates:
 
-- **`rei_summary.csv`**: channel group, score, rank, delay, and peak HFER
-- **`rei_heatmap.csv`**: HFER values by channel and time
-- **`rei_heatmap.png`**: heatmap image
+- **`rei_summary.csv`**: one row per channel with its group, normalized REI
+  score, final rank, recruitment time relative to seizure onset, and peak HFER
+- **`rei_heatmap.csv`**: numeric HFER values by channel, with time-column
+  headers in seconds from the start of the ictal window
+- **`rei_heatmap.png`**: log10 HFER heatmap with time relative to seizure onset
 - **`rei_metadata.json`**: source, montage, seizure timing, baseline/ictal windows, sampling rate, channel counts, filters, and parameters
 - **`README.txt`**: file, value, and unit definitions
 

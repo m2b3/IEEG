@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 from __future__ import annotations
 
 import argparse
@@ -79,6 +82,11 @@ def markdown_to_body(markdown: str, source_path: Path) -> str:
             continue
         if in_code:
             code_lines.append(line)
+            continue
+
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            close_paragraph()
+            close_lists()
             continue
 
         if not stripped:

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Gamma spike detector package."""
 
 from app.computation.gamma_spike.original_algorithm.compute_gamma import compute_gamma

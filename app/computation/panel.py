@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 # app/computation/panel.py
 from __future__ import annotations
 

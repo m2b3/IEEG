@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Reusable HFO event grid widget for computed-event review."""
 
 from __future__ import annotations

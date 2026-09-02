@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 The Project Authors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 # Documentation
 
 Edit `user_guide.md` as the source file.

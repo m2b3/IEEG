@@ -1,4 +1,9 @@
+<!-- SPDX-FileCopyrightText: 2026 The Project Authors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 # iEEG Tool
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 > [!WARNING]
 > **Work in progress.** This software is under active development and has not
@@ -49,7 +54,7 @@ display filters, annotations, PSD, scalograms, project saving, result
 visualization, manual event review, and export.
 
 The complete interface and workflow documentation is in the
-[User Guide](https://m2b3.github.io/I_EEG/user_guide.html), also available from
+[User Guide](https://m2b3.github.io/IEEG/user_guide.html), also available from
 **Help > User Guide** inside the application.
 
 ## Included analysis algorithms
@@ -110,12 +115,12 @@ recommended. Install [Git](https://git-scm.com/install/) and
 Clone the repository and enter its folder:
 
 ```bash
-git clone https://github.com/m2b3/I_EEG.git
-cd I_EEG
+git clone https://github.com/m2b3/IEEG.git
+cd IEEG
 ```
 
 If you downloaded a ZIP instead, extract it and open a terminal in the extracted
-`I_EEG` folder.
+`IEEG` folder.
 
 ### Windows PowerShell
 
@@ -163,7 +168,7 @@ app/computation/hfo/checkpoints/ehfo/eHFOs.pth
 
 No separate model download is normally required. If any file is missing, get it
 from the project's
-[HFO checkpoint folder](https://github.com/m2b3/I_EEG/tree/main/app/computation/hfo/checkpoints)
+[HFO checkpoint folder](https://github.com/m2b3/IEEG/tree/main/app/computation/hfo/checkpoints)
 or clone the repository again.
 
 `HFODetector` is also required for HFO candidate detection. It is installed
@@ -207,3 +212,16 @@ macOS:
 ```bash
 ./.venv/bin/python -m pip install -r requirements.txt
 ```
+
+## License
+
+Copyright © 2026 The Project Authors.
+
+Except for the third-party and derived materials identified in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), project-owned material is
+licensed under the GNU Affero General Public License version 3 only
+(`AGPL-3.0-only`). See [LICENSE](LICENSE) for the complete license terms.
+
+If you modify this software and make the modified version available to users
+over a network, you must offer those users access to the corresponding source
+code as required by the AGPL.

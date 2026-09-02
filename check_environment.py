@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """Verify that the iEEG Tool environment can import and construct the GUI."""
 
 from __future__ import annotations

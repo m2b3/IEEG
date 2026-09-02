@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 colorama==0.4.6
 HFODetector==0.0.25
 mne>=1.0

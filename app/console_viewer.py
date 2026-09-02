@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 from PySide6.QtWidgets import QMainWindow, QPlainTextEdit
 from PySide6.QtCore import Slot
 
@@ -22,4 +25,3 @@ class ConsoleWindow(QMainWindow):
     def closeEvent(self, event):
         event.ignore()
         self.hide()
-

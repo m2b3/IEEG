@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """HFO candidate classification wrappers and model helpers."""
 
 from app.computation.hfo.classification.ehfo import classify_ehfo

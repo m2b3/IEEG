@@ -633,12 +633,8 @@
 <details class="guide-section level-4">
 <summary><h4 id="preprocessing-and-advanced-parameters">Preprocessing and Advanced Parameters</h4></summary>
 <div class="section-content">
-<p>Bipolar is recommended. With another montage, choose <strong>Switch to Bipolar</strong>, <strong>Run Anyway</strong>, or <strong>Cancel</strong>. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.</p>
-<p>REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default <strong>60–140 Hz</strong>. In <strong>Advanced parameters...</strong>, the user can change:</p>
-<ul>
-<li><strong>Low frequency</strong>: lower boundary of the REI analysis band</li>
-<li><strong>High frequency</strong>: upper boundary of the REI analysis band</li>
-</ul>
+<p>REI uses the active montage. Bipolar is recommended. With another montage, choose <strong>Switch to Bipolar</strong>, <strong>Run Anyway</strong>, or <strong>Cancel</strong>. Switching stops the launch so you can verify the channel list. REI uses the active signal representation and does not add a common-average reference.</p>
+<p>REI ignores display high/low-pass values and applies a zero-phase, fourth-order Butterworth bandpass, default <strong>60–140 Hz</strong>. Analysis band can be edited by the user in <strong>Advanced parameters...</strong>.</p>
 <p>Changes apply to the next run; there is no separate Save button. The lower value must be positive and below the upper value, and the upper value must be below Nyquist. Threshold sigma (10), energy window (0.5 s), and HFER window (0.25 s) are shown for reference but are fixed.</p>
 <p>REI reuses each channel's Macro/Micro notch choice. If notch is off for all selected channels, the application warns about possible line-noise effects.</p>
 <p>Confirmed bad channels are excluded. With mixed Macro and Micro selections, each channel uses the notch profile assigned to its own group.</p>
@@ -704,9 +700,9 @@
 <div class="section-content">
 <p><strong>Export REI results</strong> creates:</p>
 <ul>
-<li><strong><code>rei_summary.csv</code></strong>: channel group, score, rank, delay, and peak HFER</li>
-<li><strong><code>rei_heatmap.csv</code></strong>: HFER values by channel and time</li>
-<li><strong><code>rei_heatmap.png</code></strong>: heatmap image</li>
+<li><strong><code>rei_summary.csv</code></strong>: one row per channel with its group, normalized REI score, final rank, recruitment time relative to seizure onset, and peak HFER</li>
+<li><strong><code>rei_heatmap.csv</code></strong>: numeric HFER values by channel, with time-column headers in seconds from the start of the ictal window</li>
+<li><strong><code>rei_heatmap.png</code></strong>: log10 HFER heatmap with time relative to seizure onset</li>
 <li><strong><code>rei_metadata.json</code></strong>: source, montage, seizure timing, baseline/ictal windows, sampling rate, channel counts, filters, and parameters</li>
 <li><strong><code>README.txt</code></strong>: file, value, and unit definitions</li>
 </ul>
@@ -721,8 +717,6 @@
 <div class="section-content">
 <p>Gamma Spike analysis detects interictal spikes, measures associated <strong>30–100 Hz</strong> activity, and classifies events as <strong>gamma</strong> or <strong>non-gamma</strong>.</p>
 <p>It is a Python translation of the <a href="https://github.com/Lab-Frauscher/Spike-Gamma">Lab-Frauscher Spike-Gamma</a> MATLAB workflow. Candidate detection uses the Janca Hilbert-envelope detector; artifact/spindle rejection, boundary estimation, and preceding-gamma measurement follow the source workflow.</p>
-<p>The translation was compared with the MATLAB workflow, Brainstorm served as an external validation comparison, and segmented processing was checked for consistency. These checks do not establish clinical sensitivity or specificity.</p>
-<p>The validation concerned implementation behavior and agreement with the reference workflows; it did not validate the detector for diagnosis or replace expert EEG/iEEG review.</p>
 </div></details>
 <details class="guide-section level-4">
 <summary><h4 id="time-2">Time</h4></summary>

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 The Project Authors
+# SPDX-License-Identifier: AGPL-3.0-only
+
 """HFO computation package."""
 
 from app.computation.hfo.algorithm import compute_hfo_for_gui

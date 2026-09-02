@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 The Project Authors -->
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+
 # GSoC Final Report
 
 ## Project information
@@ -70,7 +73,7 @@ Exports contain tabular results, analysis metadata, and a README defining the fi
 
 All three analysis modules were functionally tested and compared with their corresponding reference implementations, focusing on agreement between computational outputs.
 
-### Recruitment Energy Index
+### 2.2 Recruitment Energy Index
 
 #### Purpose and scientific basis
 
@@ -198,11 +201,11 @@ Additional parameters could be made editable while maintaining strict validation
 
 ### 4.3 Longer-term development
 
-Once the current algorithms are stabilized and validated against their reference implementations, the platform could be extended with additional biomarkers, such as newer Omni-iEEG event-classification models or the Connectivity Epileptogenicity Index. Longer-term research objectives include validation on independently annotated clinical datasets, automatic bad-channel detection, automatic seizure-onset/offset detection, and cortical visualization combining electrode coordinates with anatomical.
+Once the current algorithms are stabilized and validated against their reference implementations, the platform could be extended with additional biomarkers, such as newer Omni-iEEG event-classification models or the Connectivity Epileptogenicity Index. Longer-term research objectives include validation on independently annotated clinical datasets, automatic bad-channel detection, automatic seizure-onset/offset detection, and cortical visualization combining electrode coordinates with anatomical MRI data.
 
 ## 5. Code contribution
 
-Comparing the pre-GSoC baseline (69134d5) with the [final commit](http://github.com/m2b3/IEEG), most contributions are in the computation package (app/computation/) and documentation (README.md and the [User Guide](https://m2b3.github.io/I_EEG/user_guide.html)).
+Comparing the pre-GSoC baseline (69134d5) with the [final commit](https://github.com/m2b3/IEEG), most contributions are in the computation package (app/computation/) and documentation (README.md and the [User Guide](https://m2b3.github.io/IEEG/user_guide.html)).
 
 Beyond the computation package, the contribution touched files across the application: main_window.py and menus.py (wiring analyses into the main window and menus), viewer/plot.py and the new event_timeline.py (overlays and full-recording timelines), viewer rendering code (downsampling, caching, debouncing), project_io.py (computation and review state), requirements.txt (dependencies), and the bundled HFO model checkpoints.
 
